@@ -135,15 +135,14 @@ coverage 的问题不是 PPO 完全不能更新，而是缺少稳定的低重复
 
 `goal_nav`：
 
-- 状态：已修通到可用专家，但 repeat-seed robustness 弱于 coverage/formation。
+- 状态：已在 task-target agent observation 模式下修通到 robust PPO expert。
 - 架构：`factorized_group`，centralized critic + per-agent/group waypoint actor，输出仍为 `[B, N, 2]`。
-- 主要原因：goal_nav 的目标结构明确，success/DAgger BC 给 PPO 提供可用初始分布；conservative PPO 保住行为而不是从零探索。
-- 最好 checkpoint：`outputs/training/bc_ppo/20260530_phase36_goalnav_factorized_group_ppo/phase36_goalnav_factorized_group_ppo/checkpoints/checkpoint_best_eval.pt`。
-- seed 7 训练/最终评估：`success_rate=0.80`，`goal_coverage_ratio=0.8725`，`collision_rate=0.063120`，`path_length=0.486920`。
-- seed 7 independent 50-episode：`success_rate=0.78`，`goal_coverage_ratio=0.877`，`collision_rate=0.056029`，`path_length=0.510952`。
-- seed 23 independent 100-episode：`success_rate=0.66`，`goal_coverage_ratio=0.804167`，`collision_rate=0.072423`，`path_length=0.553423`。
-- phase65 safety continuation alternative：seed 23 100-episode 提升到 `success_rate=0.71`、`collision_rate=0.064165`，但 seed 7 100-episode 降到 `success_rate=0.72`。
-- 注意：goal_nav 已能训练出专家行为，但 seed 23 结果说明它仍有安全/泛化短板。phase36 是 peak seed7/high-success checkpoint；phase65 是更均衡的 robustness alternative，不是无条件替代。
+- 关键修复：新增统一的 `include_task_targets_in_agents`，每个 UAV 的 agent token 附加当前分配目标的 delta 和 normalized position。goal_nav/risk_nav 使用剩余目标的 Hungarian assignment；剩余目标少于 UAV 时，未分配 UAV 获得 idle target，避免多个 UAV 继续挤向同一个目标。
+- 为什么可行：phase66 诊断显示旧 goal_nav 失败主要是 collision/recovery 闭环问题，动作对剩余目标的对齐度在失败 episode 中崩掉；task target hint 给 actor 显式分工信息，直接降低 late-stage crowding。
+- 推荐 checkpoint：`outputs/training/bc_ppo/20260601_phase68_goalnav_task_targets_ppo/phase68_goalnav_task_targets_ppo/checkpoints/checkpoint_0040.pt`。
+- five-seed 40-episode：`success_rate=0.965`，`goal_coverage_ratio=0.984333`，`pair_collision_rate=0.005324`。
+- seed23 100-episode：`success_rate=0.89`，`goal_coverage_ratio=0.9395`，`pair_collision_rate=0.016639`。
+- 注意：phase68 的 `checkpoint_best_eval.pt` 指向 update60，但独立 seed23 100ep 下 update40 更稳，因此 robust expert 优先用 `checkpoint_0040.pt`。
 
 `coverage`：
 
@@ -177,5 +176,5 @@ coverage 的问题不是 PPO 完全不能更新，而是缺少稳定的低重复
 当前总体判断：
 
 - 四个单任务专家都已经在新模式下达到“可训练出专家模型”的状态。
-- coverage、risk_nav、formation 都已经补齐 two-seed 100-episode repeat；goal_nav 也补了 seed 23 100-episode audit，但暴露出 `0.66` 的 seed robustness 短板。
+- coverage、risk_nav、formation 都已经补齐 repeat 验证；goal_nav 的旧 seed robustness 短板已由 phase67/68 task-target branch 明显修复。
 - 这些结果依赖 BC/DAgger warm-start 和 conservative PPO；纯 PPO 从零仍不可靠，原因是 joint action credit assignment、稀疏成功轨迹和长 horizon 分工问题没有消失。

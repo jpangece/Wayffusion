@@ -564,3 +564,47 @@ Recommended next action:
 - The four single-task specialists are now repaired/usable enough for downstream multi-task work under the new decision mode, but goal_nav seed robustness and risk_nav safety remain the main caveats.
 - If improving beyond current repaired status, prioritize `goal_nav` seed-robust safety, `risk_nav` safety/risk exposure reduction, and coverage repeat-coverage reduction; do not revisit old non-factorized or shared-waypoint architecture.
 - Before launching all4 multi-task training, create a concise checkpoint/config table for the four specialists and freeze these as expert baselines.
+
+Goal_nav robustness diagnosis after phase66:
+
+- Root cause is not a single bad eval seed.
+- Multi-seed diagnostic over seeds `7/11/17/23/29`, 40 episodes each:
+  - phase36 peak: `success_rate=0.755`, `goal_coverage_ratio=0.8635`, `pair_collision_rate=0.0606`.
+  - phase65 balanced: `success_rate=0.770`, `goal_coverage_ratio=0.8763`, `pair_collision_rate=0.0560`.
+  - greedy goal baseline: `success_rate=0.775`, `goal_coverage_ratio=0.9371`, `pair_collision_rate=0.0281`.
+- Failure episodes differ sharply from success episodes:
+  - phase36 failures: `goal_coverage≈0.443`, `pair_collision≈0.194`, `obstacle_collision≈0.0895`, `mean_action_alignment≈0.281`, `steps=200`.
+  - phase65 failures: `goal_coverage≈0.462`, `pair_collision≈0.167`, `obstacle_collision≈0.0738`, `mean_action_alignment≈0.263`, `steps=200`.
+- Interpretation:
+  - failures are closed-loop collision/recovery failures, not simply missing goal perception;
+  - after bad local multi-agent configurations, the policy stops making well-aligned progress to remaining goals.
+- Next concrete repair if goal_nav hardening continues:
+  - collect failed/near-failed phase36/phase65 rollouts;
+  - teacher-relabel with distinct remaining-goal assignment and safer detours;
+  - BC/DAgger refit plus conservative PPO;
+  - optionally add explicit goal assignment/anti-crowding context or small repulsion for goal_nav.
+
+Goal_nav task-target repair after phase67/68:
+
+- Implemented the recommended explicit goal assignment/anti-crowding context as a general optional env observation feature:
+  - `include_task_targets_in_agents`
+  - works for goal_nav/risk_nav/formation/coverage;
+  - default-off, old checkpoints/configs compatible.
+- Best current goal_nav robust PPO checkpoint:
+  - `outputs/training/bc_ppo/20260601_phase68_goalnav_task_targets_ppo/phase68_goalnav_task_targets_ppo/checkpoints/checkpoint_0040.pt`
+- Supporting BC checkpoint:
+  - `outputs/training/bc/20260601_125256/debug_bc_goal_nav_factorized_group_task_targets_goal_nav_N4_multi_channel_field_plus_task_id/checkpoints/checkpoint_0024.pt`
+- Evidence:
+  - phase67 BC five-seed 40ep: `success_rate=0.95`, `goal_coverage_ratio=0.978333`, `pair_collision_rate=0.007909`.
+  - phase67 BC seed23 100ep: `success_rate=0.89`, `goal_coverage_ratio=0.9415`, `pair_collision_rate=0.017221`.
+  - phase68 PPO checkpoint_0040 five-seed 40ep: `success_rate=0.965`, `goal_coverage_ratio=0.984333`, `pair_collision_rate=0.005324`.
+  - phase68 PPO checkpoint_0040 seed23 100ep: `success_rate=0.89`, `goal_coverage_ratio=0.9395`, `pair_collision_rate=0.016639`.
+- Interpretation:
+  - This resolves the previous goal_nav robustness caveat enough to replace phase36 as the recommended robust goal_nav expert.
+  - Do not use phase68 `checkpoint_best_eval.pt` blindly if optimizing seed23 robustness; `checkpoint_0040.pt` was better than update60 on the independent seed23 100ep sweep.
+
+Updated recommended next action:
+
+- Treat all four single-task specialists as repaired/usable under the new target-aware factorized-group direction.
+- For downstream multi-task work, prefer a shared convention of per-agent target hints where available instead of task-specific one-off policy heads.
+- Next hardening target is `risk_nav`: try the same `include_task_targets_in_agents` path for risk_nav before inventing a different architecture.

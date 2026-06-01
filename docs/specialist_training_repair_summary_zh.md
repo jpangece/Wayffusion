@@ -339,7 +339,7 @@
 
 本文件前面的状态是早期阶段总结。phase60-63 后，四个单任务专家状态更新为：
 
-- `goal_nav`: 已修通到可用专家，使用 `factorized_group` + success/DAgger warm-start + conservative PPO；phase36 seed 7 为 `0.78-0.80`，但 seed 23 100-episode audit 降到 `0.66`。phase65 safety continuation 把 seed 23 提到 `0.71`，但 seed 7 降到 `0.72`，因此它是 robustness alternative，不是无条件新 best。
+- `goal_nav`: 已在 phase67/68 的 task-target agent observation 模式下修通到 robust PPO expert；phase68 checkpoint_0040 five-seed 40ep `success_rate=0.965`，seed23 100ep `success_rate=0.89`。旧 phase36/65 只保留为历史对照。
 - `coverage`: 已在 per-agent route-target observation/decision mode 下修通；两个 100-episode seed 分别 `success_rate=0.72` 和 `0.68`，coverage ratio 约 `0.80`，collision 低于 `0.005`。
 - `risk_nav`: 已补齐 repeat-seed 验证；seed 7 和 seed 23 的 100-episode `success_rate` 都是 `0.65`，collision 约 `0.019-0.021`。
 - `formation`: 已通过 template-aware success metric 修复；两个 100-episode seed 分别 `success_rate=0.77` 和 `0.78`。
@@ -354,6 +354,6 @@ risk_nav 的关键链路仍是 learner-state DAgger：让 teacher 标注 learner
 
 如果进入下一轮单任务 hardening，优先级应是：
 
-1. `goal_nav` 从 phase36 做 conservative safety/generalization continuation，并同时复测 seed 7 和 seed 23。
-2. `risk_nav` 降低 risk exposure / safety violation。
-3. `coverage` 降低 repeated coverage 和 demand revisit excess。
+1. `risk_nav` 降低 risk exposure / safety violation，并优先尝试同样的 `include_task_targets_in_agents` 路线。
+2. `coverage` 降低 repeated coverage 和 demand revisit excess。
+3. 将 task-target convention 迁移成后续多任务训练的统一 observation 约定。

@@ -2528,3 +2528,175 @@ Interpretation:
   - phase65 seed7 is `success_rate=0.72`.
 - Therefore phase65 is a robustness alternative, not an unconditional replacement for phase36.
 - Keep phase36 as the best seed7/high-success checkpoint; use phase65 if balanced seed7/seed23 behavior matters more than peak seed7 success.
+
+## Theme AR: goal_nav seed robustness diagnosis
+
+Implemented on 2026-06-01:
+
+- Added diagnostic script:
+  - `scripts/debug_long/diagnose_goal_nav_seed_robustness.py`
+- Purpose:
+  - explain why `goal_nav` is usable but less seed-robust;
+  - separate env/task hardness from learned-policy failure modes;
+  - record per-episode initial geometry, action alignment, pair collision, obstacle collision, goal coverage, and success.
+- Script supports both learned checkpoints and heuristic baselines via `--baseline-policy`.
+
+Diagnostic outputs:
+
+- Directory: `outputs/debug_long/20260601_phase66_goalnav_seed_robustness/`
+- Human analysis:
+  - `outputs/debug_long/20260601_phase66_goalnav_seed_robustness/analysis.md`
+- Main CSV/JSON outputs:
+  - `phase36_peak_v2_episodes.csv`
+  - `phase36_peak_v2_seed_summary.csv`
+  - `phase36_peak_v2_success_failure_summary.csv`
+  - `phase65_balanced_v2_episodes.csv`
+  - `phase65_balanced_v2_seed_summary.csv`
+  - `phase65_balanced_v2_success_failure_summary.csv`
+  - `greedy_goal_baseline_seed_summary.csv`
+  - `phase36_seed23_100diag_episodes.csv`
+  - `phase65_seed23_100diag_episodes.csv`
+
+Commands run:
+
+- phase36 multi-seed:
+  - `/opt/conda/bin/python scripts/debug_long/diagnose_goal_nav_seed_robustness.py --checkpoint outputs/training/bc_ppo/20260530_phase36_goalnav_factorized_group_ppo/phase36_goalnav_factorized_group_ppo/checkpoints/checkpoint_best_eval.pt --policy-config configs/policy/debug_ppo_goal_nav_factorized_group_finetune.yaml --env-config configs/env/goal_nav.yaml --seeds 7 11 17 23 29 --episodes 40 --obs_variant multi_channel_field+task_id --output-dir outputs/debug_long/20260601_phase66_goalnav_seed_robustness --label phase36_peak_v2`
+- phase65 multi-seed:
+  - `/opt/conda/bin/python scripts/debug_long/diagnose_goal_nav_seed_robustness.py --checkpoint outputs/training/bc_ppo/20260601_phase65_goalnav_safety_ref/phase65_goalnav_safety_ref/checkpoints/checkpoint_best_eval.pt --policy-config configs/policy/debug_ppo_goal_nav_factorized_group_safety_ref.yaml --env-config configs/env/goal_nav.yaml --seeds 7 11 17 23 29 --episodes 40 --obs_variant multi_channel_field+task_id --output-dir outputs/debug_long/20260601_phase66_goalnav_seed_robustness --label phase65_balanced_v2`
+- greedy baseline:
+  - `/opt/conda/bin/python scripts/debug_long/diagnose_goal_nav_seed_robustness.py --baseline-policy greedy_goal --env-config configs/env/goal_nav.yaml --seeds 7 11 17 23 29 --episodes 40 --obs_variant multi_channel_field+task_id --output-dir outputs/debug_long/20260601_phase66_goalnav_seed_robustness --label greedy_goal_baseline`
+- seed23 100-episode diagnostics:
+  - phase36: `/opt/conda/bin/python scripts/debug_long/diagnose_goal_nav_seed_robustness.py --checkpoint outputs/training/bc_ppo/20260530_phase36_goalnav_factorized_group_ppo/phase36_goalnav_factorized_group_ppo/checkpoints/checkpoint_best_eval.pt --policy-config configs/policy/debug_ppo_goal_nav_factorized_group_finetune.yaml --env-config configs/env/goal_nav.yaml --seeds 23 --episodes 100 --obs_variant multi_channel_field+task_id --output-dir outputs/debug_long/20260601_phase66_goalnav_seed_robustness --label phase36_seed23_100diag`
+  - phase65: `/opt/conda/bin/python scripts/debug_long/diagnose_goal_nav_seed_robustness.py --checkpoint outputs/training/bc_ppo/20260601_phase65_goalnav_safety_ref/phase65_goalnav_safety_ref/checkpoints/checkpoint_best_eval.pt --policy-config configs/policy/debug_ppo_goal_nav_factorized_group_safety_ref.yaml --env-config configs/env/goal_nav.yaml --seeds 23 --episodes 100 --obs_variant multi_channel_field+task_id --output-dir outputs/debug_long/20260601_phase66_goalnav_seed_robustness --label phase65_seed23_100diag`
+
+Key results:
+
+- Five eval seeds, 40 episodes per seed:
+  - phase36 peak: `success_rate=0.755`, `goal_coverage_ratio=0.8635`, `pair_collision_rate=0.0606`.
+  - phase65 balanced: `success_rate=0.770`, `goal_coverage_ratio=0.8763`, `pair_collision_rate=0.0560`.
+  - greedy goal baseline: `success_rate=0.775`, `goal_coverage_ratio=0.9371`, `pair_collision_rate=0.0281`.
+- Phase36 success vs failure episodes:
+  - success: `goal_coverage=1.0`, `pair_collision=0.0174`, `obstacle_collision=0.0474`, `mean_action_alignment=0.704`, `mean_action_norm=0.809`, `steps=88.7`.
+  - failure: `goal_coverage=0.443`, `pair_collision=0.1937`, `obstacle_collision=0.0895`, `mean_action_alignment=0.281`, `mean_action_norm=0.494`, `steps=200`.
+- Phase65 success vs failure episodes:
+  - success: `goal_coverage=1.0`, `pair_collision=0.0228`, `obstacle_collision=0.0460`, `mean_action_alignment=0.711`, `mean_action_norm=0.809`, `steps=87.5`.
+  - failure: `goal_coverage=0.462`, `pair_collision=0.1673`, `obstacle_collision=0.0738`, `mean_action_alignment=0.263`, `mean_action_norm=0.541`, `steps=200`.
+- Seed23 100-episode explanation:
+  - phase36 seed23 overall `success_rate=0.66`;
+  - episodes 0-39: `0.725`;
+  - episodes 40-69: `0.567`;
+  - episodes 70-99: `0.667`.
+  - phase65 improves the hard middle/later portions: `0.667` and `0.733`, giving overall `0.71`.
+
+Conclusion:
+
+- Seed23 is not uniquely broken; robustness varies by task instance.
+- The dominant failure mode is closed-loop recovery/collision robustness:
+  - failures have high pair collisions and obstacle collisions;
+  - after entering bad local configurations, action alignment to remaining goals collapses and action norm drops;
+  - episodes time out at 200 steps with about 40-46% goal coverage.
+- Initial geometry matters, but weakly:
+  - failures tend to have more goals (`~4.3-4.4` vs `~3.9`) and slightly harder goal-agent geometry;
+  - phase65 failures often have goals closer to obstacles.
+- The learned policy is worse than the greedy baseline in pair collisions and goal coverage, so this is not purely environment hardness.
+
+Recommended next fixes:
+
+- Do not lower success thresholds.
+- Add collision/recovery-focused DAgger data from failed or near-failed phase36/phase65 rollouts.
+- Consider explicit goal assignment / anti-crowding auxiliary context for goal_nav, analogous to route targets used for coverage.
+- Consider small learned-free inter-agent repulsion or sequential group context for goal_nav, followed by BC/PPO continuation.
+- Validate any replacement checkpoint on seeds `7/11/17/23/29` and at least one 100-episode seed23 run.
+
+## Theme AS: unified per-agent task-target hints for goal_nav robustness
+
+Implemented on 2026-06-01:
+
+- Generalized the coverage route-target observation idea into a task-level optional observation extension:
+  - config key: `include_task_targets_in_agents`
+  - location: `envs/centralized_env.py`
+  - default: `false`
+  - backward-compatible alias: existing `include_route_targets_in_agents` still works.
+- When enabled, each agent token appends:
+  - target delta normalized by map size: `[dx, dy]`
+  - target position normalized by map size: `[tx, ty]`
+  - agent observation shape becomes `[N, 10]`.
+- Per-task target semantics:
+  - `goal_nav` / `risk_nav`: Hungarian assignment to remaining goals.
+  - if remaining goals are fewer than agents, only one agent is assigned to each remaining goal and extra agents receive their current position as an idle target. This directly reduces crowding at late-stage single-goal states.
+  - `coverage`: reuses persistent `route_hint_targets`.
+  - `formation`: Hungarian assignment to formation slots.
+- Added regression test:
+  - `tests/test_task_fields.py::test_goal_nav_task_targets_can_be_appended_to_agent_observation`
+- Test command:
+  - `/opt/conda/bin/python -m pytest -q tests/test_task_fields.py tests/test_variable_policies.py tests/test_policy_action_distribution.py tests/test_rewards_basic.py`
+  - Result: `43 passed in 5.59s`.
+
+Configs added:
+
+- `configs/env/debug_goal_nav_task_targets.yaml`
+- `configs/policy/debug_bc_goal_nav_factorized_group_task_targets.yaml`
+- `configs/policy/debug_ppo_goal_nav_factorized_group_task_targets_safe.yaml`
+
+Phase67 goal_nav task-target BC:
+
+- Generated success-only heuristic dataset:
+  - dataset: `outputs/debug_long/20260601_phase67_goalnav_task_targets/goal_nav_task_targets_success_e100.npz`
+  - samples: `3769`
+  - successful episodes: `100`
+  - attempts: `148`
+  - teacher success over attempts: `0.675676`
+  - mean successful collision rate: `0.002538`
+- BC run:
+  - `outputs/training/bc/20260601_125256/debug_bc_goal_nav_factorized_group_task_targets_goal_nav_N4_multi_channel_field_plus_task_id/`
+  - checkpoint: `outputs/training/bc/20260601_125256/debug_bc_goal_nav_factorized_group_task_targets_goal_nav_N4_multi_channel_field_plus_task_id/checkpoints/checkpoint_0024.pt`
+  - warm-start: phase36 best checkpoint, skipping only `agent_encoder.0.weight` because agent observation changed from 6-D to 10-D.
+- BC final 30-episode eval:
+  - `success_rate=0.966667`
+  - `goal_coverage_ratio=0.993333`
+  - `collision_rate=0.007881`
+  - `path_length=0.434771`
+- BC five-seed diagnostic, seeds `7/11/17/23/29`, 40 episodes per seed:
+  - overall `success_rate=0.95`
+  - overall `goal_coverage_ratio=0.978333`
+  - overall `pair_collision_rate=0.007909`
+  - seed 23: `success_rate=0.925`, `goal_coverage_ratio=0.96`, `pair_collision_rate=0.009979`
+- BC seed23 100-episode diagnostic:
+  - `success_rate=0.89`
+  - `goal_coverage_ratio=0.9415`
+  - `pair_collision_rate=0.017221`
+- Analysis doc:
+  - `outputs/debug_long/20260601_phase67_goalnav_task_targets/analysis.md`
+
+Phase68 goal_nav task-target PPO:
+
+- PPO run:
+  - `outputs/training/bc_ppo/20260601_phase68_goalnav_task_targets_ppo/phase68_goalnav_task_targets_ppo/`
+  - init: phase67 BC checkpoint `checkpoint_0024.pt`
+  - config: `configs/policy/debug_ppo_goal_nav_factorized_group_task_targets_safe.yaml`
+  - env: `configs/env/debug_goal_nav_task_targets.yaml`
+- Training eval:
+  - update 20: `success_rate=0.967`
+  - update 40: `success_rate=0.967`
+  - update 60: `success_rate=0.967`
+  - final collision: `0.006`
+- Independent seed23 100-episode checkpoint sweep:
+  - `checkpoint_0020.pt`: `success_rate=0.89`, `goal_coverage_ratio=0.9395`, `pair_collision_rate=0.017782`
+  - `checkpoint_0040.pt`: `success_rate=0.89`, `goal_coverage_ratio=0.9395`, `pair_collision_rate=0.016639`
+  - `checkpoint_0060.pt` / `checkpoint_best_eval.pt`: `success_rate=0.88`, `goal_coverage_ratio=0.9355`, `pair_collision_rate=0.019207`
+- Recommended robust PPO checkpoint:
+  - `outputs/training/bc_ppo/20260601_phase68_goalnav_task_targets_ppo/phase68_goalnav_task_targets_ppo/checkpoints/checkpoint_0040.pt`
+- checkpoint_0040 five-seed diagnostic, seeds `7/11/17/23/29`, 40 episodes per seed:
+  - overall `success_rate=0.965`
+  - overall `goal_coverage_ratio=0.984333`
+  - overall `pair_collision_rate=0.005324`
+  - seed 23: `success_rate=0.95`, `goal_coverage_ratio=0.97`, `pair_collision_rate=0.006831`
+- Analysis doc:
+  - `outputs/debug_long/20260601_phase68_goalnav_task_targets_ppo/analysis.md`
+
+Interpretation:
+
+- This is the first goal_nav branch that directly fixes the seed robustness failure mode found in phase66.
+- The improvement comes from giving the shared per-agent actor an explicit target-assignment context, not from lowering thresholds or changing action shape.
+- It aligns with the coverage route-target solution and is extensible to risk_nav/formation, so it is a better multi-task-compatible direction than a goal_nav-only reward trick.
+- Current recommended goal_nav expert should be updated from phase36 to phase68 `checkpoint_0040.pt` for robust PPO use, with phase67 BC as the strongest pure imitation checkpoint.

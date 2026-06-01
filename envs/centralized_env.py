@@ -8,6 +8,7 @@ import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
 from gymnasium import spaces
+from scipy.optimize import linear_sum_assignment
 
 from envs.collision import obstacle_collision_mask, pairwise_collision_pairs
 from envs.dynamics import waypoint_controller
@@ -83,7 +84,7 @@ class CentralizedMultiUAVEnv(gym.Env):
             ),
             (self.num_agents, 1),
         )
-        if bool(self.config.get("include_route_targets_in_agents", False)):
+        if self._include_agent_task_targets():
             extra_low = np.tile(np.array([-1.0, -1.0, 0.0, 0.0], dtype=np.float32), (self.num_agents, 1))
             extra_high = np.tile(np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32), (self.num_agents, 1))
             agent_low = np.concatenate([agent_low, extra_low], axis=-1)
@@ -91,7 +92,7 @@ class CentralizedMultiUAVEnv(gym.Env):
         # Observation contract used by all policies:
         # - task_field: spatial task channels [C, H, W]
         # - agents: per-UAV state [x, y, vx, vy, battery, role_id]
-        #   optionally followed by coverage route target delta/position hints
+        #   optionally followed by task target delta/position hints
         # - task_id: one-hot task family id, optionally zeroed for ablations
         # - global_info: compact scalar progress / safety summary
         self.observation_space = spaces.Dict(
@@ -130,6 +131,12 @@ class CentralizedMultiUAVEnv(gym.Env):
             )
             return "no_spatial_field"
         return self.observation_mode
+
+    def _include_agent_task_targets(self) -> bool:
+        return bool(
+            self.config.get("include_task_targets_in_agents", False)
+            or self.config.get("include_route_targets_in_agents", False)
+        )
 
     def _derive_runtime_params(self) -> dict[str, float]:
         """Derive scale-dependent simulation constants from the base config.
@@ -356,13 +363,8 @@ class CentralizedMultiUAVEnv(gym.Env):
             [self.state["positions"], self.state["velocities"], self.state["battery"], self.state["roles"]],
             axis=-1,
         ).astype(np.float32)
-        if bool(self.config.get("include_route_targets_in_agents", False)):
-            route_targets = None
-            if isinstance(self.current_task_state, dict):
-                route_targets = self.current_task_state.get("route_hint_targets")
-            if route_targets is None or np.asarray(route_targets).shape != self.state["positions"].shape:
-                route_targets = self.state["positions"]
-            route_targets = np.asarray(route_targets, dtype=np.float32)
+        if self._include_agent_task_targets():
+            route_targets = self._agent_task_targets()
             map_size = max(float(self.runtime_params["map_size"]), 1e-6)
             target_delta = np.clip((route_targets - self.state["positions"]) / map_size, -1.0, 1.0)
             target_norm = np.clip(route_targets / map_size, 0.0, 1.0)
@@ -391,6 +393,41 @@ class CentralizedMultiUAVEnv(gym.Env):
             "task_id": task_id,
             "global_info": global_info,
         }
+
+    def _assign_targets_to_agents(self, targets: np.ndarray) -> np.ndarray:
+        positions = np.asarray(self.state["positions"], dtype=np.float32)
+        targets = np.asarray(targets, dtype=np.float32)
+        if len(positions) == 0 or len(targets) == 0:
+            return positions.copy()
+        distances = np.linalg.norm(positions[:, None, :] - targets[None, :, :], axis=-1)
+        assigned = positions.copy()
+        if len(targets) >= len(positions):
+            rows, cols = linear_sum_assignment(distances)
+            assigned[rows] = targets[cols]
+        else:
+            target_rows, agent_cols = linear_sum_assignment(distances.T)
+            assigned[agent_cols] = targets[target_rows]
+        return assigned.astype(np.float32)
+
+    def _agent_task_targets(self) -> np.ndarray:
+        positions = np.asarray(self.state["positions"], dtype=np.float32)
+        if not isinstance(self.current_task_state, dict) or self.current_task is None:
+            return positions.copy()
+        task_name = self.current_task.name
+        if task_name == "coverage":
+            route_targets = self.current_task_state.get("route_hint_targets")
+            if route_targets is not None and np.asarray(route_targets).shape == positions.shape:
+                return np.asarray(route_targets, dtype=np.float32)
+            return positions.copy()
+        if task_name in {"goal_nav", "risk_nav"}:
+            goals = np.asarray(self.current_task_state.get("goals", np.zeros((0, 2), dtype=np.float32)), dtype=np.float32)
+            reached = np.asarray(self.current_task_state.get("goal_reached", np.zeros((len(goals),), dtype=bool)), dtype=bool)
+            remaining = goals[~reached] if len(reached) == len(goals) else goals
+            return self._assign_targets_to_agents(remaining)
+        if task_name == "formation":
+            slots = np.asarray(self.current_task_state.get("slots", np.zeros((0, 2), dtype=np.float32)), dtype=np.float32)
+            return self._assign_targets_to_agents(slots)
+        return positions.copy()
 
     def _completed_ratio(self) -> float:
         metrics = self.current_task.get_metrics(self.current_task_state, self.state)

@@ -93,6 +93,36 @@ def test_coverage_route_targets_can_be_appended_to_agent_observation():
     assert np.all(obs["agents"][:, 8:10] <= 1.0)
 
 
+def test_goal_nav_task_targets_can_be_appended_to_agent_observation():
+    config = load_env_config(
+        "configs/env/multitask.yaml",
+        override={
+            "task_name": "goal_nav",
+            "num_agents": 4,
+            "include_task_targets_in_agents": True,
+        },
+    )
+    env = CentralizedMultiUAVEnv(config)
+    obs, _ = env.reset(seed=16)
+
+    assert obs["agents"].shape == (env.num_agents, 10)
+    assert env.observation_space["agents"].shape == (env.num_agents, 10)
+    assert np.all(np.isfinite(obs["agents"]))
+    assert np.all(obs["agents"][:, 6:8] >= -1.0)
+    assert np.all(obs["agents"][:, 6:8] <= 1.0)
+    assert np.all(obs["agents"][:, 8:10] >= 0.0)
+    assert np.all(obs["agents"][:, 8:10] <= 1.0)
+
+    map_size = float(obs["global_info"][-1])
+    target_positions = obs["agents"][:, 8:10] * map_size
+    remaining_goals = env.current_task_state["goals"][~env.current_task_state["goal_reached"]]
+    current_positions = env.state["positions"]
+    for target, position in zip(target_positions, current_positions):
+        distance_to_goal = np.linalg.norm(remaining_goals - target, axis=-1).min()
+        distance_to_self = np.linalg.norm(position - target)
+        assert min(distance_to_goal, distance_to_self) < 1e-5
+
+
 def test_drop_channels_and_agent_density_toggle_zero_out_channels():
     env = CentralizedMultiUAVEnv(
         _env_config(
