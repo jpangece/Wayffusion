@@ -2700,3 +2700,134 @@ Interpretation:
 - The improvement comes from giving the shared per-agent actor an explicit target-assignment context, not from lowering thresholds or changing action shape.
 - It aligns with the coverage route-target solution and is extensible to risk_nav/formation, so it is a better multi-task-compatible direction than a goal_nav-only reward trick.
 - Current recommended goal_nav expert should be updated from phase36 to phase68 `checkpoint_0040.pt` for robust PPO use, with phase67 BC as the strongest pure imitation checkpoint.
+
+## 2026-06-01 - Phase69 four-task best-specialist long-run launcher
+
+User request:
+
+- Start a long parallel training run for the four single-task experts.
+- Use the best tuned specialist configuration for each task.
+- Send email when the full parallel run finishes.
+- Keep the run resilient to connection/thread interruption.
+
+Added script:
+
+- `scripts/run_ppo_parallel_best_specialists_all4.sh`
+
+Why a new script was added:
+
+- Existing `scripts/run_ppo_parallel_specialists_all4.sh` also launches an `all4` multi-task policy and uses old generic PPO defaults.
+- The current request is explicitly only for four single-task experts, and each task now has a different validated specialist config/env/checkpoint path.
+- The new launcher records a dedicated summary CSV and per-task logs under `outputs/training/parallel_best_specialists/<RUN_TIMESTAMP>/`, while actual PPO outputs remain under `outputs/training/bc_ppo/<RUN_TIMESTAMP>/<run_name>/`.
+
+Launcher defaults:
+
+- Shared: `AGENT_COUNTS=4`, `SCALING_MODE=fixed_map`, `OBS_VARIANT=multi_channel_field+task_id`, `TARGET_EPISODES=0`, `EVAL_EPISODES=50`, `RECORD_EVAL_EPISODES=0`, `DEFAULT_ENV_BACKEND=sync`.
+- `goal_nav`: `160` updates, config `configs/policy/debug_ppo_goal_nav_factorized_group_task_targets_safe.yaml`, env `configs/env/debug_goal_nav_task_targets.yaml`, init `outputs/training/bc_ppo/20260601_phase68_goalnav_task_targets_ppo/phase68_goalnav_task_targets_ppo/checkpoints/checkpoint_0040.pt`. Reason: phase68 update40 was more robust than `checkpoint_best_eval.pt` on the independent seed23 100-episode sweep.
+- `coverage`: `200` updates, config `configs/policy/debug_ppo_coverage_factorized_group_route_target_agents_safe.yaml`, env `configs/env/debug_coverage_route_target_agents_canonical.yaml`, init `outputs/training/bc_ppo/20260601_phase60_coverage_route_target_agents_ppo/phase60_coverage_route_target_agents_ppo/checkpoints/checkpoint_best_eval.pt`. Reason: route-target-agent branch is current best validated coverage path.
+- `risk_nav`: `240` updates, config `configs/policy/debug_ppo_risk_nav_factorized_group_dagger_safe.yaml`, env `configs/env/debug_risk_nav_safety_completion.yaml`, init `outputs/training/bc_ppo/20260530_phase41_risknav_factorized_group_dagger_safe/phase41_risknav_factorized_group_dagger_safe/checkpoints/checkpoint_best_eval.pt`. Reason: risk remains the weakest specialist, so the long run gives it the longest continuation budget.
+- `formation`: `160` updates, config `configs/policy/debug_ppo_formation_factorized_group_ultra_strict.yaml`, env `configs/env/formation.yaml`, init `outputs/training/bc_ppo/20260530_phase39_formation_factorized_group_ppo/phase39_formation_factorized_group_ppo/checkpoints/checkpoint_best_eval.pt`. Reason: phase39 plus the template-aware success metric is the current repaired formation expert.
+
+Validation before formal launch:
+
+- `bash -n scripts/run_ppo_parallel_best_specialists_all4.sh` passed.
+- All required config/env/checkpoint files existed.
+- A 1-update smoke run completed successfully:
+  - run timestamp: `20260601_long_best_specialists_debugfg`
+  - all four jobs exited with status `success`
+  - smoke final eval was only 1 episode per task and should not be used as performance evidence.
+- A notification test and the 1-update smoke run both sent email successfully through the existing `.secrets/wayffusion_mail.env` SMTP settings. Do not record SMTP credentials in memory.
+
+Formal long run launched:
+
+- launch method: `tmux` detached session, not plain `nohup`.
+- reason: the first plain `nohup` attempt exited without logs in this execution environment; `tmux` was verified to keep the launcher and child jobs alive.
+- run timestamp: `20260601_long_best_specialists_143934`
+- tmux session: `wayffusion_best_20260601_long_best_specialists_143934`
+- launcher log root: `outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/`
+- main progress log: `outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/parallel.log`
+- summary CSV when jobs finish: `outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/summary.csv`
+- formal launch command:
+  - `tmux new-session -d -s wayffusion_best_20260601_long_best_specialists_143934 "cd /workspace/Wayffusion/Wayffusion && env RUN_TIMESTAMP='20260601_long_best_specialists_143934' GOAL_CUDA_VISIBLE_DEVICES=0 COVERAGE_CUDA_VISIBLE_DEVICES=1 RISK_CUDA_VISIBLE_DEVICES=3 FORMATION_CUDA_VISIBLE_DEVICES=0 bash scripts/run_ppo_parallel_best_specialists_all4.sh > 'outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/launcher.out' 2>&1"`
+- GPU assignment:
+  - `goal_nav`: GPU 0
+  - `coverage`: GPU 1
+  - `risk_nav`: GPU 3
+  - `formation`: GPU 0
+  - GPU 2 was avoided because it was already saturated before launch.
+
+Confirmed after formal launch:
+
+- `tmux_session_alive=yes`
+- four `scripts/train_ppo.py` child processes were running:
+  - `goal_nav_task_targets_long`
+  - `coverage_route_targets_long`
+  - `risk_nav_dagger_safe_long`
+  - `formation_factorized_group_long`
+- `parallel.log` showed all four jobs started with the intended configs, env configs, init checkpoints, update budgets, and CUDA assignments.
+
+Operational notes:
+
+- To monitor: `tail -f outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/parallel.log`
+- To inspect per-task stdout: `tail -f outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/<label>.log`
+- To attach: `tmux attach -t wayffusion_best_20260601_long_best_specialists_143934`
+- The script will email `EMAIL_TO` from `.secrets/wayffusion_mail.env` when all four jobs finish.
+- The long-run checkpoints will be under:
+  - `outputs/training/bc_ppo/20260601_long_best_specialists_143934/goal_nav_task_targets_long/`
+  - `outputs/training/bc_ppo/20260601_long_best_specialists_143934/coverage_route_targets_long/`
+  - `outputs/training/bc_ppo/20260601_long_best_specialists_143934/risk_nav_dagger_safe_long/`
+  - `outputs/training/bc_ppo/20260601_long_best_specialists_143934/formation_factorized_group_long/`
+
+## 2026-06-01 - Phase69 tmux one-command user launcher
+
+User request:
+
+- Make the four-task best-specialist long run startable with a single tmux command/script.
+- Make it clear where to change the number of training updates because the first long-run defaults were too short.
+
+Added script:
+
+- `scripts/tmux_start_best_specialists_all4.sh`
+
+Purpose:
+
+- This is a one-command wrapper around `scripts/run_ppo_parallel_best_specialists_all4.sh`.
+- It creates a detached tmux session and writes a small reproducible launch script into the run log directory.
+- It does not replace the underlying best-specialist worker; it only provides safer, easier launch ergonomics.
+
+New default long-run budgets in the tmux wrapper:
+
+- `GOAL_TOTAL_UPDATES=1000`
+- `COVERAGE_TOTAL_UPDATES=1200`
+- `RISK_TOTAL_UPDATES=1500`
+- `FORMATION_TOTAL_UPDATES=1000`
+- `EVAL_EPISODES=100`
+
+Where to tune:
+
+- Edit the parameter block near the top of `scripts/tmux_start_best_specialists_all4.sh`, especially lines defining:
+  - `GOAL_TOTAL_UPDATES`
+  - `COVERAGE_TOTAL_UPDATES`
+  - `RISK_TOTAL_UPDATES`
+  - `FORMATION_TOTAL_UPDATES`
+  - `EVAL_EPISODES`
+  - `*_CUDA_VISIBLE_DEVICES`
+- Or override from shell, for example:
+  - `GOAL_TOTAL_UPDATES=2000 RISK_TOTAL_UPDATES=3000 bash scripts/tmux_start_best_specialists_all4.sh`
+
+Validation:
+
+- `chmod +x scripts/tmux_start_best_specialists_all4.sh`
+- `bash -n scripts/tmux_start_best_specialists_all4.sh`
+- `DRY_RUN=1 RUN_TIMESTAMP=tmp_tmux_best_specialists_dryrun TMUX_SESSION=tmp_tmux_best_specialists_dryrun bash scripts/tmux_start_best_specialists_all4.sh`
+- Dry run produced:
+  - `goal_total_updates=1000`
+  - `coverage_total_updates=1200`
+  - `risk_total_updates=1500`
+  - `formation_total_updates=1000`
+  - `eval_episodes=100`
+
+Important:
+
+- No new formal training was started by this wrapper during validation; only `DRY_RUN=1` was executed.
+- The already-running formal phase69 run remains `20260601_long_best_specialists_143934`.

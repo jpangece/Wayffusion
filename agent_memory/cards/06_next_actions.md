@@ -608,3 +608,62 @@ Updated recommended next action:
 - Treat all four single-task specialists as repaired/usable under the new target-aware factorized-group direction.
 - For downstream multi-task work, prefer a shared convention of per-agent target hints where available instead of task-specific one-off policy heads.
 - Next hardening target is `risk_nav`: try the same `include_task_targets_in_agents` path for risk_nav before inventing a different architecture.
+
+Phase69 active long-run status:
+
+- A four-task best-specialist parallel long run is currently active.
+- Run timestamp:
+  - `20260601_long_best_specialists_143934`
+- tmux session:
+  - `wayffusion_best_20260601_long_best_specialists_143934`
+- Monitor:
+  - `tail -f outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/parallel.log`
+  - `tmux attach -t wayffusion_best_20260601_long_best_specialists_143934`
+- Summary after completion:
+  - `outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/summary.csv`
+- Per-task logs:
+  - `outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/goal_nav_task_targets_long.log`
+  - `outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/coverage_route_targets_long.log`
+  - `outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/risk_nav_dagger_safe_long.log`
+  - `outputs/training/parallel_best_specialists/20260601_long_best_specialists_143934/formation_factorized_group_long.log`
+- Expected PPO output dirs:
+  - `outputs/training/bc_ppo/20260601_long_best_specialists_143934/goal_nav_task_targets_long/`
+  - `outputs/training/bc_ppo/20260601_long_best_specialists_143934/coverage_route_targets_long/`
+  - `outputs/training/bc_ppo/20260601_long_best_specialists_143934/risk_nav_dagger_safe_long/`
+  - `outputs/training/bc_ppo/20260601_long_best_specialists_143934/formation_factorized_group_long/`
+- Completion behavior:
+  - `scripts/run_ppo_parallel_best_specialists_all4.sh` will email the configured `EMAIL_TO` after all four jobs finish.
+  - SMTP was verified by a notification test and by the 1-update smoke run. Do not expose SMTP credentials.
+
+Next action after Phase69 finishes:
+
+- Read `summary.csv` first and check every row has `status=success`.
+- For each task, inspect `best_eval_summary.json`, `training_metrics.csv`, and final eval CSVs under the corresponding PPO output dir.
+- Report success rate together with task metrics, collision rate, and path length.
+- Compare against the pre-Phase69 baselines:
+  - `goal_nav`: phase68 checkpoint_0040, expected robust multi-seed success around `0.89-0.965` depending on eval seed mix.
+  - `coverage`: phase60 best, expected seed7/23 100ep success `0.72/0.68`, coverage ratio around `0.80`.
+  - `risk_nav`: phase41 best, expected seed7/23 100ep success `0.65`, with risk exposure still the main weakness.
+  - `formation`: phase39 best with template-aware success, expected seed7/23 100ep success `0.77/0.78`.
+- If a long-run task regresses, keep the pre-Phase69 checkpoint as the expert baseline and treat the regression as PPO drift, not as evidence that the specialist branch is invalid.
+
+User-facing launch shortcut:
+
+- A one-command tmux launcher is now available:
+  - `bash scripts/tmux_start_best_specialists_all4.sh`
+- It starts `scripts/run_ppo_parallel_best_specialists_all4.sh` inside a detached tmux session and writes:
+  - `launch_inside_tmux.sh`
+  - `launch_summary.txt`
+  - `launcher.out`
+  - `parallel.log`
+  under `outputs/training/parallel_best_specialists/<RUN_TIMESTAMP>/`.
+- Default long-run budgets in the wrapper:
+  - `goal_nav`: `1000` updates
+  - `coverage`: `1200` updates
+  - `risk_nav`: `1500` updates
+  - `formation`: `1000` updates
+  - eval episodes per eval: `100`
+- Parameter location:
+  - edit the top parameter block of `scripts/tmux_start_best_specialists_all4.sh`, or override variables in the shell.
+- Example override:
+  - `GOAL_TOTAL_UPDATES=2000 COVERAGE_TOTAL_UPDATES=2500 RISK_TOTAL_UPDATES=3000 FORMATION_TOTAL_UPDATES=2000 EVAL_EPISODES=100 bash scripts/tmux_start_best_specialists_all4.sh`
