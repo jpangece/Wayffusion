@@ -128,6 +128,8 @@ def main():
     run_name = safe_run_name(
         args.run_name or f"{train_config['name']}_{compact_task_set_name(task_names)}_N{format_agent_set_name(agent_counts)}"
     )
+    tensorboard_metric_mode = str(train_config.get("tensorboard_metric_mode", "core"))
+    tensorboard_task_namespace = safe_run_name(format_task_set_name(task_names))
     output_dir = timestamped_training_dir(
         output_root,
         run_name,
@@ -143,10 +145,11 @@ def main():
     )
     writer, log_record = build_metric_logger(
         output_dir,
-        namespace=f"{output_root}/train",
+        namespace=f"{output_root}/{tensorboard_task_namespace}/train",
         step_key="update",
         tensorboard_enabled=args.tensorboard,
         console_interval=args.console_log_interval,
+        tensorboard_metric_mode=tensorboard_metric_mode,
         key_order=[
             "mean_rollout_reward",
             "policy_loss",
@@ -377,7 +380,14 @@ def main():
                 reference_episodes=baseline_reference_episodes_for_agent_count(agent_count, max(4, args.eval_episodes // 2)),
             )
             for task_name, task_summary in task_summaries.items():
-                log_scalar_metrics(writer, f"{output_root}/final_eval/N{agent_count}/{task_name}", final_update, task_summary)
+                log_scalar_metrics(
+                    writer,
+                    f"{output_root}/{tensorboard_task_namespace}/final_eval/N{agent_count}/{task_name}",
+                    final_update,
+                    task_summary,
+                    tensorboard_metric_mode=tensorboard_metric_mode,
+                    metric_phase="final_eval",
+                )
                 print_progress_line(
                     f"{output_root}-final/{task_name}",
                     "num_agents",
@@ -403,7 +413,14 @@ def main():
                         "normalized_score": float(task_summary.get("normalized_score_mean", 0.0)),
                     }
                 )
-            log_scalar_metrics(writer, f"{output_root}/final_eval/N{agent_count}/overall", final_update, overall_summary)
+            log_scalar_metrics(
+                writer,
+                f"{output_root}/{tensorboard_task_namespace}/final_eval/N{agent_count}/overall",
+                final_update,
+                overall_summary,
+                tensorboard_metric_mode=tensorboard_metric_mode,
+                metric_phase="final_eval",
+            )
             print_progress_line(
                 f"{output_root}-final/overall",
                 "num_agents",

@@ -7,6 +7,8 @@ cd "${REPO_ROOT}"
 
 # =============================================================================
 # One-command tmux launcher for the four best single-task specialists.
+# This is a best-checkpoint continuation launcher, not a BC-to-PPO-main
+# attribution experiment. Use run_coverage_bc_to_ppo_main.sh for that flow.
 #
 # Edit the defaults in this block, or override any variable from the shell:
 #   GOAL_TOTAL_UPDATES=2000 RISK_TOTAL_UPDATES=3000 bash scripts/tmux_start_best_specialists_all4.sh

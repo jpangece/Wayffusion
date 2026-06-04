@@ -2831,3 +2831,333 @@ Important:
 
 - No new formal training was started by this wrapper during validation; only `DRY_RUN=1` was executed.
 - The already-running formal phase69 run remains `20260601_long_best_specialists_143934`.
+
+## 2026-06-03 - TensorBoard metric cleanup for training scripts
+
+User issue:
+
+- Opening TensorBoard on a long PPO run produced 900+ scalar charts.
+- Many charts were one-point final-eval scalars or low-value reward/debug components.
+- `training_metrics.csv` should remain full fidelity, but TensorBoard should behave like a concise training monitor.
+
+Implemented:
+
+- Modified `scripts/_common.py`.
+- Added default TensorBoard metric mode:
+  - `tensorboard_metric_mode: core`
+  - supported fallback mode: `tensorboard_metric_mode: all`
+- `core` mode writes only key training and eval curves to TensorBoard.
+- `all` mode preserves the old behavior and writes all numeric metrics.
+- CSV output is unchanged; `training_metrics.csv` and `eval_metrics.csv` still preserve all numeric fields.
+
+Core TensorBoard train metrics now include:
+
+- rollout/reward overview:
+  - `mean_rollout_reward`
+  - `rollout_episode_success_rate`
+  - `rollout_terminal_goal_coverage`
+  - `rollout_terminal_collision_rate`
+  - `rollout_terminal_path_length`
+- PPO/optimizer health:
+  - `policy_loss`
+  - `value_loss`
+  - `entropy`
+  - `approx_kl`
+  - `clip_frac`
+  - `ratio_mean`
+  - `reference_action_mse`
+  - `grad_norm`
+  - `explained_variance`
+  - `log_std_mean`
+- runtime:
+  - `rollout_steps_per_sec`
+  - `episodes_completed`
+  - `cumulative_episodes`
+  - `memory_usage_mb`
+  - `inference_latency_ms`
+- eval aliases:
+  - `eval_reward`
+  - `eval_success_rate`
+  - `eval_collision_rate`
+  - `eval_path_length`
+  - `eval_inference_latency_ms`
+- task/overall eval core metrics:
+  - `*_return`
+  - `*_success_rate`
+  - `*_collision_rate`
+  - `*_path_length`
+  - `*_goal_coverage_ratio`
+  - `*_coverage_ratio`
+  - `*_formation_error`
+  - `*_cumulative_risk_exposure`
+  - `*_normalized_score`
+  - `*_inference_latency_ms`
+
+Final eval TensorBoard metrics now include only:
+
+- `return_mean`
+- `success_rate_mean`
+- `collision_rate_mean`
+- `path_length_mean`
+- `normalized_score_mean`
+- `goal_coverage_ratio_mean`
+- `coverage_ratio_mean`
+- `formation_error_mean`
+- `cumulative_risk_exposure_mean`
+- `inference_latency_ms_mean`
+
+Important filtering detail:
+
+- Eval reward-component keys such as `eval_goal_nav_reward_task_progress_reward` are now filtered out in `core` mode.
+- The exact alias `eval_reward` is still kept.
+
+Updated training scripts:
+
+- `scripts/train_ppo.py`
+  - passes `tensorboard_metric_mode` from PPO config.
+  - TensorBoard namespace changed from `bc_ppo/train/...` to `bc_ppo/<task_set>/train/...`, for example `bc_ppo/goal_nav/train/eval_success_rate`.
+  - final eval namespace changed to `bc_ppo/<task_set>/final_eval/...`.
+- `scripts/train_bc.py`
+- `scripts/train_sac.py`
+- `scripts/train_td3.py`
+  - pass the metric mode to the shared logger.
+  - final eval logs use `metric_phase="final_eval"` so only final core scalars are written in `core` mode.
+
+Tests added/updated:
+
+- `tests/test_training_logging.py`
+  - verifies core mode writes key train/eval metrics.
+  - verifies core mode filters noisy debug/reward-component metrics.
+  - verifies `all` mode keeps all numeric metrics.
+  - verifies final eval core mode filters single-point noise.
+
+Validation:
+
+- Syntax:
+  - `/opt/conda/bin/python -m py_compile scripts/_common.py scripts/train_ppo.py scripts/train_bc.py scripts/train_sac.py scripts/train_td3.py`
+- Unit tests:
+  - `/opt/conda/bin/python -m pytest -q tests/test_training_logging.py`
+  - result: `4 passed`
+- PPO smoke:
+  - run timestamp: `20260603_tb_core_smoke2`
+  - output: `outputs/training/bc_ppo/20260603_tb_core_smoke2/goal_nav_tb_core_smoke2`
+  - command: 1-update `goal_nav` PPO continuation with TensorBoard enabled.
+  - result: training completed successfully.
+  - console namespace now prints `bc_ppo/goal_nav/train`.
+  - TensorBoard scalar tag count: `54`.
+  - reward component TensorBoard tags: `0`.
+  - `training_metrics.csv` column count: `133`.
+  - reward component CSV columns retained: `40`.
+
+How to use:
+
+- Default behavior is clean TensorBoard:
+  - no config change needed.
+- To restore old all-metric TensorBoard behavior for debugging, add to a policy config:
+  - `tensorboard_metric_mode: all`
+
+Compatibility note:
+
+- Existing old TensorBoard event files are not rewritten. The cleanup affects future training runs only.
+
+## 2026-06-03 - BC warm-start PPO-main experiment scaffold
+
+User request:
+
+- Build a clear `BC warm-start + PPO-main fine-tuning` flow, initially for `coverage`.
+- The goal is to test whether PPO can improve over a BC expert, not merely continue an already PPO-trained best checkpoint.
+- Keep existing safe configs and best-specialist launchers reproducible.
+- Then start one long four-task PPO-main run, with each single-task specialist trained separately from BC checkpoints and email notification at completion.
+
+Coverage PPO-main config added:
+
+- `configs/policy/debug_ppo_coverage_factorized_group_route_target_agents_ppo_main.yaml`
+- Based on `configs/policy/debug_ppo_coverage_factorized_group_route_target_agents_safe.yaml`.
+- Keeps:
+  - `policy_class: factorized_group`
+  - route-target-agent observation/decision path
+  - spatial attention and group settings
+- PPO-main changes:
+  - `total_updates: 500`
+  - `num_envs: 8`
+  - `rollout_steps: 256`
+  - `epochs: 2`
+  - `minibatch_size: 512`
+  - `learning_rate: 0.000008`
+  - `clip_coef: 0.03`
+  - `target_kl: 0.0025`
+  - `reference_policy_coef: 0.1`
+  - `ent_coef: 0.001`
+  - `max_grad_norm: 0.5`
+  - `log_std_init: -1.2`
+  - `log_std_min: -1.5`
+  - `log_std_max: -0.6`
+  - `eval_interval: 20`
+  - `tensorboard_metric_mode: core`
+
+Coverage two-stage script added:
+
+- `scripts/run_coverage_bc_to_ppo_main.sh`
+- Runs only `coverage`.
+- Supports env overrides:
+  - `RUN_TIMESTAMP`
+  - `BC_CHECKPOINT`
+  - `STAGE1_TOTAL_UPDATES`
+  - `STAGE2_TOTAL_UPDATES`
+  - `EVAL_EPISODES`
+  - `CUDA_VISIBLE_DEVICES`
+  - `ENV_BACKEND`
+- Default `BC_CHECKPOINT`:
+  - `outputs/training/bc/20260601_034310/debug_bc_coverage_factorized_group_route_target_agents_perm_coverage_N4_multi_channel_field_plus_task_id/checkpoints/checkpoint_0032.pt`
+- Stage1:
+  - config `configs/policy/debug_ppo_coverage_factorized_group_route_target_agents_safe.yaml`
+  - env `configs/env/debug_coverage_route_target_agents_canonical.yaml`
+  - init BC checkpoint
+  - default updates `100`
+  - run name `coverage_stage1_safe_from_bc`
+- Stage2:
+  - config `configs/policy/debug_ppo_coverage_factorized_group_route_target_agents_ppo_main.yaml`
+  - init Stage1 `checkpoint_best_eval.pt`
+  - falls back to BC checkpoint if Stage1 best is missing
+  - default updates `500`
+  - run name `coverage_stage2_ppo_main`
+- Outputs:
+  - `outputs/training/bc_ppo/<RUN_TIMESTAMP>/coverage_stage1_safe_from_bc/`
+  - `outputs/training/bc_ppo/<RUN_TIMESTAMP>/coverage_stage2_ppo_main/`
+
+Coverage comparison script added:
+
+- `scripts/debug_long/compare_bc_safe_ppo_main.py`
+- Inputs:
+  - `--bc-eval-csv`
+  - `--stage1-training-csv`
+  - `--stage2-training-csv`
+  - `--output-md`
+- Reports best rows for:
+  - `success_rate`
+  - `eval_reward`
+  - `coverage_ratio`
+  - `collision_rate`
+  - `repeated_coverage_ratio`
+  - `demand_revisit_excess`
+- Missing fields are handled gracefully and listed in the output Markdown.
+
+Coverage documentation added:
+
+- `docs/coverage_bc_to_ppo_main_experiment_zh.md`
+- Documents:
+  - why previous best-specialist long run is conservative checkpoint continuation;
+  - why BC checkpoint is the correct attribution baseline;
+  - Stage1 safe PPO vs Stage2 PPO-main;
+  - how to judge whether PPO truly improves;
+  - how to interpret Stage2 failing to exceed BC/Stage1.
+
+TensorBoard metric update for PPO-main diagnostics:
+
+- `scripts/_common.py` core TensorBoard allowlist now also keeps:
+  - `kl_early_stop`
+  - `policy_std_mean`
+  - `*_repeated_coverage_ratio`
+  - `*_demand_revisit_excess`
+- This makes PPO-main diagnostics visible without restoring all noisy reward components.
+
+Other configs added for four-task PPO-main:
+
+- `configs/policy/debug_ppo_goal_nav_factorized_group_task_targets_ppo_main.yaml`
+- `configs/policy/debug_ppo_risk_nav_factorized_group_dagger_ppo_main.yaml`
+- `configs/policy/debug_ppo_formation_factorized_group_ppo_main.yaml`
+
+Four-task PPO-main launcher added:
+
+- `scripts/run_ppo_main_parallel_specialists_all4.sh`
+- Starts four independent specialist PPO-main runs in parallel.
+- All jobs start from BC checkpoints, not PPO best checkpoints.
+- Sends email at completion using the existing SMTP helper pattern and `.secrets/wayffusion_mail.env`.
+- Default long-run update counts:
+  - `goal_nav`: `3000`
+  - `coverage`: `5000`
+  - `risk_nav`: `5000`
+  - `formation`: `3000`
+- Default eval episodes:
+  - `EVAL_EPISODES=100`
+
+Clarifying comment added:
+
+- `scripts/tmux_start_best_specialists_all4.sh`
+- Now explicitly notes it is a best-checkpoint continuation launcher, not the BC-to-PPO-main attribution experiment.
+
+Validation completed:
+
+- Shell syntax:
+  - `bash -n scripts/run_coverage_bc_to_ppo_main.sh`
+  - `bash -n scripts/run_ppo_main_parallel_specialists_all4.sh`
+- Python syntax:
+  - `/opt/conda/bin/python -m py_compile scripts/debug_long/compare_bc_safe_ppo_main.py scripts/train_ppo.py scripts/_common.py`
+- Required pytest:
+  - `/opt/conda/bin/python -m pytest -q tests/test_variable_policies.py tests/test_policy_action_distribution.py tests/test_rewards_basic.py tests/test_task_fields.py`
+  - result: `43 passed`
+- Logger pytest:
+  - `/opt/conda/bin/python -m pytest -q tests/test_training_logging.py`
+  - result: `4 passed`
+
+Coverage two-stage smoke:
+
+- Command:
+  - `RUN_TIMESTAMP=20260603_coverage_bc_to_ppo_main_smoke STAGE1_TOTAL_UPDATES=1 STAGE2_TOTAL_UPDATES=1 EVAL_EPISODES=2 CUDA_VISIBLE_DEVICES=0 bash scripts/run_coverage_bc_to_ppo_main.sh`
+- Result:
+  - Stage1 completed and wrote `training_metrics.csv`.
+  - Stage2 loaded Stage1 `checkpoint_best_eval.pt`, completed, and wrote `training_metrics.csv`.
+  - Both stages wrote `eval_metrics.csv` and `checkpoint_best_eval.pt`.
+- Smoke output dirs:
+  - `outputs/training/bc_ppo/20260603_coverage_bc_to_ppo_main_smoke/coverage_stage1_safe_from_bc/`
+  - `outputs/training/bc_ppo/20260603_coverage_bc_to_ppo_main_smoke/coverage_stage2_ppo_main/`
+- PPO-main required diagnostic fields confirmed in both stage CSV headers:
+  - `eval_success_rate`
+  - `eval_reward`
+  - `eval_coverage_coverage_ratio`
+  - `eval_coverage_repeated_coverage_ratio`
+  - `eval_coverage_demand_revisit_excess`
+  - `eval_collision_rate`
+  - `approx_kl`
+  - `kl_early_stop`
+  - `reference_action_mse`
+  - `policy_std_mean`
+  - `clip_frac`
+- Comparison script smoke:
+  - output `outputs/debug_long/20260603_coverage_bc_to_ppo_main_smoke_coverage_bc_to_ppo_main/comparison.md`
+  - no missing fields.
+
+Important interpretation:
+
+- The smoke run is not a performance conclusion. It only validates that the scaffold, checkpoint loading, metrics, and analysis path work.
+- Do not claim PPO-main improves until a long run and preferably repeat-seed validation show Stage2 exceeds BC/Stage1 on success, coverage ratio, collision, repeated coverage, and demand revisit excess.
+
+Formal four-task PPO-main long run launched:
+
+- Run timestamp:
+  - `20260603_ppo_main_all4_162355`
+- tmux session:
+  - `wayffusion_ppo_main_20260603_ppo_main_all4_162355`
+- Launcher log root:
+  - `outputs/training/parallel_ppo_main_specialists/20260603_ppo_main_all4_162355/`
+- Main log:
+  - `outputs/training/parallel_ppo_main_specialists/20260603_ppo_main_all4_162355/parallel.log`
+- Summary CSV:
+  - `outputs/training/parallel_ppo_main_specialists/20260603_ppo_main_all4_162355/summary.csv`
+- Expected training output dirs:
+  - `outputs/training/bc_ppo/20260603_ppo_main_all4_162355/goal_nav_ppo_main_from_bc/`
+  - `outputs/training/bc_ppo/20260603_ppo_main_all4_162355/coverage_ppo_main_from_bc/`
+  - `outputs/training/bc_ppo/20260603_ppo_main_all4_162355/risk_nav_ppo_main_from_bc/`
+  - `outputs/training/bc_ppo/20260603_ppo_main_all4_162355/formation_ppo_main_from_bc/`
+- GPU assignment:
+  - `goal_nav`: GPU 0
+  - `coverage`: GPU 1
+  - `risk_nav`: GPU 2
+  - `formation`: GPU 0
+  - GPU 3 was avoided because it already had substantial memory use.
+- Confirmed after launch:
+  - tmux session alive.
+  - four `scripts/train_ppo.py` processes running.
+  - all four logs reached update 1 output.
+- Completion behavior:
+  - `scripts/run_ppo_main_parallel_specialists_all4.sh` emails configured `EMAIL_TO` when all four jobs finish.

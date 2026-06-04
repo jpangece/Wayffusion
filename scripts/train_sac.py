@@ -102,6 +102,7 @@ def main():
         step_key="step",
         tensorboard_enabled=args.tensorboard,
         console_interval=args.console_log_interval,
+        tensorboard_metric_mode=str(config.get("tensorboard_metric_mode", "core")),
         key_order=[
             "rollout_reward",
             "actor_loss",
@@ -147,7 +148,14 @@ def main():
         final_step = int(metrics[-1].get("step", trainer.total_steps)) if metrics else int(trainer.total_steps)
         eval_rows = []
         for task_name, task_summary in task_summaries.items():
-            log_scalar_metrics(writer, f"{output_root}/final_eval/N{agent_count}/{task_name}", final_step, task_summary)
+            log_scalar_metrics(
+                writer,
+                f"{output_root}/final_eval/N{agent_count}/{task_name}",
+                final_step,
+                task_summary,
+                tensorboard_metric_mode=str(config.get("tensorboard_metric_mode", "core")),
+                metric_phase="final_eval",
+            )
             print_progress_line(
                 f"{output_root}-final/{task_name}",
                 "num_agents",
@@ -172,7 +180,14 @@ def main():
                     "normalized_score": float(task_summary.get("normalized_score_mean", 0.0)),
                 }
             )
-        log_scalar_metrics(writer, f"{output_root}/final_eval/N{agent_count}/overall", final_step, overall_summary)
+        log_scalar_metrics(
+            writer,
+            f"{output_root}/final_eval/N{agent_count}/overall",
+            final_step,
+            overall_summary,
+            tensorboard_metric_mode=str(config.get("tensorboard_metric_mode", "core")),
+            metric_phase="final_eval",
+        )
         print_progress_line(
             f"{output_root}-final/overall",
             "num_agents",

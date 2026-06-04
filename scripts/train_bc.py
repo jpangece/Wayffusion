@@ -118,6 +118,7 @@ def main():
         step_key="epoch",
         tensorboard_enabled=args.tensorboard,
         console_interval=args.console_log_interval,
+        tensorboard_metric_mode=str(policy_config.get("tensorboard_metric_mode", "core")),
         key_order=["bc_loss", "epoch_time_sec", "wall_clock_time", "memory_usage_mb"],
     )
     try:
@@ -158,7 +159,14 @@ def main():
             )
             normalized_records = [apply_reference_normalization(record, reference_table) for record in records]
             summary = aggregate_episode_records(normalized_records)
-            log_scalar_metrics(writer, f"bc/final_eval/N{agent_count}", final_epoch, summary)
+            log_scalar_metrics(
+                writer,
+                f"bc/final_eval/N{agent_count}",
+                final_epoch,
+                summary,
+                tensorboard_metric_mode=str(policy_config.get("tensorboard_metric_mode", "core")),
+                metric_phase="final_eval",
+            )
             print_progress_line(
                 "bc-final",
                 "num_agents",

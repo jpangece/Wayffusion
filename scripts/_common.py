@@ -378,18 +378,135 @@ def _is_numeric_scalar(value) -> bool:
     return isinstance(value, (Number, np.integer, np.floating, np.bool_))
 
 
+TENSORBOARD_TRAIN_CORE_KEYS = frozenset(
+    {
+        "wall_clock_time",
+        "mean_rollout_reward",
+        "rollout_episode_success_rate",
+        "rollout_terminal_goal_coverage",
+        "rollout_terminal_collision_rate",
+        "rollout_terminal_path_length",
+        "policy_loss",
+        "value_loss",
+        "actor_loss",
+        "critic_loss",
+        "bc_loss",
+        "entropy",
+        "approx_kl",
+        "kl_early_stop",
+        "clip_frac",
+        "ratio_mean",
+        "reference_action_mse",
+        "grad_norm",
+        "explained_variance",
+        "action_abs_mean",
+        "action_saturation_frac",
+        "log_std_mean",
+        "policy_std_mean",
+        "rollout_steps_per_sec",
+        "episodes_completed",
+        "cumulative_episodes",
+        "memory_usage_mb",
+        "inference_latency_ms",
+        "eval_reward",
+        "eval_success_rate",
+        "eval_collision_rate",
+        "eval_path_length",
+        "eval_inference_latency_ms",
+    }
+)
+
+TENSORBOARD_EVAL_CORE_METRIC_NAMES = frozenset(
+    {
+        "return",
+        "success_rate",
+        "collision_rate",
+        "path_length",
+        "normalized_score",
+        "goal_coverage_ratio",
+        "coverage_ratio",
+        "repeated_coverage_ratio",
+        "demand_revisit_excess",
+        "formation_error",
+        "cumulative_risk_exposure",
+        "inference_latency_ms",
+    }
+)
+
+TENSORBOARD_EVAL_CORE_SUFFIXES = tuple(
+    f"_{metric_name}" for metric_name in TENSORBOARD_EVAL_CORE_METRIC_NAMES if metric_name != "return"
+)
+
+TENSORBOARD_FINAL_CORE_KEYS = frozenset(
+    {
+        f"{metric_name}_mean" for metric_name in TENSORBOARD_EVAL_CORE_METRIC_NAMES if metric_name != "reward"
+    }
+)
+
+
+def normalize_tensorboard_metric_mode(mode: str | None) -> str:
+    normalized = str(mode or "core").strip().lower()
+    if normalized in {"core", "all"}:
+        return normalized
+    warnings.warn(
+        f"Unknown tensorboard_metric_mode={mode!r}; falling back to 'core'. Valid modes are 'core' and 'all'.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    return "core"
+
+
+def _is_core_eval_metric_key(key: str, prefix: str = "eval_") -> bool:
+    if not key.startswith(prefix):
+        return False
+    if key in TENSORBOARD_TRAIN_CORE_KEYS:
+        return True
+    metric_part = key[len(prefix) :]
+    if metric_part == "return" or (metric_part.endswith("_return") and not metric_part.endswith("_raw_return")):
+        return True
+    return any(metric_part == suffix[1:] or metric_part.endswith(suffix) for suffix in TENSORBOARD_EVAL_CORE_SUFFIXES)
+
+
+def _should_log_tensorboard_metric(
+    key: str,
+    *,
+    metric_mode: str,
+    metric_phase: str,
+    include_keys: set[str] | None,
+) -> bool:
+    if metric_mode == "all":
+        return True
+    if include_keys is not None:
+        return key in include_keys
+    if metric_phase == "final_eval":
+        return key in TENSORBOARD_FINAL_CORE_KEYS
+    return key in TENSORBOARD_TRAIN_CORE_KEYS or _is_core_eval_metric_key(key)
+
+
 def log_scalar_metrics(
     writer,
     namespace: str,
     step: int,
     metrics: dict,
     exclude_keys: set[str] | None = None,
+    tensorboard_metric_mode: str = "core",
+    include_keys: Iterable[str] | None = None,
+    metric_phase: str = "train",
 ) -> None:
     if writer is None:
         return
     excluded = set(exclude_keys or set())
+    metric_mode = normalize_tensorboard_metric_mode(tensorboard_metric_mode)
+    included = set(include_keys) if include_keys is not None else None
     for key, value in metrics.items():
         if key in excluded or not _is_numeric_scalar(value):
+            continue
+        if not _should_log_tensorboard_metric(
+            str(key),
+            metric_mode=metric_mode,
+            metric_phase=metric_phase,
+            include_keys=included,
+        ):
             continue
         scalar = float(value)
         if not np.isfinite(scalar):
@@ -442,17 +559,30 @@ def build_metric_logger(
     tensorboard_enabled: bool = True,
     console_interval: int = 1,
     key_order: list[str] | None = None,
+    tensorboard_metric_mode: str = "core",
+    tensorboard_include_keys: Iterable[str] | None = None,
 ) -> tuple[object | None, Callable[[dict], None]]:
     writer = create_summary_writer(run_dir, enabled=tensorboard_enabled)
     interval = max(int(console_interval), 1)
     state = {"last_console_step": None}
     excluded = {step_key, "checkpoint_path", "eval_media_dir"}
+    metric_mode = normalize_tensorboard_metric_mode(tensorboard_metric_mode)
+    include_keys = set(tensorboard_include_keys) if tensorboard_include_keys is not None else None
 
     def log_record(record: dict) -> None:
         if step_key not in record:
             return
         step_value = int(record[step_key])
-        log_scalar_metrics(writer, namespace, step_value, record, exclude_keys=excluded)
+        log_scalar_metrics(
+            writer,
+            namespace,
+            step_value,
+            record,
+            exclude_keys=excluded,
+            tensorboard_metric_mode=metric_mode,
+            include_keys=include_keys,
+            metric_phase="train",
+        )
         should_print = state["last_console_step"] is None
         if not should_print and abs(step_value - int(state["last_console_step"])) >= interval:
             should_print = True

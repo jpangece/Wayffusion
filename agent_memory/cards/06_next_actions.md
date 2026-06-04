@@ -667,3 +667,64 @@ User-facing launch shortcut:
   - edit the top parameter block of `scripts/tmux_start_best_specialists_all4.sh`, or override variables in the shell.
 - Example override:
   - `GOAL_TOTAL_UPDATES=2000 COVERAGE_TOTAL_UPDATES=2500 RISK_TOTAL_UPDATES=3000 FORMATION_TOTAL_UPDATES=2000 EVAL_EPISODES=100 bash scripts/tmux_start_best_specialists_all4.sh`
+
+TensorBoard cleanup note after 2026-06-03:
+
+- New training runs default to `tensorboard_metric_mode: core`.
+- TensorBoard should now be used as a concise monitoring dashboard, while `training_metrics.csv` / `eval_metrics.csv` remain the full-fidelity data source.
+- Future PPO TensorBoard tags are namespaced by task set:
+  - `bc_ppo/goal_nav/train/...`
+  - `bc_ppo/coverage/train/...`
+  - `bc_ppo/risk_nav/train/...`
+  - `bc_ppo/formation/train/...`
+- If a debugging run needs the old all-scalar behavior, add this to the policy config:
+  - `tensorboard_metric_mode: all`
+- Existing old event files, including `20260601_145359_best_specialists_all4_long`, are not rewritten. To see the cleaner TensorBoard layout, launch a new run after the cleanup patch.
+
+Active PPO-main run after 2026-06-03:
+
+- A four-task PPO-main long run is currently active.
+- This run starts from BC checkpoints, not from PPO best checkpoints.
+- Run timestamp:
+  - `20260603_ppo_main_all4_162355`
+- tmux session:
+  - `wayffusion_ppo_main_20260603_ppo_main_all4_162355`
+- Monitor:
+  - `tail -f outputs/training/parallel_ppo_main_specialists/20260603_ppo_main_all4_162355/parallel.log`
+  - `tmux attach -t wayffusion_ppo_main_20260603_ppo_main_all4_162355`
+- Per-task logs:
+  - `outputs/training/parallel_ppo_main_specialists/20260603_ppo_main_all4_162355/goal_nav_ppo_main_from_bc.log`
+  - `outputs/training/parallel_ppo_main_specialists/20260603_ppo_main_all4_162355/coverage_ppo_main_from_bc.log`
+  - `outputs/training/parallel_ppo_main_specialists/20260603_ppo_main_all4_162355/risk_nav_ppo_main_from_bc.log`
+  - `outputs/training/parallel_ppo_main_specialists/20260603_ppo_main_all4_162355/formation_ppo_main_from_bc.log`
+- Summary after completion:
+  - `outputs/training/parallel_ppo_main_specialists/20260603_ppo_main_all4_162355/summary.csv`
+- Expected output dirs:
+  - `outputs/training/bc_ppo/20260603_ppo_main_all4_162355/goal_nav_ppo_main_from_bc/`
+  - `outputs/training/bc_ppo/20260603_ppo_main_all4_162355/coverage_ppo_main_from_bc/`
+  - `outputs/training/bc_ppo/20260603_ppo_main_all4_162355/risk_nav_ppo_main_from_bc/`
+  - `outputs/training/bc_ppo/20260603_ppo_main_all4_162355/formation_ppo_main_from_bc/`
+- Completion behavior:
+  - `scripts/run_ppo_main_parallel_specialists_all4.sh` sends email after all four jobs finish.
+
+Next action after active PPO-main run finishes:
+
+- First inspect `summary.csv`; all rows should be `status=success`.
+- For each task, inspect:
+  - `training_metrics.csv`
+  - `eval_metrics.csv`
+  - `best_eval_summary.json`
+  - `checkpoints/checkpoint_best_eval.pt`
+- For coverage, compare against BC/Stage1 using:
+  - `scripts/debug_long/compare_bc_safe_ppo_main.py`
+- Do not judge PPO-main only by `eval_reward`.
+- Required PPO-main diagnostics to review:
+  - `eval_success_rate`
+  - task coverage/goal/formation/risk quality metrics
+  - `eval_collision_rate`
+  - `approx_kl`
+  - `kl_early_stop`
+  - `reference_action_mse`
+  - `policy_std_mean`
+  - `clip_frac`
+- If Stage2/PPO-main does not beat BC or Stage1, record that BC/teacher remains the main performance source and PPO-main did not yet provide a validated net improvement.
