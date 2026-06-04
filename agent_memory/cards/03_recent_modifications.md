@@ -3161,3 +3161,22 @@ Formal four-task PPO-main long run launched:
   - all four logs reached update 1 output.
 - Completion behavior:
   - `scripts/run_ppo_main_parallel_specialists_all4.sh` emails configured `EMAIL_TO` when all four jobs finish.
+
+## Theme BP: Commit-level PPO/debug explanation doc
+
+Implemented on 2026-06-04:
+
+- Added `docs/ppo_debug_commit_explanations_zh.md`.
+- The document turns the commit-level explanation of `0044742`, `64b9789`, `9f1a6d0`, `62fcd66`, `402e750`, `3c50ca8`, `55356b2`, and `51c2068` into a reusable Markdown reference.
+- It covers:
+  - `SquashedNormal` / `log_std` math;
+  - PPO diagnostics such as `approx_kl`, `clip_frac`, `grad_norm`, `explained_variance`, and rollout terminal stats;
+  - remaining-goal observation/reward repair for `goal_nav` and `risk_nav`;
+  - coverage spatial head, global slot, utility/frontier slot, factorized group, permutation BC loss, coverage expert v2/v3/v4/V5, route hint, and route target;
+  - `formation` template-aware success repair;
+  - `goal_nav` task-target observation repair and seed-robustness effect.
+
+Reason:
+
+- The user asked for the previous explanation to be written as a Markdown file with math formulas in proper Markdown math format.
+- This is a documentation-only change and contains no new experiment result or code behavior change.
