@@ -728,3 +728,66 @@ Next action after active PPO-main run finishes:
   - `policy_std_mean`
   - `clip_frac`
 - If Stage2/PPO-main does not beat BC or Stage1, record that BC/teacher remains the main performance source and PPO-main did not yet provide a validated net improvement.
+
+MAPPO baseline next action after 2026-06-04:
+
+- A minimal MAPPO-style baseline now exists:
+  - policy config: `configs/policy/mappo_shared.yaml`
+  - trainer: `algorithms/mappo.py::MAPPOTrainer`
+  - training entry: `scripts/train_mappo.py`
+- Its purpose is diagnostic:
+  - test whether PPO instability comes from treating the whole swarm as one high-dimensional joint action with one joint logprob/ratio;
+  - compare against existing centralized PPO and `factorized_group` under the same task and same `N`.
+- Suggested first controlled comparison:
+  - PPO joint/deepsets:
+    - `/opt/conda/bin/python scripts/train_ppo.py --config configs/policy/ppo_cnn_deepsets.yaml --tasks goal_nav --agent_counts 4 --total_updates 100 --eval_episodes 20 --headless`
+  - PPO factorized_group:
+    - use the best existing task-specific factorized_group config for the same task and `N=4`.
+  - MAPPO shared:
+    - `/opt/conda/bin/python scripts/train_mappo.py --config configs/policy/mappo_shared.yaml --tasks goal_nav --agent_counts 4 --total_updates 100 --eval_episodes 20 --headless`
+- Key diagnostics to compare:
+  - `eval_success_rate`, `eval_reward`, `eval_collision_rate`, `eval_path_length`;
+  - `approx_kl`, `clip_frac`, `ratio_mean`, `policy_std_mean`, `grad_norm`;
+  - seed robustness over at least 2-3 seeds before claiming the architecture improves training.
+- Current MAPPO validation status:
+  - only smoke-tested, not performance-tested;
+  - output directory from smoke: `outputs/training/mappo/20260604_mappo_smoke/smoke_goal_cov/`.
+
+Active pure MAPPO all4 long run after 2026-06-05:
+
+- A four-task, no-BC, pure MAPPO long run is currently active.
+- tmux session:
+  - `wayffusion_mappo_20260605_mappo_pure_all4_061548`
+- Monitor:
+  - `tail -f outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/parallel.log`
+  - `tmux attach -t wayffusion_mappo_20260605_mappo_pure_all4_061548`
+- Per-task logs:
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/goal_nav_mappo_pure.log`
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/coverage_mappo_pure.log`
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/risk_nav_mappo_pure.log`
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/formation_mappo_pure.log`
+- Per-task training output dirs:
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/goal_nav_mappo_pure/`
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/coverage_mappo_pure/`
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/risk_nav_mappo_pure/`
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/formation_mappo_pure/`
+- Summary after completion:
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/summary.csv`
+- This run uses:
+  - `configs/policy/mappo_shared_long.yaml`
+  - `1000` updates per task
+  - `EVAL_EPISODES=50`
+  - `bc_warm_start=0`; no checkpoint is loaded.
+- First result checkpoints/eval rows should appear around update 50 because `eval_interval=50`.
+- After completion, inspect for each task:
+  - `training_metrics.csv`
+  - `eval_metrics.csv`
+  - `best_eval_summary.json`
+  - `checkpoints/checkpoint_best_eval.pt`
+- Judge MAPPO from scratch by:
+  - `eval_success_rate`
+  - task-specific metrics: goal coverage / coverage ratio and revisit excess / risk exposure / formation error
+  - `eval_collision_rate`
+  - `eval_path_length`
+  - PPO stability diagnostics: `approx_kl`, `clip_frac`, `ratio_mean`, `policy_std_mean`, `grad_norm`
+- If pure MAPPO remains low-success while BC warm-start/factorized specialists are high-success, record that architecture-level agent-wise ratios alone are not sufficient and the remaining gap likely comes from sparse team reward/exploration/credit assignment rather than only joint-logprob scaling.

@@ -3180,3 +3180,256 @@ Reason:
 
 - The user asked for the previous explanation to be written as a Markdown file with math formulas in proper Markdown math format.
 - This is a documentation-only change and contains no new experiment result or code behavior change.
+
+## Theme BQ: Minimal MAPPO-style shared-agent PPO baseline scaffold
+
+Implemented on 2026-06-04:
+
+- Added `policies/mappo_shared_policy.py` with `MAPPOSharedPolicy`.
+  - It keeps the existing observation dict and action shape `[B, N, 2]`.
+  - Actor is a shared per-agent MLP conditioned on each agent token plus global CNN field feature, task id, and global info.
+  - Critic remains centralized and uses CNN field feature plus masked mean pooled agent tokens, task id, and global info.
+  - `get_action_and_value()` returns per-agent `logprob` and `entropy` with shape `[B, N]`, summing only over waypoint action dimension 2.
+  - Optional `agent_mask` zeros padded agents' actions/logprob/entropy.
+- Added `algorithms/mappo.py` with `MAPPOTrainer`.
+  - It subclasses the existing PPO trainer to reuse rollout collection, GAE, eval, CSV logging, and checkpointing.
+  - The update step is changed to use old/new logprob tensors `[T * B, N]`.
+  - Team advantage `[T * B]` is broadcast to agents as first-version MAPPO credit assignment.
+  - PPO ratio, clipped actor loss, entropy, approximate KL, clip fraction, and ratio mean are computed agent-wise and then mask-averaged over valid agents.
+- Updated `policies/__init__.py` to support `policy_class: mappo_shared`.
+- Updated `algorithms/__init__.py` to export `MAPPOTrainer`.
+- Added `configs/policy/mappo_shared.yaml` as a small default MAPPO config:
+  - `num_envs=4`, `rollout_steps=128`, `total_updates=20`, `epochs=4`, `minibatch_size=64`, `gamma=0.99`, `gae_lambda=0.95`, `clip_coef=0.2`, `ent_coef=0.01`, `vf_coef=0.5`, `learning_rate=3e-4`, linear LR schedule, reward/advantage normalization enabled.
+- Added `scripts/train_mappo.py`.
+  - CLI mirrors the fixed-N path of `scripts/train_ppo.py`.
+  - Output root is `outputs/training/mappo/<timestamp>/<run_name>/`.
+  - Logs include key MAPPO/PPO diagnostics: `mean_rollout_reward`, `policy_loss`, `value_loss`, `entropy`, `approx_kl`, `clip_frac`, `ratio_mean`, `grad_norm`, `eval_reward`, `eval_success_rate`, `eval_collision_rate`, and `eval_path_length`.
+  - First version intentionally supports one `agent_count` per run to keep the comparison controlled.
+- Added tests:
+  - `tests/test_variable_policies.py` now verifies `mappo_shared` action shape for `N=4` and `N=10`, and verifies per-agent `logprob`/`entropy` shapes.
+  - `tests/test_mappo_trainer.py` collects one tiny rollout and confirms `batch.logprobs` shape `[T, B, N]`, then runs one update and checks finite diagnostics.
+
+Validation:
+
+- `/opt/conda/bin/python -m py_compile policies/mappo_shared_policy.py algorithms/mappo.py scripts/train_mappo.py` passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_variable_policies.py` passed: `23 passed`.
+- `/opt/conda/bin/python -m pytest -q tests/test_mappo_trainer.py` passed: `1 passed`.
+- `/opt/conda/bin/python -m pytest -q tests/test_policy_action_distribution.py` passed: `3 passed`.
+- Smoke command:
+  - `/opt/conda/bin/python scripts/train_mappo.py --config configs/policy/mappo_shared.yaml --tasks goal_nav coverage --agent_counts 4 --total_updates 1 --eval_episodes 1 --headless --no-tensorboard --console_log_interval 1 --run_timestamp 20260604_mappo_smoke --run_name smoke_goal_cov`
+- Smoke output:
+  - `outputs/training/mappo/20260604_mappo_smoke/smoke_goal_cov/`
+  - Created `training_metrics.csv`, `eval_metrics.csv`, `checkpoint_0001.pt`, `checkpoint_best_eval.pt`, and snapshot files.
+
+Interpretation:
+
+- This is a baseline implementation and smoke validation only, not evidence that MAPPO has converged.
+- The baseline directly tests the user's hypothesis: whether factorized/joint PPO instability is partly caused by collapsing all UAV action log-probs into one joint action ratio.
+- The next experiment should compare equal tasks and equal `N` across:
+  - `scripts/train_ppo.py + configs/policy/ppo_cnn_deepsets.yaml`;
+  - `scripts/train_ppo.py + factorized_group specialist config`;
+  - `scripts/train_mappo.py + configs/policy/mappo_shared.yaml`.
+
+## Theme BR: Pure MAPPO all4 long-run launcher and 1000-update experiment
+
+Implemented and launched on 2026-06-05:
+
+- Added `configs/policy/mappo_shared_long.yaml`.
+  - Purpose: long pure-MAPPO-from-random-init specialist training.
+  - Main settings:
+    - `num_envs=8`
+    - `rollout_steps=256`
+    - `total_updates=1000`
+    - `epochs=4`
+    - `minibatch_size=512`
+    - `learning_rate=2e-4`
+    - `clip_coef=0.2`
+    - `ent_coef=0.01`
+    - `vf_coef=0.5`
+    - `target_kl=0.03`
+    - `eval_interval=50`
+    - `log_std_init=-0.3`
+  - Reason for `eval_interval=50`: avoid spending most of the 1000-update run on evaluation; the short `mappo_shared.yaml` keeps `eval_interval=5` for smoke/debug.
+- Added `scripts/run_mappo_parallel_specialists_all4.sh`.
+  - Runs four single-task MAPPO specialists in parallel.
+  - Uses `scripts/train_mappo.py`, not `scripts/train_ppo.py`.
+  - Does not pass any checkpoint argument, so `bc_warm_start=0`.
+  - Writes queue logs to `outputs/training/parallel_mappo_specialists/<RUN_TIMESTAMP>/`.
+  - Writes per-task train outputs to `outputs/training/mappo/<RUN_TIMESTAMP>/<task_label>/`.
+  - Sends completion email through the same SMTP/local-mail pattern used by existing PPO queue scripts.
+- Added `scripts/tmux_start_mappo_specialists_all4.sh`.
+  - One-command detached tmux launcher for the pure MAPPO all4 run.
+  - Default budgets:
+    - goal_nav: `1000` updates
+    - coverage: `1000` updates
+    - risk_nav: `1000` updates
+    - formation: `1000` updates
+  - Default `EVAL_EPISODES=50`, `RECORD_EVAL_EPISODES=0`.
+  - Default GPU mapping:
+    - goal_nav -> GPU 0
+    - coverage -> GPU 1
+    - risk_nav -> GPU 2
+    - formation -> GPU 3
+
+Validation before launch:
+
+- `bash -n scripts/run_mappo_parallel_specialists_all4.sh` passed.
+- `bash -n scripts/tmux_start_mappo_specialists_all4.sh` passed.
+- Dry-run command:
+  - `DRY_RUN=1 RUN_TIMESTAMP=20260605_mappo_pure_all4_dryrun bash scripts/tmux_start_mappo_specialists_all4.sh`
+- Dry-run confirmed:
+  - all four task budgets were `1000` updates;
+  - `eval_episodes=50`;
+  - `bc_warm_start=0`;
+  - launch script path under `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_dryrun/`.
+
+Long run launched:
+
+- Command:
+  - `RUN_TIMESTAMP=20260605_mappo_pure_all4_061548 bash scripts/tmux_start_mappo_specialists_all4.sh`
+- tmux session:
+  - `wayffusion_mappo_20260605_mappo_pure_all4_061548`
+- Queue log root:
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/`
+- Main queue log:
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/parallel.log`
+- Expected per-task output dirs:
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/goal_nav_mappo_pure/`
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/coverage_mappo_pure/`
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/risk_nav_mappo_pure/`
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/formation_mappo_pure/`
+- Task configs used:
+  - goal_nav: `configs/env/debug_goal_nav_task_targets.yaml`
+  - coverage: `configs/env/debug_coverage_route_target_agents_canonical.yaml`
+  - risk_nav: `configs/env/debug_risk_nav_safety_completion.yaml`
+  - formation: `configs/env/formation.yaml`
+  - policy for all: `configs/policy/mappo_shared_long.yaml`
+- Initial process check:
+  - four `scripts/train_mappo.py` processes were running;
+  - commands contained no `--init_checkpoint`.
+- Initial update logs:
+  - goal_nav update 1: `mean_rollout_reward=-0.039`, `approx_kl=0.000`, `clip_frac=0.000`, `entropy=2.238`
+  - coverage update 1: `mean_rollout_reward=-1.232`, `approx_kl=0.001`, `clip_frac=0.003`, `entropy=2.237`
+  - risk_nav update 1: `mean_rollout_reward=-0.088`, `approx_kl=0.001`, `clip_frac=0.000`, `entropy=2.240`
+  - formation update 1: `mean_rollout_reward=-0.265`, `approx_kl=0.001`, `clip_frac=0.004`, `entropy=2.239`
+- First evaluation at update 50:
+  - goal_nav: `eval_reward=-9.141`, `eval_success_rate=0.020`, `eval_collision_rate=0.065`, `eval_path_length=0.573`
+  - coverage: `eval_reward=-230.371`, `eval_success_rate=0.000`, `eval_collision_rate=0.038`, `eval_path_length=0.624`
+  - risk_nav: `eval_reward=-24.336`, `eval_success_rate=0.020`, `eval_collision_rate=0.211`, `eval_path_length=0.621`
+  - formation: `eval_reward=-121.504`, `eval_success_rate=0.000`, `eval_collision_rate=0.059`, `eval_path_length=0.546`
+
+Interpretation:
+
+- This run is explicitly a pure MAPPO diagnostic, not a BC warm-start experiment.
+- Do not conclude final effectiveness from update-50 logs. Wait for the 1000-update run and final `summary.csv`.
+- Early update-50 evidence suggests pure MAPPO from random initialization has not yet learned expert behavior on any task; the run remains useful to see whether longer training can overcome sparse team reward/exploration limits.
+- Completion email should be attempted at the end using configured `EMAIL_TO` / SMTP settings.
+
+## Theme BS: Output layout cleanup and locoarchive split
+
+Implemented on 2026-06-05 before analyzing the completed pure MAPPO run:
+
+- Created a clearer output convention:
+  - `outputs/training/`: formal training runs and reportable checkpoints.
+  - `outputs/debug/`: future smoke tests, parameter probes, diagnostic sweeps, dry-runs, and provisional experiments.
+  - `outputs/locoarchive/`: historical clutter that should remain available but should not be treated as active formal results.
+- Added documentation:
+  - `outputs/README.md`
+  - `outputs/debug/README.md`
+  - `outputs/training/README.md`
+  - `outputs/locoarchive/20260605_output_reorg/MANIFEST.md`
+- Archived historical debug/smoke outputs into `outputs/locoarchive/20260605_output_reorg/`.
+- Moved:
+  - `outputs/debug_long` -> `outputs/locoarchive/20260605_output_reorg/debug_long`
+  - `outputs/training/bc_ppo/20260601_phase51_smoke` -> `outputs/locoarchive/20260605_output_reorg/training_debug_smokes/bc_ppo/20260601_phase51_smoke`
+  - `outputs/training/bc_ppo/20260603_coverage_bc_to_ppo_main_smoke` -> `outputs/locoarchive/20260605_output_reorg/training_debug_smokes/bc_ppo/20260603_coverage_bc_to_ppo_main_smoke`
+  - `outputs/training/ppo/20260527_reward_v2_smoke` -> `outputs/locoarchive/20260605_output_reorg/training_debug_smokes/ppo/20260527_reward_v2_smoke`
+  - `outputs/training/ppo/parallel_smoke_parallel` -> `outputs/locoarchive/20260605_output_reorg/training_debug_smokes/ppo/parallel_smoke_parallel`
+  - `outputs/training/sac/mtrlcg_smoke_wayffusion` -> `outputs/locoarchive/20260605_output_reorg/training_debug_smokes/sac/mtrlcg_smoke_wayffusion`
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_dryrun` -> `outputs/locoarchive/20260605_output_reorg/mappo_debug_dryruns/parallel_mappo_specialists/20260605_mappo_pure_all4_dryrun`
+- Kept the completed pure MAPPO 1000-update formal run in place:
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/`
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/`
+
+Reason:
+
+- The user requested output isolation before analysis.
+- Future workflow should be:
+  - run short debug/probe jobs under `outputs/debug/`;
+  - once a setup is validated, launch the formal long run under `outputs/training/`;
+  - move inactive historical clutter into `outputs/locoarchive/`.
+
+Follow-up cleanup requested by user on 2026-06-05:
+
+- The user asked to archive non-MAPPO content remaining under `outputs/training/`.
+- Moved these directories:
+  - `outputs/training/bc` -> `outputs/locoarchive/20260605_output_reorg/training_non_mappo/bc`
+  - `outputs/training/bc_ppo` -> `outputs/locoarchive/20260605_output_reorg/training_non_mappo/bc_ppo`
+  - `outputs/training/ppo` -> `outputs/locoarchive/20260605_output_reorg/training_non_mappo/ppo`
+  - `outputs/training/sac` -> `outputs/locoarchive/20260605_output_reorg/training_non_mappo/sac`
+  - `outputs/training/parallel_best_specialists` -> `outputs/locoarchive/20260605_output_reorg/training_non_mappo/parallel_best_specialists`
+  - `outputs/training/parallel_ppo_main_specialists` -> `outputs/locoarchive/20260605_output_reorg/training_non_mappo/parallel_ppo_main_specialists`
+- Kept active in `outputs/training/`:
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/`
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/`
+- Updated:
+  - `outputs/training/README.md`
+  - `outputs/locoarchive/20260605_output_reorg/MANIFEST.md`
+
+## Theme BT: Pure MAPPO all4 result analysis
+
+Analyzed on 2026-06-05:
+
+- Added run-local analysis summary:
+  - `outputs/training/mappo/20260605_mappo_pure_all4_061548/analysis_summary.md`
+- Source files analyzed:
+  - `outputs/training/parallel_mappo_specialists/20260605_mappo_pure_all4_061548/summary.csv`
+  - per-task `training_metrics.csv`
+  - per-task `eval_metrics.csv`
+  - per-task `best_eval_summary.json`
+- All four jobs completed successfully.
+
+Best pure-MAPPO results:
+
+- `goal_nav`:
+  - best update `850`
+  - `eval_success_rate=0.96`
+  - `eval_reward=13.112`
+  - `eval_collision_rate=0.0009`
+  - `eval_path_length=0.338`
+  - `goal_coverage_ratio=0.991`
+- `coverage`:
+  - best update `150`
+  - `eval_success_rate=0.00`
+  - `eval_reward=-206.906`
+  - `eval_collision_rate=0.2142`
+  - `coverage_ratio=0.351`
+  - `repeated_coverage_ratio=0.989`
+  - `demand_revisit_excess=9.893`
+- `risk_nav`:
+  - best update `1000`
+  - `eval_success_rate=0.04`
+  - `eval_reward=-19.855`
+  - `eval_collision_rate=0.0748`
+  - `goal_coverage_ratio=0.218`
+  - `cumulative_risk_exposure=21.239`
+- `formation`:
+  - best update `250`
+  - `eval_success_rate=0.02`
+  - `eval_reward=-34.960`
+  - `eval_collision_rate=0.3061`
+  - `formation_error=0.256`
+  - `radius_error=0.112`
+
+Main interpretation:
+
+- Pure MAPPO from random initialization successfully trains `goal_nav`.
+- Pure MAPPO does not solve `coverage`, `risk_nav`, or `formation`.
+- PPO diagnostics do not indicate numerical blow-up:
+  - `approx_kl` stays small;
+  - `clip_frac` stays low to moderate;
+  - `ratio_mean` remains near `1.0`.
+- Therefore the remaining failure is not simply joint-logprob PPO instability. It is more likely caused by sparse team reward, weak credit assignment, insufficient exploration, and missing task-specific route/slot/safety priors.
+- Compared with archived previous specialists:
+  - MAPPO improves over previous `goal_nav` evidence;
+  - MAPPO is far worse than previous route-target coverage, DAgger/safe risk_nav, and template-aware formation specialists.

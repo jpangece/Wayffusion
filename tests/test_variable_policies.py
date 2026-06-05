@@ -388,3 +388,33 @@ def test_factorized_group_policy_keeps_task_compatibility():
         action = policy.act_deterministic(obs_tensor).detach().cpu().numpy()
         assert action.shape == (1, 4, 2)
         assert np.all(np.isfinite(action))
+
+
+def test_mappo_shared_policy_outputs_variable_n_waypoints():
+    policy_config = load_generic_config("configs/policy/mappo_shared.yaml")
+    for num_agents in [4, 10]:
+        config = load_env_config("configs/env/multitask.yaml", override={"num_agents": num_agents, "task_name": "goal_nav"})
+        env = CentralizedMultiUAVEnv(config)
+        observation, _ = env.reset(seed=51)
+        policy = build_policy(policy_config, env.observation_space, env.action_space)
+        obs_tensor = observation_to_tensor(observation, device="cpu")
+        action = policy.act_deterministic(obs_tensor).detach().cpu().numpy()
+        assert action.shape == (1, num_agents, 2)
+        assert np.all(np.isfinite(action))
+
+
+def test_mappo_shared_policy_returns_per_agent_logprob_entropy():
+    policy_config = load_generic_config("configs/policy/mappo_shared.yaml")
+    config = load_env_config("configs/env/multitask.yaml", override={"num_agents": 6, "task_name": "coverage"})
+    env = CentralizedMultiUAVEnv(config)
+    observation, _ = env.reset(seed=53)
+    policy = build_policy(policy_config, env.observation_space, env.action_space)
+    obs_tensor = observation_to_tensor(observation, device="cpu")
+    action, logprob, entropy, value = policy.get_action_and_value(obs_tensor)
+    assert action.shape == (1, 6, 2)
+    assert logprob.shape == (1, 6)
+    assert entropy.shape == (1, 6)
+    assert value.shape == (1,)
+    assert np.all(np.isfinite(action.detach().cpu().numpy()))
+    assert np.all(np.isfinite(logprob.detach().cpu().numpy()))
+    assert np.all(np.isfinite(entropy.detach().cpu().numpy()))

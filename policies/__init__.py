@@ -7,6 +7,7 @@ from policies.attention_policy import CNNAttentionPolicy
 from policies.action_distribution import SquashedNormal
 from policies.cnn_deepsets_policy import CNNDeepSetsPolicy
 from policies.factorized_group_policy import FactorizedGroupPolicy
+from policies.mappo_shared_policy import MAPPOSharedPolicy
 from policies.mlp_policy import MLPPolicy
 
 
@@ -171,6 +172,18 @@ def build_policy(policy_config: dict, observation_space, action_space):
             use_sequential_group_context=bool(policy_config.get("use_sequential_group_context", False)),
             sequential_group_context_strength=float(policy_config.get("sequential_group_context_strength", 0.5)),
         )
+    if policy_class == "mappo_shared":
+        return MAPPOSharedPolicy(
+            observation_space,
+            action_space,
+            cnn_channels=policy_config.get("cnn_channels"),
+            agent_hidden_dim=int(policy_config.get("agent_hidden_dim", 64)),
+            joint_hidden_dim=int(policy_config.get("joint_hidden_dim", 256)),
+            decoder_hidden_dim=int(policy_config.get("decoder_hidden_dim", 128)),
+            log_std_min=float(policy_config.get("log_std_min", -1.5)),
+            log_std_max=float(policy_config.get("log_std_max", 0.5)),
+            log_std_init=float(policy_config.get("log_std_init", 0.0)),
+        )
     if policy_class == "attention":
         return CNNAttentionPolicy(
             observation_space,
@@ -187,6 +200,7 @@ __all__ = [
     "MLPPolicy",
     "CNNDeepSetsPolicy",
     "FactorizedGroupPolicy",
+    "MAPPOSharedPolicy",
     "CNNAttentionPolicy",
     "SquashedNormal",
     "build_policy",
