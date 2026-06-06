@@ -105,7 +105,8 @@ def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
     ]:
         if key in env_config:
             train_config[key] = env_config[key]
-    train_config["max_delta"] = env_config.get("max_waypoint_distance", train_config.get("max_delta", 0.20))
+    if "max_delta" not in train_config and "max_waypoint_distance" in env_config:
+        train_config["max_delta"] = env_config["max_waypoint_distance"]
 
 
 def trial_specs(task: str, stage: str, debug_rollout_steps: int) -> list[TrialSpec]:

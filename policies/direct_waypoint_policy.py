@@ -142,7 +142,14 @@ class DirectWaypointPolicy(nn.Module):
             logprob=logprob,
             entropy=entropy,
             value=value,
-            aux={"delta_mean": delta_mean, "policy_std_mean": torch.exp(log_std).mean(), "agent_mask": agent_mask},
+            aux={
+                "delta_mean": delta_mean,
+                "policy_std_mean": torch.exp(log_std).mean(),
+                "log_std_mean": log_std.mean(),
+                "log_std_min": log_std.min(),
+                "log_std_max": log_std.max(),
+                "agent_mask": agent_mask,
+            },
         )
 
     def act_deterministic(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:

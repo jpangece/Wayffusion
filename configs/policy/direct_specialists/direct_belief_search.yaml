@@ -1,0 +1,37 @@
+name: direct_belief_search_specialist
+algorithm: mappo_waypoint
+policy_class: direct_waypoint
+num_envs: 8
+rollout_steps: 256
+total_updates: 1000
+epochs: 4
+minibatch_size: 512
+gamma: 0.99
+gae_lambda: 0.95
+clip_coef: 0.2
+ent_coef: 0.02
+vf_coef: 0.5
+learning_rate: 0.0002
+max_grad_norm: 0.5
+reward_norm: true
+advantage_norm: true
+lr_schedule: linear
+target_kl: 0.03
+eval_interval: 50
+cnn_channels: [16, 32, 64]
+agent_hidden_dim: 64
+joint_hidden_dim: 192
+attention_heads: 4
+use_attention: true
+map_size: 1.0
+grid_size: 32
+max_waypoint_distance: 0.20
+max_delta: 0.20
+log_std_init: -0.8
+log_std_min: -1.8
+log_std_max: 0.1
+base_position: [0.10, 0.10]
+no_fly_zones:
+  - center: [0.55, 0.55]
+    radius: 0.08
+tensorboard_metric_mode: core

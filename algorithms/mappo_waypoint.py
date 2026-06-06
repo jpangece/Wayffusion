@@ -171,6 +171,18 @@ class MAPPOWaypointTrainer:
         terminal_success = []
         terminal_path = []
         terminal_collision = []
+        env_action_means = []
+        env_action_stds = []
+        env_action_mins = []
+        env_action_maxs = []
+        train_action_means = []
+        train_action_stds = []
+        train_action_mins = []
+        train_action_maxs = []
+        policy_std_means = []
+        log_std_means = []
+        log_std_mins = []
+        log_std_maxs = []
         start = time.perf_counter()
         for _ in range(horizon):
             obs_tensor = _obs_to_tensor(self.current_obs, self.device)
@@ -180,6 +192,24 @@ class MAPPOWaypointTrainer:
             train_actions = policy_output.train_action
             if train_actions is None:
                 train_actions = policy_output.env_action
+            train_actions_np = train_actions.detach().cpu().numpy()
+            env_action_means.append(float(np.mean(env_actions)))
+            env_action_stds.append(float(np.std(env_actions)))
+            env_action_mins.append(float(np.min(env_actions)))
+            env_action_maxs.append(float(np.max(env_actions)))
+            train_action_means.append(float(np.mean(train_actions_np)))
+            train_action_stds.append(float(np.std(train_actions_np)))
+            train_action_mins.append(float(np.min(train_actions_np)))
+            train_action_maxs.append(float(np.max(train_actions_np)))
+            aux = policy_output.aux or {}
+            if "policy_std_mean" in aux:
+                policy_std_means.append(float(torch.as_tensor(aux["policy_std_mean"]).detach().cpu().item()))
+            if "log_std_mean" in aux:
+                log_std_means.append(float(torch.as_tensor(aux["log_std_mean"]).detach().cpu().item()))
+            if "log_std_min" in aux:
+                log_std_mins.append(float(torch.as_tensor(aux["log_std_min"]).detach().cpu().item()))
+            if "log_std_max" in aux:
+                log_std_maxs.append(float(torch.as_tensor(aux["log_std_max"]).detach().cpu().item()))
             step = self.env_batch.step(env_actions)
             with torch.no_grad():
                 bootstrap_value = self.policy.get_action_and_value(_obs_to_tensor(step.bootstrap_observations, self.device)).value
@@ -279,6 +309,18 @@ class MAPPOWaypointTrainer:
             "rollout_terminal_success_rate": float(np.mean(terminal_success)) if terminal_success else 0.0,
             "rollout_terminal_path_length": float(np.mean(terminal_path)) if terminal_path else 0.0,
             "rollout_terminal_collision_rate": float(np.mean(terminal_collision)) if terminal_collision else 0.0,
+            "env_action_mean": float(np.mean(env_action_means)) if env_action_means else 0.0,
+            "env_action_std": float(np.mean(env_action_stds)) if env_action_stds else 0.0,
+            "env_action_min": float(np.min(env_action_mins)) if env_action_mins else 0.0,
+            "env_action_max": float(np.max(env_action_maxs)) if env_action_maxs else 0.0,
+            "train_action_mean": float(np.mean(train_action_means)) if train_action_means else 0.0,
+            "train_action_std": float(np.mean(train_action_stds)) if train_action_stds else 0.0,
+            "train_action_min": float(np.min(train_action_mins)) if train_action_mins else 0.0,
+            "train_action_max": float(np.max(train_action_maxs)) if train_action_maxs else 0.0,
+            "policy_std_mean": float(np.mean(policy_std_means)) if policy_std_means else 0.0,
+            "log_std_mean": float(np.mean(log_std_means)) if log_std_means else 0.0,
+            "log_std_min": float(np.min(log_std_mins)) if log_std_mins else 0.0,
+            "log_std_max": float(np.max(log_std_maxs)) if log_std_maxs else 0.0,
             "episodes_completed": int(np.count_nonzero(np.stack(buffer.done_for_reset))),
             "cumulative_episodes": int(self.completed_episodes),
             "rollout_steps_per_sec": float(horizon * self.env_batch.num_envs / max(elapsed, 1e-6)),

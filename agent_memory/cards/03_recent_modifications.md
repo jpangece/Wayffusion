@@ -4807,3 +4807,129 @@ Verification after direct-mainline switch:
 - `/opt/conda/bin/python -m py_compile policies/direct_waypoint_policy.py policies/candidate_selection_policy.py policies/__init__.py scripts/train_mappo_waypoint.py scripts/debug/tune_mappo_specialists.py tests/test_candidate_selection_policy.py tests/test_mappo_waypoint_trainer.py` -> passed.
 - `/opt/conda/bin/python -m pytest tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py` -> `4 passed`.
 - `/opt/conda/bin/python -m pytest tests/test_waypoint_env_api.py tests/test_action_adapters.py` -> `5 passed`.
+
+### Direct MAPPO specialist tuner and first debug sweeps
+
+Date: 2026-06-06
+
+User requested tuning pure Direct MAPPO task specialists: no candidate-selection logic, no adapter refactor, no BC.
+
+Implementation:
+
+- Added direct-specialist configs:
+  - `configs/policy/direct_specialists/direct_area_coverage.yaml`;
+  - `configs/policy/direct_specialists/direct_belief_search.yaml`;
+  - `configs/policy/direct_specialists/direct_priority_inspection.yaml`;
+  - `configs/policy/direct_specialists/direct_connectivity_expansion.yaml`.
+- Added direct tuning controller:
+  - `scripts/debug/tune_direct_mappo_specialists.py`.
+- Output roots:
+  - debug: `outputs/debug/mappo_direct_specialists/`;
+  - formal: `outputs/training/mappo_direct_specialists/`.
+- Run name format includes direct action scale:
+  - `<task>__direct__N<num_agents>__E<num_envs>__rs<rollout_steps>__lr<lr>__md<max_delta>__seed<seed>__<tag>`.
+- Direct trial specs sweep:
+  - `max_delta` in `0.10 / 0.15 / 0.20 / 0.25`;
+  - `log_std_init` in `-1.5 / -1.0 / -0.8 / -0.5`;
+  - MAPPO LR/entropy/vf/target-KL variants.
+- Fixed wrapper recursion bug:
+  - direct tuner now stores the original generic `next_suggestion` before monkey-patching.
+
+Action diagnostics added to `algorithms/mappo_waypoint.py` and Direct policy:
+
+- `env_action_mean/std/min/max`;
+- `train_action_mean/std/min/max`;
+- `policy_std_mean`;
+- `log_std_mean/min/max`.
+
+These are now written to `training_metrics.csv` for action-scale debugging.
+
+Direct smoke outputs:
+
+- Dry-run:
+  - `outputs/debug/mappo_direct_specialists/20260606_direct_tuner_dryrun/`.
+- Runtime smoke:
+  - `outputs/debug/mappo_direct_specialists/20260606_direct_specialist_smoke02/`.
+  - Results:
+    - `belief_search`: short-smoke `CONVERGED`;
+      - success `1.0`;
+      - searched mass/progress `0.5699991285800934`;
+      - reward `82.1559495767534`;
+    - `area_coverage`: `NEED_MORE_TUNING`;
+      - success `0.0`;
+      - coverage `0.443359375`;
+    - `priority_inspection`: `NEED_MORE_TUNING`;
+      - success `0.0`;
+      - weighted POI completion `0.059935433430145665`;
+    - `connectivity_expansion`: `NEED_MORE_TUNING`;
+      - success `0.0`;
+      - progress `0.15523721277713776`.
+
+Direct debug round 2:
+
+- Output:
+  - `outputs/debug/mappo_direct_specialists/20260606_direct_specialist_debug02/`.
+- Tasks/trials:
+  - `area_coverage`: `md020_std08`, `md015_std10`;
+  - `priority_inspection`: `poi_md020_vf`, `md015_std10`;
+  - `connectivity_expansion`: `conn_md010_safe`, `conn_md015`.
+- Results:
+  - `area_coverage`: still `NEED_MORE_TUNING`;
+    - best run: `area_coverage__direct__N4__E4__rs128__lr2e-4__md0p15__seed0__md015_std10`;
+    - success `0.0`;
+    - coverage/progress `0.468017578125`;
+    - action validity `0.9890625`.
+  - `priority_inspection`: still `NEED_MORE_TUNING`;
+    - best run: `priority_inspection__direct__N4__E4__rs128__lr2e-4__md0p15__seed0__md015_std10`;
+    - success `0.25`;
+    - weighted POI completion `0.550261909479079`;
+    - action validity `0.9947610294117647`.
+  - `connectivity_expansion`: still `NEED_MORE_TUNING`;
+    - best run: `connectivity_expansion__direct__N4__E4__rs128__lr1e-4__md0p15__seed0__conn_md015`;
+    - best success `1.0`;
+    - best progress `0.8037388473749161`;
+    - action validity `0.996875`;
+    - not marked converged because recent eval reward declined and final eval success dropped.
+
+Direct debug round 3:
+
+- Output:
+  - `outputs/debug/mappo_direct_specialists/20260606_direct_specialist_debug03/`.
+- Tasks/trials:
+  - `area_coverage`: `md025_explore`, `lr3e-4`;
+  - `priority_inspection`: `md025_explore`, `lr3e-4`;
+  - `connectivity_expansion`: `conn_md020_ent`, `conn_easy_comm`.
+- Results:
+  - `area_coverage`: `NEED_MORE_TUNING`;
+    - best run: `area_coverage__direct__N4__E4__rs128__lr2e-4__md0p25__seed0__md025_explore`;
+    - success `0.25`;
+    - coverage/progress `0.474365234375`;
+    - action validity `0.9926716549295774`.
+  - `priority_inspection`: `NEED_MORE_TUNING`;
+    - best run: `priority_inspection__direct__N4__E4__rs128__lr2e-4__md0p25__seed0__md025_explore`;
+    - success `0.25`;
+    - weighted POI completion `0.5559184608755503`;
+    - action validity `0.9921875`.
+  - `connectivity_expansion`: `NEED_MORE_TUNING`;
+    - best run: `connectivity_expansion__direct__N4__E4__rs128__lr2e-4__md0p20__seed0__conn_easy_comm`;
+    - best success `1.0` on easy-comm curriculum;
+    - progress `0.870278924703598`;
+    - action validity `0.9733382936507937`;
+    - not target-converged because it used `comm_radius=0.42`, `base_comm_radius=0.50` and recent reward declined.
+
+Current Direct MAPPO interpretation:
+
+- Direct action scale is not catastrophically invalid:
+  - most eval action validity is `>=0.97`;
+  - rollout action validity for larger exploration can drop to `~0.91-0.96`.
+- PPO updates are extremely small:
+  - `approx_kl` is often near `1e-7`;
+  - `clip_frac=0.0`.
+- `area_coverage` and `priority_inspection` show task metric movement but are below target success thresholds.
+- `belief_search` is easiest under Direct MAPPO and passed short debug smoke.
+- `connectivity_expansion` can solve an easier communication curriculum but is not stable target-converged.
+
+Verification after direct tuner work:
+
+- `/opt/conda/bin/python -m py_compile algorithms/mappo_waypoint.py policies/direct_waypoint_policy.py scripts/debug/tune_direct_mappo_specialists.py scripts/debug/tune_mappo_specialists.py` -> passed.
+- `/opt/conda/bin/python -m pytest tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_env_api.py tests/test_action_adapters.py` -> `8 passed`.

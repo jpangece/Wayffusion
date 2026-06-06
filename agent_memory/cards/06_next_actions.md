@@ -1106,3 +1106,34 @@ After switching specialist mainline to direct waypoint MAPPO:
   - if direct policy barely moves, increase exploration via `log_std_init` or task-specific LR before changing adapter;
   - if action validity drops, reduce `max_delta`/`log_std_max` before changing env safety;
   - compare stochastic training metrics against deterministic eval because Gaussian mean can collapse to near-zero deltas early.
+
+After Direct MAPPO specialist tuner and debug sweeps:
+
+- Use the Direct-specific tuner, not the generic/candidate-era tuner:
+  - `scripts/debug/tune_direct_mappo_specialists.py`.
+- Use Direct-specific configs:
+  - `configs/policy/direct_specialists/direct_area_coverage.yaml`;
+  - `configs/policy/direct_specialists/direct_belief_search.yaml`;
+  - `configs/policy/direct_specialists/direct_priority_inspection.yaml`;
+  - `configs/policy/direct_specialists/direct_connectivity_expansion.yaml`.
+- Direct outputs:
+  - debug: `outputs/debug/mappo_direct_specialists/`;
+  - formal: `outputs/training/mappo_direct_specialists/`.
+- Current Direct task status:
+  - `belief_search`: short debug `CONVERGED`, but still needs longer seed/robustness validation.
+  - `area_coverage`: `NEED_MORE_TUNING`; best coverage around `0.474`, success `0.25`, target success threshold not reached.
+  - `priority_inspection`: `NEED_MORE_TUNING`; best weighted POI completion around `0.556`, success `0.25`.
+  - `connectivity_expansion`: `NEED_MORE_TUNING`; easy communication curriculum can reach success, target stability not proven.
+- Key Direct diagnostics:
+  - action scale is mostly valid; eval action validity is generally `>=0.97`;
+  - rollout validity can be marginal under high exploration (`~0.91-0.96`);
+  - PPO updates are very weak: `approx_kl` often around `1e-7`, `clip_frac=0.0`;
+  - this suggests trying stronger PPO updates or longer horizons before reward surgery for area/priority.
+- Recommended next Direct commands:
+  - longer area/priority continuation from the best scale:
+    - `/opt/conda/bin/python scripts/debug/tune_direct_mappo_specialists.py --stage debug --tasks area_coverage priority_inspection --trial-tags md025_explore lr3e-4 --debug-max-trials-per-task 2 --debug-total-updates 50 --debug-num-envs 4 --debug-rollout-steps 128 --debug-eval-interval 10 --debug-eval-episodes 6 --debug-record-eval-episodes 1 --record-format gif --timestamp <timestamp> --headless`
+  - target-config connectivity validation:
+    - `/opt/conda/bin/python scripts/debug/tune_direct_mappo_specialists.py --stage debug --tasks connectivity_expansion --trial-tags conn_md015 conn_md020_ent --debug-max-trials-per-task 2 --debug-total-updates 50 --debug-num-envs 4 --debug-rollout-steps 128 --debug-eval-interval 10 --debug-eval-episodes 6 --debug-record-eval-episodes 1 --record-format gif --timestamp <timestamp> --headless`
+- Do not claim Direct MAPPO specialists are complete yet.
+- Do not launch formal `outputs/training/mappo_direct_specialists/` for `area_coverage`, `priority_inspection`, or `connectivity_expansion` yet.
+- For `belief_search`, a formal long run is allowed only as robustness validation, not as proof that all Direct specialists are solved.
