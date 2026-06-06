@@ -1,4 +1,0 @@
-agent_counts: [4, 8, 10, 20, 40, 80, 100]
-scaling_mode: fixed_map
-task_name: null
-task_names: [goal_nav, coverage, formation, risk_nav]

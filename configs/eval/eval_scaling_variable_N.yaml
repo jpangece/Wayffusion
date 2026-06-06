@@ -1,9 +1,0 @@
-protocol: variable_N
-train_sets:
-  small_train: [4, 8, 10]
-  medium_train: [4, 8, 10, 20, 40]
-  large_train: [4, 8, 10, 20, 40, 80, 100]
-test_agent_counts: [4, 8, 10, 20, 40, 80, 100]
-episodes: 10
-scaling_mode: fixed_map
-output_path: outputs/eval/scaling_variable_N.csv

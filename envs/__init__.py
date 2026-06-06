@@ -1,3 +1,3 @@
-from .centralized_env import CentralizedMultiUAVEnv
+from envs.waypoint_marl_env import WaypointMultiUAVEnv
 
-__all__ = ["CentralizedMultiUAVEnv"]
+__all__ = ["WaypointMultiUAVEnv"]

@@ -1,4 +1,0 @@
-# Baseline policy 模范配置
-name: heuristic_baseline_template
-type: baseline
-policy_name: heuristic

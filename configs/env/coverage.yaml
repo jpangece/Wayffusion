@@ -1,7 +1,0 @@
-task_name: coverage
-task_sampling_probs:
-  goal_nav: 0.0
-  coverage: 1.0
-  formation: 0.0
-  risk_nav: 0.0
-obstacle_density: 0.05

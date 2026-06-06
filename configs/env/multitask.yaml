@@ -1,7 +1,0 @@
-task_name: null
-task_sampling_probs:
-  goal_nav: 0.25
-  coverage: 0.25
-  formation: 0.25
-  risk_nav: 0.25
-observation_mode: multi_channel

@@ -1,7 +1,3 @@
-from .bc import BCTrainer
-from .mappo import MAPPOTrainer
-from .ppo import PPOTrainer
-from .sac import SACTrainer
-from .td3 import TD3Trainer
+from algorithms.mappo_waypoint import MAPPOWaypointTrainer
 
-__all__ = ["PPOTrainer", "MAPPOTrainer", "BCTrainer", "SACTrainer", "TD3Trainer"]
+__all__ = ["MAPPOWaypointTrainer"]

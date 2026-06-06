@@ -791,3 +791,57 @@ Active pure MAPPO all4 long run after 2026-06-05:
   - `eval_path_length`
   - PPO stability diagnostics: `approx_kl`, `clip_frac`, `ratio_mean`, `policy_std_mean`, `grad_norm`
 - If pure MAPPO remains low-success while BC warm-start/factorized specialists are high-success, record that architecture-level agent-wise ratios alone are not sufficient and the remaining gap likely comes from sparse team reward/exploration/credit assignment rather than only joint-logprob scaling.
+
+Waypoint-level MARL next actions after 2026-06-05 refactor:
+
+- New mainline is now:
+  - env: `envs/waypoint_marl_env.py::WaypointMultiUAVEnv`
+  - policy: `policies/mappo_waypoint_policy.py::MAPPOWaypointPolicy`
+  - trainer: `algorithms/mappo_waypoint.py::MAPPOWaypointTrainer`
+  - script: `scripts/train_mappo_waypoint.py`
+  - config: `configs/env/waypoint_missions.yaml` and `configs/policy/mappo_waypoint*.yaml`
+- Smoke status:
+  - all six waypoint pytest commands passed;
+  - `validate_waypoint_mappo.py` passed and generated GIFs;
+  - 10-update debug training passed and wrote checkpoint/TensorBoard/CSV.
+- Before launching serious long runs, inspect:
+  - `outputs/debug/waypoint_mappo_validation/20260605_refactor_smoke_evalcsv/validation_summary.json`
+  - `outputs/debug/waypoint_mappo_validation/20260605_refactor_smoke_evalcsv/mappo_train/eval_metrics.csv`
+  - `outputs/training/mappo_waypoint/20260605_refactor_smoke_evalcsv/waypoint_debug_train_4tasks/training_metrics.csv`
+  - `outputs/training/mappo_waypoint/20260605_refactor_smoke_evalcsv/waypoint_debug_train_4tasks/eval_metrics.csv`
+  - `outputs/training/mappo_waypoint/20260605_refactor_smoke_evalcsv/waypoint_debug_train_4tasks/media/`
+- Suggested next long-run command:
+  - `/opt/conda/bin/python scripts/train_mappo_waypoint.py --config configs/policy/mappo_waypoint.yaml --env-config configs/env/waypoint_missions.yaml --tasks area_coverage belief_search priority_inspection connectivity_expansion --num_agents 4 --num_envs 8 --total_updates 1000 --eval_episodes 20 --record_eval_episodes 2 --record_format gif --headless`
+- Metrics to judge:
+  - `eval_success_rate`
+  - `eval_reward`
+  - `eval_action_validity_rate`
+  - `eval_collision_rate`
+  - task metrics:
+    - `coverage_ratio`
+    - `searched_probability_mass`
+    - `weighted_poi_completion`
+    - `connectivity_violation_rate`
+    - `effective_explored_radius`
+  - PPO diagnostics:
+    - `approx_kl`
+    - `clip_frac`
+    - `ratio_mean`
+    - `entropy`
+    - `explained_variance`
+- Likely next improvements if long-run learning is weak:
+  - add task-specific candidate feature channels for expected coverage gain, belief mass, POI value/deadline, connectivity bridge value, target intercept probability;
+  - add per-agent reward/advantage mixing option now that `per_agent_rewards [T,B,N]` is stored;
+  - add curriculum configs for map size, no-fly zones, candidate count, max steps, and success thresholds without weakening final eval thresholds;
+  - add heuristic behavior cloning for waypoint categorical actions only after pure MAPPO baseline is measured.
+
+After 2026-06-06 cleanup:
+
+- Treat waypoint MARL as the only active code path.
+- Do not use old commands such as `scripts/train_ppo.py`, `scripts/train_bc.py`, `scripts/train_mappo.py`, or old four-task configs; they were removed from the working tree.
+- Current valid commands:
+  - validation:
+    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless`
+  - training:
+    - `/opt/conda/bin/python scripts/train_mappo_waypoint.py --config configs/policy/mappo_waypoint.yaml --env-config configs/env/waypoint_missions.yaml --tasks area_coverage belief_search priority_inspection connectivity_expansion --num_agents 4 --num_envs 8 --total_updates 1000 --eval_episodes 20 --record_eval_episodes 2 --record_format gif --headless`
+- If someone needs old centralized code or old specialist PPO/BC scripts, recover from git history rather than reintroducing them into the MARL branch.

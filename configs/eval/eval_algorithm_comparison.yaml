@@ -1,6 +1,0 @@
-tasks: [goal_nav, coverage]
-agent_counts: [4, 8, 10]
-algorithms: [ppo, sac, td3, bc, bc_ppo]
-episodes: 10
-scaling_mode: fixed_map
-output_path: outputs/eval/algorithm_comparison.csv

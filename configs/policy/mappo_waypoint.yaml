@@ -1,0 +1,27 @@
+name: mappo_waypoint
+algorithm: mappo_waypoint
+policy_class: mappo_waypoint
+num_envs: 8
+rollout_steps: 256
+total_updates: 1000
+epochs: 4
+minibatch_size: 512
+gamma: 0.99
+gae_lambda: 0.95
+clip_coef: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+learning_rate: 0.0002
+max_grad_norm: 0.5
+reward_norm: true
+advantage_norm: true
+lr_schedule: linear
+target_kl: 0.03
+eval_interval: 50
+cnn_channels: [16, 32, 64]
+agent_hidden_dim: 64
+candidate_hidden_dim: 64
+joint_hidden_dim: 192
+attention_heads: 4
+use_attention: true
+tensorboard_metric_mode: core

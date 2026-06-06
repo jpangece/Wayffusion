@@ -3433,3 +3433,257 @@ Main interpretation:
 - Compared with archived previous specialists:
   - MAPPO improves over previous `goal_nav` evidence;
   - MAPPO is far worse than previous route-target coverage, DAgger/safe risk_nav, and template-aware formation specialists.
+
+## Theme BU: Waypoint-Level Multi-UAV MARL Mission Suite refactor scaffold
+
+Implemented on 2026-06-05 on branch `MARL`.
+
+Context:
+
+- User explicitly changed the project target from centralized Gymnasium-style swarm-as-one-agent benchmark to waypoint-level multi-UAV MARL tasks.
+- New mainline must use PettingZoo-style Parallel API semantics and per-UAV discrete candidate waypoint index actions.
+- Old centralized code is retained for historical reproducibility, but the new main training path does not depend on `CentralizedMultiUAVEnv`.
+
+New mainline files:
+
+- `envs/waypoint/entities.py`
+- `envs/waypoint/world.py`
+- `envs/waypoint/execution.py`
+- `envs/waypoint/candidates.py`
+- `envs/waypoint/safety.py`
+- `envs/waypoint/rendering.py`
+- `envs/waypoint/__init__.py`
+- `envs/waypoint_marl_env.py`
+- `tasks/waypoint/base.py`
+- `tasks/waypoint/area_coverage.py`
+- `tasks/waypoint/belief_search.py`
+- `tasks/waypoint/priority_inspection.py`
+- `tasks/waypoint/connectivity_expansion.py`
+- `tasks/waypoint/dynamic_target_escort.py`
+- `tasks/waypoint/target_interception.py`
+- `tasks/waypoint/__init__.py`
+- `utils/waypoint_vector_env.py`
+- `utils/waypoint_evaluation.py`
+- `policies/mappo_waypoint_policy.py`
+- `algorithms/mappo_waypoint.py`
+- `scripts/train_mappo_waypoint.py`
+- `scripts/check/validate_waypoint_mappo.py`
+- `configs/env/waypoint_missions.yaml`
+- `configs/policy/mappo_waypoint.yaml`
+- `configs/policy/mappo_waypoint_debug.yaml`
+- `configs/eval/waypoint_eval.yaml`
+- `docs/waypoint_marl_refactor_zh.md`
+- New tests:
+  - `tests/test_waypoint_env_api.py`
+  - `tests/test_waypoint_scenarios.py`
+  - `tests/test_waypoint_rewards.py`
+  - `tests/test_waypoint_mappo_policy.py`
+  - `tests/test_mappo_waypoint_trainer.py`
+  - `tests/test_waypoint_rendering.py`
+
+Modified existing files:
+
+- `envs/__init__.py`: exports `WaypointMultiUAVEnv` while keeping old `CentralizedMultiUAVEnv`.
+- `policies/__init__.py`: supports `policy_class: mappo_waypoint`.
+- `algorithms/__init__.py`: exports `MAPPOWaypointTrainer`.
+- `README.md`: rewritten so the project mainline is waypoint-level MARL, not centralized swarm-as-one-agent.
+
+Architecture summary:
+
+- `WaypointMultiUAVEnv` follows PettingZoo Parallel API semantics:
+  - `possible_agents = ["uav_0", ...]`
+  - `reset(seed, options) -> observations, infos`
+  - `step(actions: dict[str, int]) -> observations, rewards, terminations, truncations, infos`
+  - each action is a discrete candidate waypoint index.
+- `MissionWorld` tracks UAV states, coverage/visit/probability/belief grids, no-fly zones, geofence, base station, communication graph, and task/global summaries.
+- `WaypointExecutionModel` prevents teleporting:
+  - max movement per decision step is `max_speed * dt_decision`;
+  - geofence/no-fly/min-distance violations are rejected or replaced by safe fallback;
+  - position, velocity, path length, current waypoint, battery, and trajectory are updated.
+- `SafetyLayer` filters candidate masks and guarantees at least one fallback candidate per UAV.
+- Six waypoint scenarios now return:
+  - `team_reward`
+  - `per_agent_rewards`
+  - `components`
+  - `metrics`
+  - `success`
+
+MAPPO waypoint summary:
+
+- `MAPPOWaypointPolicy` is a shared per-agent categorical actor plus centralized critic.
+- Actor output is masked candidate logits `[B, N, K]`.
+- `get_action_and_value` returns:
+  - action `[B, N]`
+  - logprob `[B, N]`
+  - entropy `[B, N]`
+  - value `[B]`
+- `MAPPOWaypointTrainer` stores old logprobs as `[T, B, N]`.
+- PPO ratio is per-agent: `exp(new_logprob_i - old_logprob_i)`.
+- First version uses team advantage broadcast to agents.
+- Trainer explicitly separates:
+  - `terminated`: true terminal, no bootstrap;
+  - `truncated`: time limit, bootstrap terminal global state;
+  - `done_for_reset`: controls auto-reset bookkeeping and prevents cross-episode advantage leakage after reset.
+
+Validation run results:
+
+- Static compile:
+  - `/opt/conda/bin/python -m py_compile envs/waypoint/*.py envs/waypoint_marl_env.py tasks/waypoint/*.py policies/mappo_waypoint_policy.py algorithms/mappo_waypoint.py utils/waypoint_vector_env.py utils/waypoint_evaluation.py scripts/train_mappo_waypoint.py scripts/check/validate_waypoint_mappo.py`
+  - passed.
+- Required pytest commands:
+  - `/opt/conda/bin/python -m pytest tests/test_waypoint_env_api.py` -> `1 passed`
+  - `/opt/conda/bin/python -m pytest tests/test_waypoint_scenarios.py` -> `2 passed`
+  - `/opt/conda/bin/python -m pytest tests/test_waypoint_rewards.py` -> `6 passed`
+  - `/opt/conda/bin/python -m pytest tests/test_waypoint_mappo_policy.py` -> `1 passed`
+  - `/opt/conda/bin/python -m pytest tests/test_mappo_waypoint_trainer.py` -> `1 passed`
+  - `/opt/conda/bin/python -m pytest tests/test_waypoint_rendering.py` -> `1 passed`
+- Validation command:
+  - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless --run_timestamp 20260605_refactor_smoke_evalcsv`
+  - passed.
+  - Output: `outputs/debug/waypoint_mappo_validation/20260605_refactor_smoke_evalcsv/validation_summary.json`
+  - Key values:
+    - `passed=true`
+    - `action_validity_rate=1.0`
+    - `candidate_mask_empty_count=0.0`
+    - `coverage_ratio=0.5517578125`
+    - `searched_probability_mass=0.25361770391464233`
+    - GIF paths generated for random baseline, greedy baseline, and MAPPO eval.
+  - `eval_metrics.csv` exists and contains `recording_path`:
+    - `outputs/debug/waypoint_mappo_validation/20260605_refactor_smoke_evalcsv/mappo_train/eval_metrics.csv`
+- Debug training command:
+  - `/opt/conda/bin/python scripts/train_mappo_waypoint.py --config configs/policy/mappo_waypoint_debug.yaml --env-config configs/env/waypoint_missions.yaml --tasks area_coverage belief_search priority_inspection connectivity_expansion --num_agents 4 --num_envs 4 --total_updates 10 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless --run_timestamp 20260605_refactor_smoke_evalcsv --run_name waypoint_debug_train_4tasks`
+  - completed.
+  - Output: `outputs/training/mappo_waypoint/20260605_refactor_smoke_evalcsv/waypoint_debug_train_4tasks/`
+  - Final console line:
+    - `update=10 reward=1.616 eval_success=0.250 eval_reward=-278.301`
+  - `eval_metrics.csv` exists and contains `recording_path`:
+    - `outputs/training/mappo_waypoint/20260605_refactor_smoke_evalcsv/waypoint_debug_train_4tasks/eval_metrics.csv`
+
+Caveats:
+
+- This is a working scaffold and smoke validation, not a long-run performance conclusion.
+- Old centralized files were not physically moved to `legacy/centralized_v1/` in this pass to avoid breaking historical scripts and tests, but README now marks that path as legacy and new train/eval entrypoints avoid old env imports.
+- First-version MAPPO still uses team advantage broadcast; per-agent credit mixing can be added later using the stored `per_agent_rewards`.
+
+## Theme BV: Remove centralized-v1 clutter from MARL branch
+
+Implemented on 2026-06-06 after user confirmed old code can be recovered from git history.
+
+Reason:
+
+- User requested deleting old centralized environment-related files because `envs/`, `scripts/`, `policies/`, configs, and tests had become too cluttered.
+- Current project target is waypoint-level multi-UAV MARL, not Gymnasium single-agent joint-action benchmark.
+
+Deleted old centralized assets:
+
+- Old env files:
+  - `envs/centralized_env.py`
+  - `envs/collision.py`
+  - `envs/dynamics.py`
+  - `envs/metrics.py`
+  - `envs/rewards.py`
+- Old task files:
+  - `tasks/base_task.py`
+  - `tasks/task_sampler.py`
+  - `tasks/goal_nav.py`
+  - `tasks/coverage.py`
+  - `tasks/risk_nav.py`
+  - `tasks/formation.py`
+- Old policies:
+  - `policies/mlp_policy.py`
+  - `policies/cnn_deepsets_policy.py`
+  - `policies/attention_policy.py`
+  - `policies/factorized_group_policy.py`
+  - `policies/mappo_shared_policy.py`
+  - `policies/action_distribution.py`
+- Old algorithms:
+  - `algorithms/ppo.py`
+  - `algorithms/sac.py`
+  - `algorithms/td3.py`
+  - `algorithms/bc.py`
+  - `algorithms/mappo.py`
+  - `algorithms/mtrl_cg.py`
+- Old utilities:
+  - `utils/vector_env.py`
+  - `utils/evaluation.py`
+  - `utils/data.py`
+  - `utils/profiling.py`
+- Old support directories:
+  - `fields/`
+  - `baselines/`
+- Old scripts:
+  - centralized train/eval/debug/queue/tmux scripts under `scripts/`
+  - old `scripts/analysis/`
+  - old `scripts/debug_long/`
+  - old `scripts/ppo_targets/`
+  - old `scripts/check/*` except `validate_waypoint_mappo.py`
+- Old configs:
+  - all `configs/env/*` except `waypoint_missions.yaml`
+  - all `configs/policy/*` except `mappo_waypoint.yaml` and `mappo_waypoint_debug.yaml`
+  - all `configs/eval/*` except `waypoint_eval.yaml`
+  - `configs/examples/`
+- Old tests:
+  - all non-waypoint tests were removed from the working tree.
+- Old docs:
+  - all centralized docs were removed except `docs/waypoint_marl_refactor_zh.md`.
+
+Import cleanup:
+
+- `policies/__init__.py` now only exposes:
+  - `MAPPOWaypointPolicy`
+  - `build_policy`
+  - `observation_to_tensor`
+- `algorithms/__init__.py` now only exposes:
+  - `MAPPOWaypointTrainer`
+- `envs/__init__.py` now only exposes:
+  - `WaypointMultiUAVEnv`
+- `tasks/__init__.py` now only exposes waypoint task registry helpers.
+- `utils/__init__.py` now only exposes waypoint vector/evaluation helpers.
+- `algorithms/mappo_waypoint.py` now contains its own `RunningMeanStd`; it no longer imports old `algorithms.ppo`.
+
+Remaining mainline files after cleanup:
+
+- `envs/waypoint/*.py`
+- `envs/waypoint_marl_env.py`
+- `tasks/waypoint/*.py`
+- `policies/mappo_waypoint_policy.py`
+- `algorithms/mappo_waypoint.py`
+- `utils/waypoint_vector_env.py`
+- `utils/waypoint_evaluation.py`
+- `scripts/train_mappo_waypoint.py`
+- `scripts/check/validate_waypoint_mappo.py`
+- `configs/env/waypoint_missions.yaml`
+- `configs/policy/mappo_waypoint.yaml`
+- `configs/policy/mappo_waypoint_debug.yaml`
+- `configs/eval/waypoint_eval.yaml`
+- waypoint tests only.
+
+Verification after cleanup:
+
+- Static compile:
+  - `/opt/conda/bin/python -m py_compile envs/waypoint/*.py envs/waypoint_marl_env.py tasks/waypoint/*.py policies/*.py algorithms/*.py utils/*.py scripts/train_mappo_waypoint.py scripts/check/validate_waypoint_mappo.py`
+  - passed.
+- Waypoint pytest suite:
+  - `/opt/conda/bin/python -m pytest tests/test_waypoint_env_api.py tests/test_waypoint_scenarios.py tests/test_waypoint_rewards.py tests/test_waypoint_mappo_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rendering.py`
+  - result: `12 passed`.
+- Validation smoke:
+  - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless --run_timestamp 20260606_cleanup_smoke`
+  - result:
+    - `passed=true`
+    - `action_validity_rate=1.0`
+    - `candidate_mask_empty_count=0.0`
+    - output: `outputs/debug/waypoint_mappo_validation/20260606_cleanup_smoke/`
+- Training smoke:
+  - `/opt/conda/bin/python scripts/train_mappo_waypoint.py --config configs/policy/mappo_waypoint_debug.yaml --env-config configs/env/waypoint_missions.yaml --tasks area_coverage belief_search priority_inspection connectivity_expansion --num_agents 4 --num_envs 2 --total_updates 2 --eval_episodes 1 --record_eval_episodes 1 --record_format gif --headless --no-tensorboard --run_timestamp 20260606_cleanup_smoke --run_name waypoint_cleanup_train_smoke`
+  - completed.
+  - output: `outputs/training/mappo_waypoint/20260606_cleanup_smoke/waypoint_cleanup_train_smoke/`
+  - wrote:
+    - `training_metrics.csv`
+    - `eval_metrics.csv`
+    - `checkpoints/checkpoint_0002.pt`
+    - `checkpoints/checkpoint_best_eval.pt`
+    - eval GIFs under `media/eval_0002/`.
+
+Caveat:
+
+- This cleanup intentionally removes old reproducibility scripts from the working tree. They are recoverable from git history if needed.

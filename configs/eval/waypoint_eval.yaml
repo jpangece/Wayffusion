@@ -1,0 +1,9 @@
+eval_episodes: 10
+record_eval_episodes: 2
+record_format: gif
+record_fps: 8
+tasks:
+  - area_coverage
+  - belief_search
+  - priority_inspection
+  - connectivity_expansion

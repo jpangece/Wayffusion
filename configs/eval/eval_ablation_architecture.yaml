@@ -1,5 +1,0 @@
-tasks: [goal_nav, coverage]
-agent_counts: [4, 8, 10]
-architectures: [mlp, cnn_deepsets, attention]
-episodes: 10
-output_path: outputs/eval/architecture_ablation.csv

@@ -1,8 +1,0 @@
-seed: 23
-task_name: formation
-task_sampling_probs:
-  goal_nav: 0.0
-  coverage: 0.0
-  formation: 1.0
-  risk_nav: 0.0
-obstacle_density: 0.04

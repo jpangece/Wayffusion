@@ -1,7 +1,0 @@
-# fixed-N scaling 模范配置
-protocol: fixed_N
-tasks: [goal_nav, coverage]
-agent_counts: [4, 8, 10, 20, 40]
-episodes: 10
-scaling_mode: fixed_map
-output_path: outputs/eval/scaling_fixed_N.csv
