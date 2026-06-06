@@ -38,6 +38,14 @@ def safe_name(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value)).strip("_") or "run"
 
 
+def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
+    for key in ["map_size", "grid_size", "max_waypoint_distance", "min_uav_distance", "base_position", "no_fly_zones"]:
+        if key in env_config:
+            train_config[key] = env_config[key]
+    if "max_delta" not in train_config and "max_waypoint_distance" in env_config:
+        train_config["max_delta"] = env_config["max_waypoint_distance"]
+
+
 def make_output_dir(timestamp: str | None, run_name: str) -> Path:
     run_timestamp = timestamp or datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     output_dir = ROOT / "outputs" / "training" / "mappo_waypoint" / run_timestamp / safe_name(run_name)
@@ -125,6 +133,7 @@ def main() -> None:
         train_config["total_updates"] = int(args.total_updates)
     if args.rollout_steps is not None:
         train_config["rollout_steps"] = int(args.rollout_steps)
+    sync_policy_env_config(train_config, env_config)
 
     env_batch = build_env_batch(env_config, train_config, task_names, args.envs_per_task, args.env_backend, args.env_workers)
     policy = build_policy(train_config, env_batch.envs[0].global_observation_space, env_batch.envs[0].action_space_n)

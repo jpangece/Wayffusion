@@ -7,7 +7,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from envs.waypoint.execution import WaypointExecutionModel
+from envs.waypoint.control import build_action_adapter, build_dynamics_backend
 from envs.waypoint.rendering import render_world
 from envs.waypoint.safety import SafetyLayer
 from envs.waypoint.world import MissionWorld
@@ -18,9 +18,10 @@ from tasks.waypoint.base import normalized_positions
 class WaypointMultiUAVEnv:
     """PettingZoo-style Parallel API for waypoint-level multi-UAV missions.
 
-    Each UAV is an independent agent and chooses one discrete candidate waypoint
-    index per decision step. The environment then simulates bounded waypoint
-    execution and exposes a centralized global state for CTDE/MAPPO critics.
+    The main action API accepts final per-UAV waypoint coordinates. Candidate
+    waypoint generation and candidate-index selection are policy/planner
+    responsibilities, not environment responsibilities. A legacy candidate-index
+    mode is kept only for diagnostics.
     """
 
     metadata = {"render_modes": ["human", "rgb_array"]}
@@ -28,7 +29,12 @@ class WaypointMultiUAVEnv:
     def __init__(self, config: dict[str, Any]):
         self.config = deepcopy(config)
         self.num_agents = int(self.config.get("num_agents", 4))
-        self.candidate_count = int(self.config.get("candidate_count", 12))
+        self.action_interface = str(self.config.get("action_interface", self.config.get("action_mode", "waypoint")))
+        self.action_mode = str(self.config.get("action_mode", self.action_interface))
+        self.waypoint_dim = int(self.config.get("waypoint_dim", self.config.get("world_dim", 2)))
+        self.waypoint_dim = 3 if self.waypoint_dim == 3 else 2
+        self.candidate_count = int(self.config.get("candidate_count", self.config.get("tasks", {}).get("candidate_count", 12)))
+        self.expose_candidates_for_debug = bool(self.config.get("expose_candidates_for_debug", False))
         self.seed_value = int(self.config.get("seed", 0))
         self.rng = np.random.default_rng(self.seed_value)
         self.task_names = list(self.config.get("task_names", ["area_coverage", "belief_search", "priority_inspection", "connectivity_expansion"]))
@@ -41,15 +47,61 @@ class WaypointMultiUAVEnv:
         self.world.sensor_radius = float(self.config.get("sensor_radius", 0.12))
         self.world.comm_radius = float(self.config.get("comm_radius", 0.35))
         self.safety = SafetyLayer()
-        self.execution = WaypointExecutionModel()
+        self.action_adapter = build_action_adapter(self._action_adapter_config())
+        self.dynamics_backend = build_dynamics_backend(self._dynamics_backend_config())
         self.current_scenario = None
         self.task_state: dict[str, Any] = {}
         self.last_candidate_waypoints = np.zeros((self.num_agents, self.candidate_count, 2), dtype=np.float32)
         self.last_candidate_mask = np.zeros((self.num_agents, self.candidate_count), dtype=bool)
         self.last_selected_waypoints: np.ndarray | None = None
+        self.last_raw_waypoints: np.ndarray | None = None
         self.last_reward_result: dict[str, Any] = {}
         self.last_transition_info: dict[str, Any] = {}
         self._build_spaces()
+
+    def _action_adapter_config(self) -> dict[str, Any]:
+        cfg = {
+            "name": "waypoint_velocity_tracker",
+            "max_command_distance": float(self.config.get("max_waypoint_distance", 0.22)),
+            "max_speed": float(self.config.get("max_speed", 0.08)),
+            "slowdown_radius": 0.12,
+            "velocity_gain": 4.0,
+            "max_accel": 0.25,
+            "control_smoothing": 0.35,
+            "acceptance_radius": 0.025,
+            "hover_when_arrived": True,
+            "command_latency_steps": 0,
+            "tracking_noise_std": 0.0,
+            "clip_to_geofence": True,
+            "reject_no_fly_waypoints": True,
+            "strict_action_validation": bool(self.config.get("strict_action_validation", False)),
+        }
+        cfg.update(dict(self.config.get("action_adapter", {})))
+        return cfg
+
+    def _dynamics_backend_config(self) -> dict[str, Any]:
+        cfg = {
+            "name": "mpe_particle",
+            "decision_dt": float(self.config.get("dt_decision", 1.0)),
+            "physics_dt": 0.05,
+            "substeps": 20,
+            "mass": 1.0,
+            "damping": 0.20,
+            "max_speed": float(self.config.get("max_speed", 0.08)),
+            "radius": 0.02,
+            "contact_force": 100.0,
+            "contact_margin": 0.01,
+            "enable_collision_force": True,
+            "enable_boundary_projection": True,
+            "enable_no_fly_projection": True,
+            "wind_std": 0.0,
+            "action_noise_std": 0.0,
+            "position_noise_std": 0.0,
+        }
+        if self.config.get("execution_model") == "kinematic_point":
+            cfg["name"] = "kinematic_point"
+        cfg.update(dict(self.config.get("dynamics_backend", {})))
+        return cfg
 
     def _task_probs(self, task_names: list[str]) -> np.ndarray:
         raw = self.config.get("task_sampling_probs", {})
@@ -58,40 +110,67 @@ class WaypointMultiUAVEnv:
         return probs
 
     def _build_spaces(self) -> None:
-        k = self.candidate_count
         n = self.num_agents
         g = int(self.config.get("grid_size", 32))
         map_size = float(self.config.get("map_size", 1.0))
-        self._single_observation_space = spaces.Dict(
-            {
-                "self_state": spaces.Box(low=-10.0, high=10.0, shape=(8,), dtype=np.float32),
-                "neighbor_relative_states": spaces.Box(low=-10.0, high=10.0, shape=(max(n - 1, 0), 4), dtype=np.float32),
-                "task_field": spaces.Box(low=0.0, high=1.0, shape=(5, g, g), dtype=np.float32),
-                "candidate_waypoints": spaces.Box(low=0.0, high=map_size, shape=(k, 2), dtype=np.float32),
-                "candidate_features": spaces.Box(low=-10.0, high=10.0, shape=(k, 6), dtype=np.float32),
-                "candidate_mask": spaces.MultiBinary(k),
-                "task_id": spaces.Box(low=0.0, high=1.0, shape=(len(WAYPOINT_TASKS),), dtype=np.float32),
-                "global_summary": spaces.Box(low=-10.0, high=10.0, shape=(8,), dtype=np.float32),
-                "all_uav_states": spaces.Box(low=-10.0, high=10.0, shape=(n, 8), dtype=np.float32),
-                "comm_adjacency": spaces.MultiBinary((n + 1, n + 1)),
-            }
+        obs_items: dict[str, gym.Space] = {
+            "self_state": spaces.Box(low=-10.0, high=10.0, shape=(8,), dtype=np.float32),
+            "neighbor_relative_states": spaces.Box(low=-10.0, high=10.0, shape=(max(n - 1, 0), 4), dtype=np.float32),
+            "task_field": spaces.Box(low=0.0, high=1.0, shape=(5, g, g), dtype=np.float32),
+            "task_id": spaces.Box(low=0.0, high=1.0, shape=(len(WAYPOINT_TASKS),), dtype=np.float32),
+            "global_summary": spaces.Box(low=-10.0, high=10.0, shape=(8,), dtype=np.float32),
+            "all_uav_states": spaces.Box(low=-10.0, high=10.0, shape=(n, 8), dtype=np.float32),
+            "comm_adjacency": spaces.MultiBinary((n + 1, n + 1)),
+        }
+        global_items: dict[str, gym.Space] = {
+            "task_field": spaces.Box(low=0.0, high=1.0, shape=(5, g, g), dtype=np.float32),
+            "global_task_field": spaces.Box(low=0.0, high=1.0, shape=(5, g, g), dtype=np.float32),
+            "all_uav_states": spaces.Box(low=-10.0, high=10.0, shape=(n, 8), dtype=np.float32),
+            "task_id": spaces.Box(low=0.0, high=1.0, shape=(len(WAYPOINT_TASKS),), dtype=np.float32),
+            "global_info": spaces.Box(low=-10.0, high=10.0, shape=(8,), dtype=np.float32),
+            "comm_adjacency": spaces.MultiBinary((n + 1, n + 1)),
+            "agent_mask": spaces.MultiBinary(n),
+        }
+        if self._exposes_candidates():
+            k = self.candidate_count
+            obs_items.update(
+                {
+                    "candidate_waypoints": spaces.Box(low=0.0, high=map_size, shape=(k, 2), dtype=np.float32),
+                    "candidate_features": spaces.Box(low=-10.0, high=10.0, shape=(k, 6), dtype=np.float32),
+                    "candidate_mask": spaces.MultiBinary(k),
+                }
+            )
+            global_items.update(
+                {
+                    "candidate_waypoints": spaces.Box(low=0.0, high=map_size, shape=(n, k, 2), dtype=np.float32),
+                    "candidate_features": spaces.Box(low=-10.0, high=10.0, shape=(n, k, 6), dtype=np.float32),
+                    "candidate_mask": spaces.MultiBinary((n, k)),
+                }
+            )
+        self._single_observation_space = spaces.Dict(obs_items)
+        self.global_observation_space = spaces.Dict(global_items)
+        if self.action_mode == "candidate_index_legacy":
+            self._action_space = spaces.Discrete(self.candidate_count)
+            self.action_space_n = spaces.MultiDiscrete(np.full(n, self.candidate_count, dtype=np.int64))
+            return
+        low, high = self._waypoint_bounds()
+        self._action_space = spaces.Box(low=low, high=high, dtype=np.float32)
+        self.action_space_n = spaces.Box(
+            low=np.repeat(low[None, :], n, axis=0),
+            high=np.repeat(high[None, :], n, axis=0),
+            dtype=np.float32,
         )
-        self._action_space = spaces.Discrete(k)
-        self.global_observation_space = spaces.Dict(
-            {
-                "task_field": spaces.Box(low=0.0, high=1.0, shape=(5, g, g), dtype=np.float32),
-                "global_task_field": spaces.Box(low=0.0, high=1.0, shape=(5, g, g), dtype=np.float32),
-                "all_uav_states": spaces.Box(low=-10.0, high=10.0, shape=(n, 8), dtype=np.float32),
-                "candidate_waypoints": spaces.Box(low=0.0, high=map_size, shape=(n, k, 2), dtype=np.float32),
-                "candidate_features": spaces.Box(low=-10.0, high=10.0, shape=(n, k, 6), dtype=np.float32),
-                "candidate_mask": spaces.MultiBinary((n, k)),
-                "task_id": spaces.Box(low=0.0, high=1.0, shape=(len(WAYPOINT_TASKS),), dtype=np.float32),
-                "global_info": spaces.Box(low=-10.0, high=10.0, shape=(8,), dtype=np.float32),
-                "comm_adjacency": spaces.MultiBinary((n + 1, n + 1)),
-                "agent_mask": spaces.MultiBinary(n),
-            }
-        )
-        self.action_space_n = spaces.MultiDiscrete(np.full(n, k, dtype=np.int64))
+
+    def _waypoint_bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        map_size = float(self.config.get("map_size", 1.0))
+        if self.waypoint_dim == 3:
+            min_alt = float(self.config.get("min_altitude", self.config.get("default_altitude", 30.0)))
+            max_alt = float(self.config.get("max_altitude", self.config.get("default_altitude", 30.0)))
+            return np.asarray([0.0, 0.0, min_alt], dtype=np.float32), np.asarray([map_size, map_size, max_alt], dtype=np.float32)
+        return np.asarray([0.0, 0.0], dtype=np.float32), np.asarray([map_size, map_size], dtype=np.float32)
+
+    def _exposes_candidates(self) -> bool:
+        return self.action_mode == "candidate_index_legacy" or self.expose_candidates_for_debug
 
     def observation_space(self, agent_id: str):
         self._assert_agent(agent_id)
@@ -114,36 +193,69 @@ class WaypointMultiUAVEnv:
         self.world.sensor_radius = float(self.config.get("sensor_radius", 0.12))
         self.world.comm_radius = float(self.config.get("comm_radius", 0.35))
         self.world.reset_common(self.num_agents, rng=self.rng, initial_positions=options.get("initial_positions"))
+        self.action_adapter.reset(self.world)
+        self.dynamics_backend.reset(self.world)
         task_name = str(options.get("task_name") or self.rng.choice(self.task_names, p=self.task_sampling_probs))
         self.current_scenario = build_waypoint_scenario(task_name, self.config.get("tasks", self.config))
         self.task_state = self.current_scenario.reset(self.rng, self.world)
         self.agents = self.possible_agents.copy()
         self.last_selected_waypoints = None
+        self.last_raw_waypoints = None
         self.last_reward_result = {}
         self.last_transition_info = {}
-        self._refresh_candidates()
+        if self._exposes_candidates():
+            self._refresh_candidates()
         observations = self._build_agent_observations()
         infos = {agent: self._build_agent_info(agent_idx) for agent_idx, agent in enumerate(self.possible_agents)}
         return observations, infos
 
-    def step(self, actions: dict[str, int]):
+    def step(self, actions: dict[str, np.ndarray | int]):
         if self.current_scenario is None:
             raise RuntimeError("reset() must be called before step().")
-        action_array, validity = self._actions_to_array(actions)
-        selected = self.last_candidate_waypoints[np.arange(self.num_agents), action_array].copy()
-        if not np.all(validity):
-            fallback = self._fallback_indices()
-            invalid_indices = np.where(~validity)[0]
-            selected[invalid_indices] = self.last_candidate_waypoints[invalid_indices, fallback[invalid_indices]]
-        self.last_selected_waypoints = selected.copy()
+
+        if self.action_mode == "candidate_index_legacy":
+            raw_waypoints, validity, safety_info = self._legacy_actions_to_waypoints(actions)
+            safety_result = self.safety.validate_waypoints(
+                self.world,
+                raw_waypoints,
+                config=self._action_adapter_config(),
+                require_connectivity=self.current_scenario.name == "connectivity_expansion" and bool(self.config.get("connectivity_action_filter", False)),
+            )
+            validity &= safety_result.valid_mask
+        else:
+            raw_waypoints, action_shape_valid = self._actions_to_waypoints(actions)
+            if self.action_mode == "waypoint_delta":
+                raw_waypoints = self.world.get_uav_positions() + raw_waypoints
+            require_connectivity = self.current_scenario.name == "connectivity_expansion" and bool(self.config.get("connectivity_action_filter", False))
+            raw_waypoints_2d = raw_waypoints[..., :2].astype(np.float32)
+            safety_result = self.safety.validate_waypoints(
+                self.world,
+                raw_waypoints_2d,
+                config=self._action_adapter_config(),
+                require_connectivity=require_connectivity,
+            )
+            validity = safety_result.valid_mask & action_shape_valid
+            raw_waypoints = raw_waypoints_2d
+            raw_waypoints[~action_shape_valid] = self.world.get_uav_positions()[~action_shape_valid]
+            if not np.all(validity) and bool(self.config.get("strict_action_validation", False)):
+                raise ValueError(f"Illegal waypoint action: {safety_result.to_info()}")
+        safety_result.valid_mask &= validity
+        safety_result.rejected_mask |= ~validity
+        safety_info = safety_result.to_info()
+
+        adapter_output = self.action_adapter.adapt(self.world, safety_result.safe_waypoints, safety_result)
+        self.last_raw_waypoints = raw_waypoints[..., :2].copy()
+        self.last_selected_waypoints = safety_result.safe_waypoints.copy()
         prev_world = self.world.snapshot()
         self.current_scenario.step_update(self.world, self.task_state)
-        transition_info = self.execution.execute(self.world, selected)
+        dynamics_info = self.dynamics_backend.step(self.world, adapter_output.controls, adapter_output, safety_result)
+        transition_info = self._merge_transition_info(safety_result, adapter_output, dynamics_info)
         transition_info["invalid_action_count"] = int((~validity).sum())
         reward_result = self.current_scenario.compute_rewards(prev_world, self.world, self.task_state, transition_info)
         self.last_transition_info = transition_info
         self.last_reward_result = reward_result
-        self._refresh_candidates()
+        if self._exposes_candidates():
+            self._refresh_candidates()
 
         success = bool(reward_result.get("success", False))
         terminated = success
@@ -158,13 +270,62 @@ class WaypointMultiUAVEnv:
         infos = {agent: self._build_agent_info(idx) for idx, agent in enumerate(self.possible_agents)}
         if terminated or truncated:
             terminal_observations = observations
-            for idx, agent in enumerate(self.possible_agents):
+            for agent in self.possible_agents:
                 infos[agent]["terminal_observation"] = terminal_observations[agent]
                 infos[agent]["terminal_info"] = deepcopy(infos[agent])
             self.agents = []
         return observations, rewards, terminations, truncations, infos
 
-    def _actions_to_array(self, actions: dict[str, int]) -> tuple[np.ndarray, np.ndarray]:
+    def _merge_transition_info(self, safety_result, adapter_output, dynamics_info) -> dict[str, Any]:
+        transition = dynamics_info.to_transition_info()
+        safety_info = safety_result.to_info()
+        adapter_info = adapter_output.to_info()
+        for key, value in safety_info.items():
+            transition[f"safety_{key}"] = value
+        for key, value in adapter_info.items():
+            transition[f"adapter_{key}"] = value
+        transition["safe_waypoints"] = safety_result.safe_waypoints.astype(np.float32)
+        transition["selected_waypoints"] = safety_result.safe_waypoints.astype(np.float32)
+        transition["adapter_info"] = {
+            key: value for key, value in adapter_info.items() if isinstance(value, (int, float, bool, str, np.integer, np.floating, np.bool_))
+        }
+        transition["dynamics_info"] = {
+            key: value for key, value in dynamics_info.to_transition_info().items() if isinstance(value, (int, float, bool, str, np.integer, np.floating, np.bool_))
+        }
+        transition["safety_info"] = {
+            key: value for key, value in safety_info.items() if isinstance(value, (int, float, bool, str, np.integer, np.floating, np.bool_))
+        }
+        return transition
+
+    def _actions_to_waypoints(self, actions: dict[str, np.ndarray | int]) -> tuple[np.ndarray, np.ndarray]:
+        strict = bool(self.config.get("strict_action_validation", False))
+        waypoints = self.world.get_uav_positions().copy()
+        valid = np.ones(self.num_agents, dtype=bool)
+        for idx, agent in enumerate(self.possible_agents):
+            if agent not in actions:
+                valid[idx] = False
+                if strict:
+                    raise ValueError(f"Missing action for {agent}")
+                continue
+            raw = np.asarray(actions[agent], dtype=np.float32)
+            if raw.shape != (self.waypoint_dim,):
+                valid[idx] = False
+                if strict:
+                    raise ValueError(f"Waypoint action for {agent} must have shape {(self.waypoint_dim,)}, got {raw.shape}")
+                continue
+            if not np.isfinite(raw).all():
+                valid[idx] = False
+                if strict:
+                    raise ValueError(f"Waypoint action for {agent} contains non-finite values")
+                continue
+            waypoints[idx] = raw[:2]
+        return waypoints.astype(np.float32), valid.astype(bool)
+
+    def _legacy_actions_to_waypoints(self, actions: dict[str, np.ndarray | int]) -> tuple[np.ndarray, np.ndarray, dict[str, int]]:
+        if self.current_scenario is None:
+            raise RuntimeError("reset() must be called before step().")
+        if not self.last_candidate_mask.any():
+            self._refresh_candidates()
         strict = bool(self.config.get("strict_action_validation", False))
         action_array = np.zeros(self.num_agents, dtype=np.int64)
         valid = np.ones(self.num_agents, dtype=bool)
@@ -174,11 +335,12 @@ class WaypointMultiUAVEnv:
             action = int(raw)
             if action < 0 or action >= self.candidate_count or not bool(self.last_candidate_mask[idx, action]):
                 if strict:
-                    raise ValueError(f"Illegal action {action} for {agent}")
+                    raise ValueError(f"Illegal legacy candidate-index action {action} for {agent}")
                 action = int(fallback[idx])
                 valid[idx] = False
             action_array[idx] = action
-        return action_array, valid
+        selected = self.last_candidate_waypoints[np.arange(self.num_agents), action_array].copy()
+        return selected.astype(np.float32), valid, {"legacy_invalid_index_count": int((~valid).sum())}
 
     def _fallback_indices(self) -> np.ndarray:
         out = np.zeros(self.num_agents, dtype=np.int64)
@@ -188,9 +350,18 @@ class WaypointMultiUAVEnv:
         return out
 
     def _refresh_candidates(self) -> None:
+        if self.current_scenario is None:
+            return
         candidates, raw_mask = self.current_scenario.generate_candidate_waypoints(self.world, self.task_state)
         require_connectivity = self.current_scenario.name == "connectivity_expansion" and bool(self.config.get("connectivity_candidate_filter", True))
         candidates, mask = self.safety.filter_candidates(self.world, candidates, raw_mask, require_connectivity=require_connectivity)
+        if candidates.shape[1] != self.candidate_count:
+            padded = np.zeros((self.num_agents, self.candidate_count, 2), dtype=np.float32)
+            padded_mask = np.zeros((self.num_agents, self.candidate_count), dtype=bool)
+            take = min(self.candidate_count, candidates.shape[1])
+            padded[:, :take] = candidates[:, :take]
+            padded_mask[:, :take] = mask[:, :take]
+            candidates, mask = padded, padded_mask
         self.last_candidate_waypoints = candidates.astype(np.float32)
         self.last_candidate_mask = mask.astype(bool)
 
@@ -218,22 +389,28 @@ class WaypointMultiUAVEnv:
 
     def _build_agent_observations(self) -> dict[str, dict[str, np.ndarray]]:
         global_state = self.get_global_state()
-        features = global_state["candidate_features"]
         all_states = global_state["all_uav_states"]
         observations = {}
         for idx, agent in enumerate(self.possible_agents):
-            observations[agent] = {
+            obs = {
                 "self_state": all_states[idx].astype(np.float32),
                 "neighbor_relative_states": self._neighbor_relative_states(idx),
                 "task_field": global_state["task_field"].astype(np.float32),
-                "candidate_waypoints": self.last_candidate_waypoints[idx].astype(np.float32),
-                "candidate_features": features[idx].astype(np.float32),
-                "candidate_mask": self.last_candidate_mask[idx].astype(np.int8),
                 "task_id": global_state["task_id"].astype(np.float32),
                 "global_summary": global_state["global_info"].astype(np.float32),
                 "all_uav_states": all_states.astype(np.float32),
                 "comm_adjacency": self.world.communication_graph.astype(np.int8),
             }
+            if self._exposes_candidates():
+                features = global_state["candidate_features"]
+                obs.update(
+                    {
+                        "candidate_waypoints": self.last_candidate_waypoints[idx].astype(np.float32),
+                        "candidate_features": features[idx].astype(np.float32),
+                        "candidate_mask": self.last_candidate_mask[idx].astype(np.int8),
+                    }
+                )
+            observations[agent] = obs
         return observations
 
     def _build_agent_info(self, agent_idx: int) -> dict[str, Any]:
@@ -244,17 +421,33 @@ class WaypointMultiUAVEnv:
             "per_agent_rewards": np.asarray(reward_result.get("per_agent_rewards", np.zeros(self.num_agents, dtype=np.float32)), dtype=np.float32),
             "reward_components": dict(reward_result.get("components", {})),
             "task_metrics": metrics,
-            "candidate_mask": self.last_candidate_mask[agent_idx].copy(),
             "selected_waypoints": None if self.last_selected_waypoints is None else self.last_selected_waypoints.copy(),
+            "safe_waypoints": None if self.last_selected_waypoints is None else self.last_selected_waypoints.copy(),
+            "raw_waypoints": None if self.last_raw_waypoints is None else self.last_raw_waypoints.copy(),
             "action_validity": bool(self.world.uavs[agent_idx].last_action_valid),
+            "action_interface": self.action_interface,
+            "action_mode": self.action_mode,
+            "action_adapter": str(self._action_adapter_config().get("name", "waypoint_velocity_tracker")),
+            "dynamics_backend": str(self._dynamics_backend_config().get("name", "mpe_particle")),
+            "adapter_info": dict(self.last_transition_info.get("adapter_info", {})),
+            "dynamics_info": dict(self.last_transition_info.get("dynamics_info", {})),
+            "safety_info": dict(self.last_transition_info.get("safety_info", {})),
+            "mean_speed": float(self.last_transition_info.get("mean_speed", 0.0)),
+            "max_speed_observed": float(self.last_transition_info.get("max_speed_observed", 0.0)),
+            "mean_control_norm": float(self.last_transition_info.get("mean_control_norm", 0.0)),
+            "collision_count": int(self.last_transition_info.get("collision_count", 0)),
+            "no_fly_violation_count": int(self.last_transition_info.get("no_fly_violation_count", 0)),
+            "geofence_violation_count": int(self.last_transition_info.get("geofence_violation_count", 0)),
             "task_name": self.current_scenario.name,
             "num_agents": self.num_agents,
             "success": bool(reward_result.get("success", metrics.get("success", False))),
             "path_length": float(sum(uav.path_length for uav in self.world.uavs)),
             "collision_rate": float(self.last_transition_info.get("safety_violation_count", 0) / max(self.world.step_count * self.num_agents, 1)),
             "invalid_action_count": int(self.last_transition_info.get("invalid_action_count", 0)),
-            "candidate_mask_empty_count": int(np.count_nonzero(~self.last_candidate_mask.any(axis=1))),
+            "candidate_mask_empty_count": int(np.count_nonzero(~self.last_candidate_mask.any(axis=1))) if self._exposes_candidates() else 0,
         }
+        if self._exposes_candidates():
+            info["candidate_mask"] = self.last_candidate_mask[agent_idx].copy()
         info.update(metrics)
         return info
 
@@ -265,18 +458,24 @@ class WaypointMultiUAVEnv:
         else:
             task_field = self.current_scenario.build_task_field(self.world, self.task_state)
             task_id = self.current_scenario.task_one_hot()
-        return {
+        state = {
             "task_field": task_field.astype(np.float32),
             "global_task_field": task_field.astype(np.float32),
             "all_uav_states": normalized_positions(self.world).astype(np.float32),
-            "candidate_waypoints": self.last_candidate_waypoints.astype(np.float32),
-            "candidate_features": self._candidate_features().astype(np.float32),
-            "candidate_mask": self.last_candidate_mask.astype(np.int8),
             "task_id": task_id.astype(np.float32),
             "global_info": self.world.get_global_summary().astype(np.float32),
             "comm_adjacency": self.world.communication_graph.astype(np.int8),
             "agent_mask": np.ones(self.num_agents, dtype=np.int8),
         }
+        if self._exposes_candidates():
+            state.update(
+                {
+                    "candidate_waypoints": self.last_candidate_waypoints.astype(np.float32),
+                    "candidate_features": self._candidate_features().astype(np.float32),
+                    "candidate_mask": self.last_candidate_mask.astype(np.int8),
+                }
+            )
+        return state
 
     state = get_global_state
 
@@ -285,7 +484,7 @@ class WaypointMultiUAVEnv:
             self.world,
             self.current_scenario.name if self.current_scenario is not None else "uninitialized",
             self.task_state,
-            candidate_waypoints=self.last_candidate_waypoints if bool(self.config.get("render_candidates", True)) else None,
+            candidate_waypoints=self.last_candidate_waypoints if (self._exposes_candidates() and bool(self.config.get("render_candidates", True))) else None,
             selected_waypoints=self.last_selected_waypoints,
             metrics=(self.last_reward_result or {}).get("metrics", {}),
         )

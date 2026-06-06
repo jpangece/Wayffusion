@@ -50,8 +50,9 @@ class SyncWaypointEnvBatch:
         truncated = []
         done_for_reset = []
         infos = []
-        for env, action_row in zip(self.envs, np.asarray(actions, dtype=np.int64)):
-            action_dict = {agent: int(action_row[idx]) for idx, agent in enumerate(env.possible_agents)}
+        action_array = np.asarray(actions)
+        for env, action_row in zip(self.envs, action_array):
+            action_dict = self._action_dict(env, action_row)
             _, _, terms, truncs, info_by_agent = env.step(action_dict)
             info = next(iter(info_by_agent.values()))
             is_terminated = bool(any(terms.values()))
@@ -84,6 +85,13 @@ class SyncWaypointEnvBatch:
             infos=infos,
         )
 
+    def _action_dict(self, env: WaypointMultiUAVEnv, action_row: np.ndarray) -> dict:
+        if env.action_mode == "candidate_index_legacy":
+            row = np.asarray(action_row, dtype=np.int64)
+            return {agent: int(row[idx]) for idx, agent in enumerate(env.possible_agents)}
+        row = np.asarray(action_row, dtype=np.float32)
+        return {agent: row[idx].astype(np.float32) for idx, agent in enumerate(env.possible_agents)}
+
     def close(self) -> None:
         for env in self.envs:
             env.close()
@@ -109,8 +117,9 @@ class ThreadWaypointEnvBatch(SyncWaypointEnvBatch):
 
     def step(self, actions: np.ndarray) -> WaypointBatchStep:
         futures = []
-        for env, action_row in zip(self.envs, np.asarray(actions, dtype=np.int64)):
-            action_dict = {agent: int(action_row[idx]) for idx, agent in enumerate(env.possible_agents)}
+        action_array = np.asarray(actions)
+        for env, action_row in zip(self.envs, action_array):
+            action_dict = self._action_dict(env, action_row)
             futures.append(self.executor.submit(self._step_one, env, action_dict))
         results = [future.result() for future in futures]
         return WaypointBatchStep(
@@ -125,7 +134,7 @@ class ThreadWaypointEnvBatch(SyncWaypointEnvBatch):
             infos=[result[7] for result in results],
         )
 
-    def _step_one(self, env: WaypointMultiUAVEnv, action_dict: dict[str, int]):
+    def _step_one(self, env: WaypointMultiUAVEnv, action_dict: dict):
         _, _, terms, truncs, info_by_agent = env.step(action_dict)
         info = next(iter(info_by_agent.values()))
         is_terminated = bool(any(terms.values()))

@@ -6,7 +6,7 @@ action_mode: waypoint
 waypoint_dim: 2
 min_altitude: null
 max_altitude: null
-execution_model: mpe_particle
+execution_model: kinematic_point
 grid_size: 32
 num_agents: 4
 max_steps: 80
@@ -37,22 +37,9 @@ action_adapter:
   clip_to_geofence: true
   reject_no_fly_waypoints: true
 dynamics_backend:
-  name: mpe_particle
+  name: kinematic_point
   decision_dt: 1.0
-  physics_dt: 0.05
-  substeps: 20
-  mass: 1.0
-  damping: 0.20
   max_speed: 0.08
-  radius: 0.02
-  contact_force: 100.0
-  contact_margin: 0.01
-  enable_collision_force: true
-  enable_boundary_projection: true
-  enable_no_fly_projection: true
-  wind_std: 0.0
-  action_noise_std: 0.0
-  position_noise_std: 0.0
 task_names:
   - area_coverage
   - belief_search

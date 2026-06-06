@@ -3687,3 +3687,322 @@ Verification after cleanup:
 Caveat:
 
 - This cleanup intentionally removes old reproducibility scripts from the working tree. They are recoverable from git history if needed.
+
+## Theme BW: Document WaypointMultiUAVEnv design
+
+Added on 2026-06-06 after user requested the environment explanation be written into memory and docs.
+
+New document:
+
+- `docs/waypoint_environment_guide_zh.md`
+
+Content recorded:
+
+- Current environment is `envs/waypoint_marl_env.py::WaypointMultiUAVEnv`.
+- It is a waypoint-level multi-UAV MARL environment, not a centralized Gymnasium swarm-as-one-agent environment.
+- Each UAV is an independent agent.
+- Each agent action is a discrete candidate waypoint index.
+- Candidate waypoint tensors:
+  - `candidate_waypoints [N, K, 2]`
+  - `candidate_mask [N, K]`
+- Default config:
+  - `map_size=1.0`
+  - `grid_size=32`
+  - `num_agents=4`
+  - `max_steps=80`
+  - `candidate_count=12`
+  - `max_speed=0.08`
+  - `max_waypoint_distance=0.22`
+  - `min_uav_distance=0.035`
+  - `sensor_radius=0.12`
+  - `comm_radius=0.36`
+  - `base_comm_radius=0.45`
+  - `base_position=[0.10, 0.10]`
+  - default no-fly circle at `[0.55, 0.55]`, radius `0.08`
+- API:
+  - `reset(seed=None, options=None) -> observations, infos`
+  - `step(actions: dict[str, int]) -> observations, rewards, terminations, truncations, infos`
+  - `action_space(agent_id) = Discrete(K)`
+  - `get_global_state()` provides centralized critic state.
+- Observation fields:
+  - `self_state [8]`
+  - `neighbor_relative_states [N-1, 4]`
+  - `task_field [5, H, W]`
+  - `candidate_waypoints [K, 2]`
+  - `candidate_features [K, 6]`
+  - `candidate_mask [K]`
+  - `task_id [6]`
+  - `global_summary [8]`
+  - `all_uav_states [N, 8]`
+  - `comm_adjacency [N+1, N+1]`
+- `self_state/all_uav_states` layout:
+  - `x, y, vx, vy, battery, normalized_role_id, connected_to_base, last_action_valid`
+- `candidate_features` layout:
+  - `relative_dx, relative_dy, distance, unvisited_value, belief_value, no_fly_ok`
+- Task field channels:
+  - coverage grid
+  - visit count grid
+  - belief grid
+  - risk/no-fly grid
+  - target/POI grid
+- World and execution:
+  - `MissionWorld` tracks UAV states, coverage/visit/probability/belief grids, no-fly zones, geofence, communication graph, base station, and step count.
+  - `WaypointExecutionModel` moves each UAV at most `max_speed * dt_decision`; it checks geofence/no-fly/min-distance, updates path length, velocity, waypoint, battery, trajectory, coverage, and communication graph.
+  - `SafetyLayer` masks invalid candidates and guarantees a fallback candidate.
+- Task suite:
+  - `area_coverage`
+  - `belief_search`
+  - `priority_inspection`
+  - `connectivity_expansion`
+  - `dynamic_target_escort`
+  - `target_interception`
+- Reward result format:
+  - `team_reward`
+  - `per_agent_rewards [N]`
+  - `components`
+  - `metrics`
+  - `success`
+- Visualization:
+  - `render("rgb_array")`
+  - `render("human")`
+  - GIF/MP4 saved during validation/eval, with paths in `eval_metrics.csv`.
+- Training/validation commands:
+  - `scripts/train_mappo_waypoint.py`
+  - `scripts/check/validate_waypoint_mappo.py`
+
+Also updated:
+
+- `docs/waypoint_marl_refactor_zh.md`
+  - added pointer to `docs/waypoint_environment_guide_zh.md`.
+
+## Theme BX: Final waypoint action API decoupled from candidate selection
+
+Date: 2026-06-06
+
+User request:
+
+- The previous waypoint MARL refactor still used candidate waypoint index as the main environment action.
+- That coupled environment/task scenarios to one policy family.
+- The main environment action must become the final waypoint for each UAV.
+- Candidate generation and candidate selection must move to policy/planner/action-adapter side.
+- Candidate-selection MAPPO must remain available, but it must pass final waypoints to env.
+- Direct waypoint policy must be available for smoke validation.
+
+Files added:
+
+- `planners/__init__.py`
+- `planners/waypoint_candidates.py`
+- `policies/policy_output.py`
+- `policies/candidate_selection_policy.py`
+- `policies/direct_waypoint_policy.py`
+- `configs/policy/direct_waypoint_debug.yaml`
+- `tests/test_candidate_selection_policy.py`
+- `tests/test_direct_waypoint_policy.py`
+
+Files removed:
+
+- `envs/waypoint/candidates.py`
+- `tests/test_waypoint_mappo_policy.py`
+
+Main code changes:
+
+- `envs/waypoint_marl_env.py`
+  - default `action_mode` is now `waypoint`;
+  - `step(actions)` accepts `dict[str, np.ndarray]`;
+  - each action is a final waypoint `[2]`;
+  - `action_space(agent_id)` is `Box([0,0], [map_size,map_size], shape=(2,))`;
+  - default obs/global_state no longer contain `candidate_waypoints`, `candidate_features`, or `candidate_mask`;
+  - `candidate_index_legacy` remains only as diagnostic action mode.
+- `envs/waypoint/safety.py`
+  - added `filter_waypoints(...)` for final waypoint geofence/no-fly/max-distance/min-distance/connectivity filtering.
+- `envs/waypoint/world.py`
+  - initial UAV placement now samples positions satisfying minimum UAV distance.
+- `tasks/waypoint/*.py`
+  - candidate helper imports now point to `planners.waypoint_candidates`;
+  - `generate_candidate_waypoints` is optional helper, not an env-required interface.
+- `policies/policy_output.py`
+  - added `PolicyOutput(env_action, train_action, logprob, entropy, value, aux)`.
+- `policies/candidate_selection_policy.py`
+  - policy internally generates candidates, samples categorical index, maps index to final waypoint.
+- `policies/direct_waypoint_policy.py`
+  - policy directly samples Gaussian waypoint delta and converts it to final waypoint.
+- `algorithms/mappo_waypoint.py`
+  - rollout stores `env_actions [T,B,N,D]` plus `train_actions`;
+  - env step uses `policy_output.env_action`;
+  - PPO update recomputes logprob from `train_action`;
+  - trainer no longer assumes integer actions;
+  - GAE uses `bootstrap_mask` so true termination does not bootstrap and time-limit truncation does.
+- `utils/waypoint_vector_env.py`
+  - batch step accepts `[B,N,D]` waypoint arrays by default.
+- `utils/waypoint_evaluation.py`
+  - policy eval sends final waypoint actions;
+  - random/greedy baselines use planner helpers and avoid waypoint conflicts.
+- `scripts/train_mappo_waypoint.py`
+  - syncs env geometry params into policy config before building policy.
+- `scripts/check/validate_waypoint_mappo.py`
+  - added `--policy-class candidate_selection_waypoint|direct_waypoint`;
+  - records `policy_class`, `action_mode`, and `env_action_shape`.
+- `configs/env/waypoint_missions.yaml`
+  - added `action_mode: waypoint`, `waypoint_dim: 2`, `execution_model: kinematic_point`;
+  - removed env-side `candidate_count`.
+- `configs/policy/mappo_waypoint*.yaml`
+  - now use `policy_class: candidate_selection_waypoint`;
+  - candidate parameters live in policy config.
+- `README.md`, `docs/waypoint_environment_guide_zh.md`, and `docs/waypoint_marl_refactor_zh.md`
+  - updated to describe final waypoint main action API.
+
+Policy semantics:
+
+- `PolicyOutput.env_action` is always final waypoint `[B,N,D]`.
+- `PolicyOutput.train_action` is policy-internal:
+  - candidate-selection: selected candidate index `[B,N]`;
+  - direct waypoint: sampled Gaussian delta `[B,N,2]`.
+- `logprob` and `entropy` remain per-agent `[B,N]`.
+- `value` remains centralized `[B]`.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile envs/waypoint/*.py envs/waypoint_marl_env.py tasks/waypoint/*.py planners/*.py policies/*.py algorithms/*.py utils/*.py scripts/train_mappo_waypoint.py scripts/check/validate_waypoint_mappo.py` -> passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_waypoint_env_api.py tests/test_waypoint_scenarios.py tests/test_waypoint_rewards.py tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rendering.py` -> `15 passed`.
+- Candidate-selection validation:
+  - command: `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --policy-class candidate_selection_waypoint --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless --run_timestamp 20260606_waypoint_action_candidate_validate_v2`
+  - output: `outputs/debug/waypoint_mappo_validation/20260606_waypoint_action_candidate_validate_v2/`
+  - `passed=true`
+  - `action_validity_rate=0.9909722222222221`
+  - `candidate_mask_empty_count=0.0`
+  - `env_action_shape=[2,3,2]`
+- Direct waypoint validation:
+  - command: `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search --policy-class direct_waypoint --num_agents 3 --total_updates 2 --eval_episodes 1 --record_eval_episodes 1 --record_format gif --headless --run_timestamp 20260606_waypoint_action_direct_validate_v2`
+  - output: `outputs/debug/waypoint_mappo_validation/20260606_waypoint_action_direct_validate_v2/`
+  - `passed=true`
+  - `action_validity_rate=0.9916666666666667`
+  - `candidate_mask_empty_count=0.0`
+  - `env_action_shape=[2,3,2]`
+
+Interpretation:
+
+- Final waypoint action API is now the main environment contract.
+- Candidate-selection remains available but is no longer embedded in env/task runtime.
+- Direct waypoint policy can run rollout/update/eval/GIF smoke tests.
+- These are integration/architecture validation results, not long-training performance claims.
+
+## Theme BY: ActionAdapter and MPE-like particle dynamics backend
+
+Date: 2026-06-06
+
+User request:
+
+- Keep the final waypoint action interface from Theme BX.
+- Do not move back to candidate-index environment actions.
+- Replace/extend the old simple waypoint execution model with configurable environment transition dynamics.
+- Add ActionAdapter as environment-side transition logic.
+- Add MPE-like particle dynamics as the default backend.
+- Keep kinematic point as debug/ablation backend.
+- Preserve candidate-selection policy, direct waypoint policy, MAPPO trainer, GIF/MP4, and validate pipeline.
+
+Files added:
+
+- `envs/waypoint/control/__init__.py`
+- `envs/waypoint/control/action_adapters.py`
+- `envs/waypoint/control/dynamics_backends.py`
+- `configs/env/waypoint_missions_kinematic_debug.yaml`
+- `configs/env/waypoint_missions_pd_adapter_debug.yaml`
+- `tests/test_action_adapters.py`
+- `tests/test_mpe_particle_backend.py`
+- `docs/waypoint_mpe_dynamics_refactor.md`
+
+Files modified:
+
+- `envs/waypoint_marl_env.py`
+  - default step pipeline is now `SafetyLayer.validate_waypoints -> ActionAdapter.adapt -> DynamicsBackend.step -> scenario.compute_rewards`;
+  - records `adapter_info`, `dynamics_info`, `safety_info`, `mean_speed`, `max_speed_observed`, `mean_control_norm`, `collision_count`, `no_fly_violation_count`, `geofence_violation_count`.
+- `envs/waypoint/safety.py`
+  - added `SafetyResult`;
+  - added `validate_waypoints(...)` with geofence, no-fly, max command distance, optional joint connectivity, min-distance, and fallback handling;
+  - kept `filter_waypoints(...)` as compatibility wrapper.
+- `envs/waypoint/entities.py`
+  - `UAVState` now stores `mass`, `radius`, `last_control`, and `last_desired_velocity`.
+- `envs/waypoint/world.py`
+  - reads nested `dynamics_backend` config for `physics_dt`, `substeps`, `mass`, `damping`, `radius`, `max_speed`;
+  - initial UAV placement is more conservative to avoid starting inside MPE contact/min-distance regions.
+- `envs/waypoint/rendering.py`
+  - renders velocity arrows in addition to trajectories and waypoint commands.
+- `configs/env/waypoint_missions.yaml`
+  - default `action_adapter.name=waypoint_velocity_tracker`;
+  - default `dynamics_backend.name=mpe_particle`;
+  - keeps `action_interface=waypoint`.
+- `algorithms/mappo_waypoint.py`
+  - rollout/eval metrics now include dynamics diagnostics.
+- `utils/waypoint_evaluation.py`
+  - eval CSV records `mean_speed`, `max_speed_observed`, `mean_control_norm`, collision/no-fly/geofence counts, and adapter/dynamics finite flags.
+- `scripts/check/validate_waypoint_mappo.py`
+  - added `--dynamics-backend mpe_particle|kinematic_point`;
+  - added `--action-adapter waypoint_velocity_tracker|waypoint_pd_tracker`;
+  - summary now records action adapter/backend and dynamics diagnostics.
+- `policies/candidate_selection_policy.py`
+  - deterministic eval now deconflicts selected candidate waypoints across agents to avoid avoidable safety rejections.
+- `scripts/train_mappo_waypoint.py` and `scripts/check/validate_waypoint_mappo.py`
+  - sync `min_uav_distance` into policy config.
+- `README.md`, `docs/waypoint_environment_guide_zh.md`, `docs/waypoint_marl_refactor_zh.md`
+  - updated for ActionAdapter and DynamicsBackend.
+
+Implemented adapters:
+
+- `WaypointVelocityTracker`
+  - computes `v_des = max_speed * min(1, d / slowdown_radius) * dir`;
+  - computes `a_cmd = velocity_gain * (v_des - v)`;
+  - clips acceleration to `max_accel`;
+  - supports smoothing, latency buffer, hover on arrival, and tracking noise.
+- `WaypointPDTracker`
+  - computes `a_cmd = kp * (w - p) - kd * v`;
+  - clips acceleration to `max_accel`;
+  - intended for debug/ablation.
+- `VelocityToForceAdapter`
+  - smoke placeholder for future desired-velocity action interfaces.
+- `DirectAccelerationAdapter`
+  - smoke placeholder for future low-level acceleration/force action interfaces.
+
+Implemented dynamics backends:
+
+- `MPEParticleBackend`
+  - default backend;
+  - MPE-like particle dynamics only, not MPE tasks;
+  - update formula: `v <- (1-damping)*v + (control + env_force)/mass * physics_dt`, clip speed, then `p <- p + v*physics_dt`;
+  - supports substeps, max-speed clipping, collision/contact force, boundary projection, no-fly projection, noise hooks, path length, trajectory, communication graph, and coverage footprint updates.
+- `KinematicPointBackend`
+  - debug/ablation backend preserving old bounded geometric waypoint stepping.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile envs/waypoint/*.py envs/waypoint/control/*.py envs/waypoint_marl_env.py tasks/waypoint/*.py planners/*.py policies/*.py algorithms/*.py utils/*.py scripts/train_mappo_waypoint.py scripts/check/validate_waypoint_mappo.py` -> passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_waypoint_env_api.py tests/test_action_adapters.py tests/test_mpe_particle_backend.py tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rewards.py tests/test_waypoint_rendering.py` -> `18 passed`.
+- `git diff --check` -> passed.
+- Candidate-selection + MPE validate:
+  - command: `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --policy-class candidate_selection_waypoint --dynamics-backend mpe_particle --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless --run_timestamp 20260606_mpe_candidate_validate_final_v2`
+  - output: `outputs/debug/waypoint_mappo_validation/20260606_mpe_candidate_validate_final_v2/`
+  - `passed=true`
+  - `action_validity_rate=1.0`
+  - `max_speed_observed=0.039999742060899734`
+  - `adapter_finite=true`
+  - `dynamics_finite=true`
+- Direct waypoint + MPE validate:
+  - command: `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search --policy-class direct_waypoint --dynamics-backend mpe_particle --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 2 --eval_episodes 1 --record_eval_episodes 1 --record_format gif --headless --run_timestamp 20260606_mpe_direct_validate_final`
+  - output: `outputs/debug/waypoint_mappo_validation/20260606_mpe_direct_validate_final/`
+  - `passed=true`
+  - `action_validity_rate=1.0`
+  - `max_speed_observed=0.039999742060899734`
+  - `adapter_finite=true`
+  - `dynamics_finite=true`
+- Direct waypoint + kinematic debug validate:
+  - command: `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage --policy-class direct_waypoint --dynamics-backend kinematic_point --num_agents 3 --total_updates 1 --eval_episodes 1 --headless --run_timestamp 20260606_kinematic_direct_validate_final`
+  - output: `outputs/debug/waypoint_mappo_validation/20260606_kinematic_direct_validate_final/`
+  - `passed=true`
+  - `action_validity_rate=0.9916666666666667`
+  - `max_speed_observed=0.07999999821186066`
+
+Interpretation:
+
+- The default environment transition is now final waypoint -> adapter -> MPE-like particle dynamics.
+- The old kinematic model is preserved only as debug/ablation backend.
+- Candidate-selection and direct waypoint policies remain compatible because trainer still consumes `PolicyOutput.env_action` and `train_action/logprob` separately.
+- These are integration and smoke-validation results, not long-training performance conclusions.

@@ -46,7 +46,8 @@ class RunningMeanStd:
 @dataclass
 class MAPPOWaypointBatch:
     observations: dict[str, np.ndarray]
-    actions: np.ndarray
+    env_actions: np.ndarray
+    train_actions: np.ndarray
     old_logprobs: np.ndarray
     values: np.ndarray
     team_rewards: np.ndarray
@@ -63,7 +64,8 @@ class MAPPOWaypointBatch:
 class WaypointRolloutBuffer:
     def __init__(self):
         self.observations = []
-        self.actions = []
+        self.env_actions = []
+        self.train_actions = []
         self.logprobs = []
         self.values = []
         self.team_rewards = []
@@ -74,9 +76,10 @@ class WaypointRolloutBuffer:
         self.done_for_reset = []
         self.infos = []
 
-    def add(self, obs, action, logprob, value, team_reward, per_agent_reward, terminated, truncated, bootstrap_mask, done_for_reset, infos):
+    def add(self, obs, env_action, train_action, logprob, value, team_reward, per_agent_reward, terminated, truncated, bootstrap_mask, done_for_reset, infos):
         self.observations.append({key: np.asarray(item).copy() for key, item in obs.items()})
-        self.actions.append(np.asarray(action, dtype=np.int64).copy())
+        self.env_actions.append(np.asarray(env_action, dtype=np.float32).copy())
+        self.train_actions.append(np.asarray(train_action).copy())
         self.logprobs.append(np.asarray(logprob, dtype=np.float32).copy())
         self.values.append(np.asarray(value, dtype=np.float32).copy())
         self.team_rewards.append(np.asarray(team_reward, dtype=np.float32).copy())
@@ -91,7 +94,8 @@ class WaypointRolloutBuffer:
         obs = {key: np.stack([item[key] for item in self.observations], axis=0) for key in self.observations[0]}
         return MAPPOWaypointBatch(
             observations=obs,
-            actions=np.stack(self.actions, axis=0).astype(np.int64),
+            env_actions=np.stack(self.env_actions, axis=0).astype(np.float32),
+            train_actions=np.stack(self.train_actions, axis=0),
             old_logprobs=np.stack(self.logprobs, axis=0).astype(np.float32),
             values=np.stack(self.values, axis=0).astype(np.float32),
             team_rewards=np.stack(self.team_rewards, axis=0).astype(np.float32),
@@ -107,7 +111,7 @@ class WaypointRolloutBuffer:
 
 
 class MAPPOWaypointTrainer:
-    """MAPPO trainer for discrete waypoint-index actions."""
+    """MAPPO trainer for final waypoint env actions and per-agent PPO ratios."""
 
     def __init__(self, env_batch, policy: nn.Module, train_config: dict, device: str | None = None):
         self.env_batch = env_batch
@@ -151,6 +155,12 @@ class MAPPOWaypointTrainer:
         poi_values = []
         target_values = []
         interception_values = []
+        mean_speeds = []
+        max_speeds = []
+        mean_control_norms = []
+        collision_counts = []
+        no_fly_counts = []
+        geofence_counts = []
         terminal_success = []
         terminal_path = []
         terminal_collision = []
@@ -158,20 +168,24 @@ class MAPPOWaypointTrainer:
         for _ in range(horizon):
             obs_tensor = _obs_to_tensor(self.current_obs, self.device)
             with torch.no_grad():
-                action_tensor, logprob_tensor, _, value_tensor = self.policy.get_action_and_value(obs_tensor)
-            actions = action_tensor.detach().cpu().numpy().astype(np.int64)
-            step = self.env_batch.step(actions)
+                policy_output = self.policy.get_action_and_value(obs_tensor)
+            env_actions = policy_output.env_action.detach().cpu().numpy().astype(np.float32)
+            train_actions = policy_output.train_action
+            if train_actions is None:
+                train_actions = policy_output.env_action
+            step = self.env_batch.step(env_actions)
             with torch.no_grad():
-                bootstrap_value = self.policy.get_action_and_value(_obs_to_tensor(step.bootstrap_observations, self.device))[3]
+                bootstrap_value = self.policy.get_action_and_value(_obs_to_tensor(step.bootstrap_observations, self.device)).value
             train_rewards = step.team_rewards.copy()
             if self.train_config.get("reward_norm", True):
                 self.reward_rms.update(train_rewards)
                 train_rewards = self.reward_rms.normalize(train_rewards)
             buffer.add(
                 self.current_obs,
-                actions,
-                logprob_tensor.detach().cpu().numpy(),
-                value_tensor.detach().cpu().numpy(),
+                env_actions,
+                train_actions.detach().cpu().numpy(),
+                policy_output.logprob.detach().cpu().numpy(),
+                policy_output.value.detach().cpu().numpy(),
                 train_rewards,
                 step.per_agent_rewards,
                 step.terminated,
@@ -194,6 +208,12 @@ class MAPPOWaypointTrainer:
                 poi_values.append(float(info.get("weighted_poi_completion", 0.0)))
                 target_values.append(float(info.get("target_coverage_ratio", 0.0)))
                 interception_values.append(float(info.get("interception_success", 0.0)))
+                mean_speeds.append(float(info.get("mean_speed", 0.0)))
+                max_speeds.append(float(info.get("max_speed_observed", 0.0)))
+                mean_control_norms.append(float(info.get("mean_control_norm", 0.0)))
+                collision_counts.append(float(info.get("collision_count", 0.0)))
+                no_fly_counts.append(float(info.get("no_fly_violation_count", 0.0)))
+                geofence_counts.append(float(info.get("geofence_violation_count", 0.0)))
                 if "terminal_info" in info:
                     terminal_success.append(float(info.get("success", False)))
                     terminal_path.append(float(info.get("path_length", 0.0)))
@@ -210,7 +230,7 @@ class MAPPOWaypointTrainer:
         gae = np.zeros((rewards.shape[1],), dtype=np.float32)
         for t in reversed(range(horizon)):
             delta = rewards[t] + gamma * next_values_arr[t] * bootstrap_mask[t] - values[t]
-            continuation = 1.0 - done_for_reset[t].astype(np.float32)
+            continuation = bootstrap_mask[t]
             gae = delta + gamma * gae_lambda * continuation * gae
             advantages[t] = gae
         returns = advantages + values
@@ -228,6 +248,12 @@ class MAPPOWaypointTrainer:
             "weighted_poi_completion": float(np.mean(poi_values)) if poi_values else 0.0,
             "target_coverage_ratio": float(np.mean(target_values)) if target_values else 0.0,
             "interception_success": float(np.mean(interception_values)) if interception_values else 0.0,
+            "mean_speed": float(np.mean(mean_speeds)) if mean_speeds else 0.0,
+            "max_speed_observed": float(np.max(max_speeds)) if max_speeds else 0.0,
+            "mean_control_norm": float(np.mean(mean_control_norms)) if mean_control_norms else 0.0,
+            "collision_count": float(np.sum(collision_counts)) if collision_counts else 0.0,
+            "no_fly_violation_count": float(np.sum(no_fly_counts)) if no_fly_counts else 0.0,
+            "geofence_violation_count": float(np.sum(geofence_counts)) if geofence_counts else 0.0,
             "rollout_terminal_success_rate": float(np.mean(terminal_success)) if terminal_success else 0.0,
             "rollout_terminal_path_length": float(np.mean(terminal_path)) if terminal_path else 0.0,
             "rollout_terminal_collision_rate": float(np.mean(terminal_collision)) if terminal_collision else 0.0,
@@ -246,11 +272,11 @@ class MAPPOWaypointTrainer:
         if self.train_config.get("advantage_norm", True):
             advantages = (advantages - advantages.mean()) / max(float(advantages.std()), 1e-8)
         flat_obs = self._flatten_obs(batch.observations)
-        flat_actions = self._flatten_time_env(batch.actions)
+        flat_train_actions = self._flatten_time_env(batch.train_actions)
         flat_old_logprobs = self._flatten_time_env(batch.old_logprobs)
         flat_returns = batch.returns.reshape(-1)
         flat_advantages = advantages.reshape(-1)
-        batch_size = flat_actions.shape[0]
+        batch_size = flat_train_actions.shape[0]
         epochs = int(self.train_config["epochs"])
         minibatch_size = int(self.train_config["minibatch_size"])
         clip_coef = float(self.train_config["clip_coef"])
@@ -267,11 +293,15 @@ class MAPPOWaypointTrainer:
             for start in range(0, batch_size, minibatch_size):
                 mb = indices[start : start + minibatch_size]
                 obs_t = {key: torch.as_tensor(value[mb], dtype=torch.float32, device=self.device) for key, value in flat_obs.items()}
-                actions_t = torch.as_tensor(flat_actions[mb], dtype=torch.long, device=self.device)
+                train_action_dtype = torch.long if np.issubdtype(flat_train_actions.dtype, np.integer) else torch.float32
+                actions_t = torch.as_tensor(flat_train_actions[mb], dtype=train_action_dtype, device=self.device)
                 old_logprob_t = torch.as_tensor(flat_old_logprobs[mb], dtype=torch.float32, device=self.device)
                 returns_t = torch.as_tensor(flat_returns[mb], dtype=torch.float32, device=self.device)
                 adv_t = torch.as_tensor(flat_advantages[mb], dtype=torch.float32, device=self.device)
-                _, new_logprob, entropy, value = self.policy.get_action_and_value(obs_t, actions_t)
+                policy_output = self.policy.get_action_and_value(obs_t, actions_t)
+                new_logprob = policy_output.logprob
+                entropy = policy_output.entropy
+                value = policy_output.value
                 agent_mask = obs_t.get("agent_mask", torch.ones_like(new_logprob)).bool()
                 logratio = new_logprob - old_logprob_t
                 ratio = torch.exp(logratio)
@@ -355,6 +385,12 @@ class MAPPOWaypointTrainer:
             "eval_path_length": float(overall.get("path_length_mean", 0.0)),
             "eval_collision_rate": float(overall.get("collision_rate_mean", 0.0)),
             "eval_action_validity_rate": float(overall.get("action_validity_rate_mean", 1.0)),
+            "eval_mean_speed": float(overall.get("mean_speed_mean", 0.0)),
+            "eval_max_speed_observed": float(overall.get("max_speed_observed_mean", 0.0)),
+            "eval_mean_control_norm": float(overall.get("mean_control_norm_mean", 0.0)),
+            "eval_collision_count": float(overall.get("collision_count_mean", 0.0)),
+            "eval_no_fly_violation_count": float(overall.get("no_fly_violation_count_mean", 0.0)),
+            "eval_geofence_violation_count": float(overall.get("geofence_violation_count_mean", 0.0)),
         }
         for task_name, summary in task_summaries.items():
             safe = task_name.replace("-", "_")

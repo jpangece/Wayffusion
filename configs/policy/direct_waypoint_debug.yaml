@@ -1,6 +1,6 @@
-name: mappo_waypoint_debug
+name: direct_waypoint_debug
 algorithm: mappo_waypoint
-policy_class: candidate_selection_waypoint
+policy_class: direct_waypoint
 num_envs: 2
 rollout_steps: 32
 total_updates: 10
@@ -20,17 +20,12 @@ target_kl: 0.05
 eval_interval: 5
 cnn_channels: [8, 16, 32]
 agent_hidden_dim: 32
-candidate_hidden_dim: 32
 joint_hidden_dim: 96
 attention_heads: 4
 use_attention: true
-candidate_count: 12
-candidate_generator: task_aware
 map_size: 1.0
-grid_size: 32
-max_waypoint_distance: 0.22
-base_position: [0.10, 0.10]
-no_fly_zones:
-  - center: [0.55, 0.55]
-    radius: 0.08
+max_delta: 0.22
+log_std_init: -1.0
+log_std_min: -2.0
+log_std_max: 0.2
 tensorboard_metric_mode: core

@@ -23,17 +23,14 @@ strict_action_validation: false
 connectivity_candidate_filter: true
 render_candidates: true
 action_adapter:
-  name: waypoint_velocity_tracker
+  name: waypoint_pd_tracker
+  kp: 2.0
+  kd: 2.8
   max_command_distance: 0.22
   max_speed: 0.08
-  slowdown_radius: 0.12
-  velocity_gain: 4.0
   max_accel: 0.25
   control_smoothing: 0.35
   acceptance_radius: 0.025
-  hover_when_arrived: true
-  command_latency_steps: 0
-  tracking_noise_std: 0.0
   clip_to_geofence: true
   reject_no_fly_waypoints: true
 dynamics_backend:

@@ -83,9 +83,9 @@ def evaluate_waypoint_policy_episodes(
                 if deterministic:
                     action_tensor = policy.act_deterministic(_to_tensor(obs, device))
                 else:
-                    action_tensor = policy.get_action_and_value(_to_tensor(obs, device))[0]
-            action_row = action_tensor.squeeze(0).detach().cpu().numpy().astype(np.int64)
-            action_dict = {agent: int(action_row[idx]) for idx, agent in enumerate(env.possible_agents)}
+                    action_tensor = policy.get_action_and_value(_to_tensor(obs, device)).env_action
+            action_row = action_tensor.squeeze(0).detach().cpu().numpy().astype(np.float32)
+            action_dict = {agent: action_row[idx] for idx, agent in enumerate(env.possible_agents)}
             _, _, terms, truncs, info_by_agent = env.step(action_dict)
             info = next(iter(info_by_agent.values()))
             total_reward += float(info.get("team_reward", 0.0))
@@ -110,6 +110,14 @@ def evaluate_waypoint_policy_episodes(
             "num_agents": int(info.get("num_agents", config.get("num_agents", 0))),
             "action_validity_rate": float(1.0 - info.get("invalid_action_count", 0) / max(steps * int(config.get("num_agents", 1)), 1)),
             "candidate_mask_empty_count": float(info.get("candidate_mask_empty_count", 0)),
+            "mean_speed": float(info.get("mean_speed", 0.0)),
+            "max_speed_observed": float(info.get("max_speed_observed", 0.0)),
+            "mean_control_norm": float(info.get("mean_control_norm", 0.0)),
+            "collision_count": float(info.get("collision_count", 0.0)),
+            "no_fly_violation_count": float(info.get("no_fly_violation_count", 0.0)),
+            "geofence_violation_count": float(info.get("geofence_violation_count", 0.0)),
+            "adapter_finite": float(bool(info.get("adapter_info", {}).get("adapter_finite", True))),
+            "dynamics_finite": float(bool(info.get("dynamics_info", {}).get("dynamics_finite", True))),
             **{key: float(value) for key, value in metrics.items() if isinstance(value, (int, float, np.integer, np.floating, bool))},
         }
         if recording_path is not None:
@@ -156,24 +164,71 @@ def evaluate_waypoint_policy_per_task(
     return all_records, summaries, overall
 
 
-def greedy_waypoint_action(env: WaypointMultiUAVEnv) -> dict[str, int]:
-    features = env.get_global_state()["candidate_features"]
-    mask = env.get_global_state()["candidate_mask"].astype(bool)
+def _candidate_features_for_env(env: WaypointMultiUAVEnv, candidates: np.ndarray) -> np.ndarray:
+    positions = env.world.get_uav_positions()[:, None, :]
+    rel = (candidates - positions) / max(env.world.map_size, 1e-6)
+    dist = np.linalg.norm(rel, axis=-1, keepdims=True)
+    grid = env.world.world_to_grid(candidates.reshape(-1, 2)).reshape(env.num_agents, candidates.shape[1], 2)
+    x = grid[..., 0]
+    y = grid[..., 1]
+    unvisited = 1.0 - env.world.coverage_grid[y, x][..., None]
+    belief = env.world.belief_grid[y, x][..., None]
+    no_fly_ok = env.world.check_no_fly(candidates)[..., None].astype(np.float32)
+    return np.concatenate([rel, dist, unvisited, belief, no_fly_ok], axis=-1).astype(np.float32)
+
+
+def _planned_candidates(env: WaypointMultiUAVEnv) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    candidates, raw_mask = env.current_scenario.generate_candidate_waypoints(env.world, env.task_state)
+    require_connectivity = env.current_scenario.name == "connectivity_expansion" and bool(env.config.get("connectivity_candidate_filter", True))
+    candidates, mask = env.safety.filter_candidates(env.world, candidates, raw_mask, require_connectivity=require_connectivity)
+    features = _candidate_features_for_env(env, candidates)
+    return candidates, mask, features
+
+
+def greedy_waypoint_action(env: WaypointMultiUAVEnv) -> dict[str, np.ndarray]:
+    candidates, mask, features = _planned_candidates(env)
     task = env.current_scenario.name if env.current_scenario is not None else ""
     scores = features[..., 3] + 0.5 * features[..., 4] - 0.1 * features[..., 2]
     if task == "belief_search":
         scores = 2.0 * features[..., 4] + 0.5 * features[..., 3] - 0.1 * features[..., 2]
     elif task == "connectivity_expansion":
         positions = env.world.get_uav_positions()[:, None, :]
-        outward = np.linalg.norm(env.last_candidate_waypoints - env.world.base_position[None, None, :], axis=-1)
+        outward = np.linalg.norm(candidates - env.world.base_position[None, None, :], axis=-1)
         scores = outward / max(env.world.map_size, 1e-6) + 0.5 * features[..., 3]
     scores = np.where(mask, scores, -1e9)
-    return {agent: int(np.argmax(scores[idx])) for idx, agent in enumerate(env.possible_agents)}
-
-
-def random_waypoint_action(env: WaypointMultiUAVEnv, rng: np.random.Generator) -> dict[str, int]:
     actions = {}
+    chosen: list[np.ndarray] = []
+    current = env.world.get_uav_positions()
     for idx, agent in enumerate(env.possible_agents):
-        valid = np.where(env.last_candidate_mask[idx])[0]
-        actions[agent] = int(rng.choice(valid)) if len(valid) else 0
+        order = np.argsort(-scores[idx])
+        selected = current[idx]
+        for cand_idx in order:
+            point = candidates[idx, int(cand_idx)]
+            if not mask[idx, int(cand_idx)]:
+                continue
+            if all(np.linalg.norm(point - prev) >= env.world.min_uav_distance for prev in chosen):
+                selected = point
+                break
+        chosen.append(selected.astype(np.float32))
+        actions[agent] = selected.astype(np.float32)
+    return actions
+
+
+def random_waypoint_action(env: WaypointMultiUAVEnv, rng: np.random.Generator) -> dict[str, np.ndarray]:
+    candidates, mask, _ = _planned_candidates(env)
+    actions = {}
+    chosen: list[np.ndarray] = []
+    current = env.world.get_uav_positions()
+    for idx, agent in enumerate(env.possible_agents):
+        valid = np.where(mask[idx])[0]
+        if len(valid):
+            rng.shuffle(valid)
+        selected = current[idx]
+        for cand_idx in valid:
+            point = candidates[idx, int(cand_idx)]
+            if all(np.linalg.norm(point - prev) >= env.world.min_uav_distance for prev in chosen):
+                selected = point
+                break
+        chosen.append(selected.astype(np.float32))
+        actions[agent] = selected.astype(np.float32)
     return actions

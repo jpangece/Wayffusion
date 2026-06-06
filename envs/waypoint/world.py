@@ -26,7 +26,12 @@ class MissionWorld:
     world_dim: int = 2
     default_altitude: float = 30.0
     dt_decision: float = 1.0
+    physics_dt: float = 0.05
+    substeps: int = 20
     max_speed: float = 0.08
+    mass: float = 1.0
+    damping: float = 0.2
+    radius: float = 0.02
     max_waypoint_distance: float = 0.2
     min_uav_distance: float = 0.03
     base_position: np.ndarray = field(default_factory=lambda: np.asarray([0.1, 0.1], dtype=np.float32))
@@ -56,12 +61,18 @@ class MissionWorld:
 
     @classmethod
     def from_config(cls, config: dict[str, Any], rng: np.random.Generator | None = None) -> "MissionWorld":
+        dynamics_cfg = dict(config.get("dynamics_backend", {}))
         return cls(
             map_size=float(config.get("map_size", 1.0)),
             world_dim=int(config.get("world_dim", 2)),
             default_altitude=float(config.get("default_altitude", 30.0)),
-            dt_decision=float(config.get("dt_decision", 1.0)),
-            max_speed=float(config.get("max_speed", 0.08)),
+            dt_decision=float(dynamics_cfg.get("decision_dt", config.get("dt_decision", 1.0))),
+            physics_dt=float(dynamics_cfg.get("physics_dt", 0.05)),
+            substeps=int(dynamics_cfg.get("substeps", 20)),
+            max_speed=float(dynamics_cfg.get("max_speed", config.get("max_speed", 0.08))),
+            mass=float(dynamics_cfg.get("mass", 1.0)),
+            damping=float(dynamics_cfg.get("damping", 0.2)),
+            radius=float(dynamics_cfg.get("radius", 0.02)),
             max_waypoint_distance=float(config.get("max_waypoint_distance", 0.2)),
             min_uav_distance=float(config.get("min_uav_distance", 0.03)),
             base_position=np.asarray(config.get("base_position", [0.1, 0.1]), dtype=np.float32),
@@ -82,8 +93,7 @@ class MissionWorld:
         self.belief_grid = self.probability_grid.copy()
         self.uavs = []
         if initial_positions is None:
-            offsets = self.rng.normal(0.0, 0.025 * self.map_size, size=(num_agents, 2)).astype(np.float32)
-            initial_positions = np.clip(self.base_position[None, :] + offsets, 0.02, self.map_size - 0.02)
+            initial_positions = self._sample_safe_initial_positions(num_agents)
         for idx in range(num_agents):
             pos = np.asarray(initial_positions[idx], dtype=np.float32)
             self.uavs.append(
@@ -92,6 +102,8 @@ class MissionWorld:
                     velocity=np.zeros(2, dtype=np.float32),
                     current_waypoint=pos.copy(),
                     role_id=idx,
+                    mass=float(self.mass),
+                    radius=float(self.radius),
                     sensor_radius=float(getattr(self, "sensor_radius", 0.12)),
                     comm_radius=float(getattr(self, "comm_radius", 0.35)),
                 )
@@ -99,13 +111,40 @@ class MissionWorld:
         self.update_communication_graph()
         self.accumulate_sensor_footprints()
 
+    def _sample_safe_initial_positions(self, num_agents: int) -> np.ndarray:
+        positions: list[np.ndarray] = []
+        min_dist = max(float(self.min_uav_distance) * 1.8, float(self.radius) * 2.5)
+        for idx in range(num_agents):
+            accepted = None
+            for _ in range(200):
+                radius = self.rng.uniform(0.02 * self.map_size, 0.22 * self.map_size)
+                angle = self.rng.uniform(0.0, 2.0 * np.pi)
+                candidate = self.base_position + radius * np.asarray([np.cos(angle), np.sin(angle)], dtype=np.float32)
+                candidate = self.project_to_geofence(candidate[None, :])[0]
+                if not self.check_no_fly(candidate[None, :])[0]:
+                    continue
+                if all(np.linalg.norm(candidate - prev) >= min_dist for prev in positions):
+                    accepted = candidate.astype(np.float32)
+                    break
+            if accepted is None:
+                angle = 2.0 * np.pi * idx / max(num_agents, 1)
+                radius = min_dist * (1.0 + idx // 8)
+                accepted = self.project_to_geofence((self.base_position + radius * np.asarray([np.cos(angle), np.sin(angle)], dtype=np.float32))[None, :])[0]
+            positions.append(accepted.astype(np.float32))
+        return np.asarray(positions, dtype=np.float32)
+
     def clone(self) -> "MissionWorld":
         new = MissionWorld(
             map_size=self.map_size,
             world_dim=self.world_dim,
             default_altitude=self.default_altitude,
             dt_decision=self.dt_decision,
+            physics_dt=self.physics_dt,
+            substeps=self.substeps,
             max_speed=self.max_speed,
+            mass=self.mass,
+            damping=self.damping,
+            radius=self.radius,
             max_waypoint_distance=self.max_waypoint_distance,
             min_uav_distance=self.min_uav_distance,
             base_position=self.base_position.copy(),

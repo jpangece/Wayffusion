@@ -21,6 +21,7 @@ def test_waypoint_rgb_render_and_gif_record(tmp_path: Path):
     env_config["task_names"] = ["area_coverage"]
     batch = make_waypoint_env_batch(env_config, 1)
     batch.reset()
+    start_len = len(batch.envs[0].world.uavs[0].trajectory)
     frame = batch.envs[0].render("rgb_array")
     assert frame.dtype == np.uint8
     assert frame.ndim == 3 and frame.shape[-1] == 3
@@ -38,4 +39,5 @@ def test_waypoint_rgb_render_and_gif_record(tmp_path: Path):
     )
     assert records and "recording_path" in records[0]
     assert Path(records[0]["recording_path"]).exists()
+    assert len(batch.envs[0].world.uavs[0].trajectory) >= start_len
     batch.close()

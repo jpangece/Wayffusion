@@ -51,6 +51,18 @@ def render_world(
             traj = np.asarray(uav.trajectory, dtype=np.float32)
             if len(traj) > 1:
                 ax.plot(traj[:, 0], traj[:, 1], color=colors[idx], linewidth=1.0, alpha=0.75)
+            if np.linalg.norm(uav.velocity) > 1e-8:
+                ax.arrow(
+                    uav.position[0],
+                    uav.position[1],
+                    uav.velocity[0],
+                    uav.velocity[1],
+                    color=colors[idx],
+                    width=0.001,
+                    head_width=0.012,
+                    alpha=0.65,
+                    length_includes_head=True,
+                )
             ax.text(uav.position[0], uav.position[1], str(idx), fontsize=8, ha="center", va="center", color="white")
 
     if candidate_waypoints is not None:

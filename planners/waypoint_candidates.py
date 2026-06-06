@@ -35,17 +35,29 @@ def _top_grid_points(world: MissionWorld, score_grid: np.ndarray, limit: int) ->
 
 def grid_frontier_candidates(world: MissionWorld, num_candidates: int) -> tuple[np.ndarray, np.ndarray]:
     unvisited = 1.0 - world.coverage_grid
-    return merge_and_pad_candidates(world, [radial_candidates_around_agent(world, 4)[0], _repeat_points(world, _top_grid_points(world, unvisited, num_candidates))], num_candidates)
+    return merge_and_pad_candidates(
+        world,
+        [radial_candidates_around_agent(world, 4)[0], _repeat_points(world, _top_grid_points(world, unvisited, num_candidates))],
+        num_candidates,
+    )
 
 
 def coverage_candidates(world: MissionWorld, num_candidates: int) -> tuple[np.ndarray, np.ndarray]:
     score = (1.0 - world.coverage_grid) / (1.0 + world.visit_count_grid)
-    return merge_and_pad_candidates(world, [radial_candidates_around_agent(world, 5)[0], _repeat_points(world, _top_grid_points(world, score, num_candidates))], num_candidates)
+    return merge_and_pad_candidates(
+        world,
+        [radial_candidates_around_agent(world, 5)[0], _repeat_points(world, _top_grid_points(world, score, num_candidates))],
+        num_candidates,
+    )
 
 
 def belief_candidates(world: MissionWorld, num_candidates: int) -> tuple[np.ndarray, np.ndarray]:
     score = world.belief_grid * (1.0 - np.clip(world.visit_count_grid, 0.0, 1.0) * 0.35)
-    return merge_and_pad_candidates(world, [radial_candidates_around_agent(world, 5)[0], _repeat_points(world, _top_grid_points(world, score, num_candidates))], num_candidates)
+    return merge_and_pad_candidates(
+        world,
+        [radial_candidates_around_agent(world, 5)[0], _repeat_points(world, _top_grid_points(world, score, num_candidates))],
+        num_candidates,
+    )
 
 
 def poi_candidates(world: MissionWorld, poi_positions: np.ndarray, num_candidates: int) -> tuple[np.ndarray, np.ndarray]:
@@ -85,7 +97,11 @@ def target_prediction_candidates(
     points = [pred]
     for angle in angles:
         points.append(pred + ring_radius * np.asarray([np.cos(angle), np.sin(angle)], dtype=np.float32))
-    return merge_and_pad_candidates(world, [radial_candidates_around_agent(world, 4)[0], _repeat_points(world, np.asarray(points, dtype=np.float32))], num_candidates)
+    return merge_and_pad_candidates(
+        world,
+        [radial_candidates_around_agent(world, 4)[0], _repeat_points(world, np.asarray(points, dtype=np.float32))],
+        num_candidates,
+    )
 
 
 def _repeat_points(world: MissionWorld, points: np.ndarray) -> np.ndarray:

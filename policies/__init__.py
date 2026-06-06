@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import torch
 
-from policies.mappo_waypoint_policy import MAPPOWaypointPolicy
+from policies.candidate_selection_policy import CandidateSelectionWaypointPolicy, MAPPOWaypointPolicy
+from policies.direct_waypoint_policy import DirectWaypointPolicy
+from policies.policy_output import PolicyOutput
 
 
 def observation_to_tensor(
@@ -20,19 +22,47 @@ def observation_to_tensor(
 
 
 def build_policy(policy_config: dict, observation_space, action_space):
-    policy_class = policy_config.get("policy_class", "mappo_waypoint")
-    if policy_class != "mappo_waypoint":
-        raise ValueError(f"Unsupported waypoint MARL policy class: {policy_class}")
-    return MAPPOWaypointPolicy(
-        observation_space,
-        action_space,
-        cnn_channels=policy_config.get("cnn_channels"),
-        agent_hidden_dim=int(policy_config.get("agent_hidden_dim", 64)),
-        candidate_hidden_dim=int(policy_config.get("candidate_hidden_dim", 64)),
-        joint_hidden_dim=int(policy_config.get("joint_hidden_dim", 192)),
-        attention_heads=int(policy_config.get("attention_heads", 4)),
-        use_attention=bool(policy_config.get("use_attention", True)),
-    )
+    policy_class = str(policy_config.get("policy_class", "candidate_selection_waypoint"))
+    common = {
+        "cnn_channels": policy_config.get("cnn_channels"),
+        "agent_hidden_dim": int(policy_config.get("agent_hidden_dim", 64)),
+        "joint_hidden_dim": int(policy_config.get("joint_hidden_dim", 192)),
+        "attention_heads": int(policy_config.get("attention_heads", 4)),
+        "use_attention": bool(policy_config.get("use_attention", True)),
+        "map_size": float(policy_config.get("map_size", 1.0)),
+    }
+    if policy_class in {"candidate_selection_waypoint", "mappo_waypoint"}:
+        return CandidateSelectionWaypointPolicy(
+            observation_space,
+            action_space,
+            **common,
+            candidate_hidden_dim=int(policy_config.get("candidate_hidden_dim", 64)),
+            candidate_count=int(policy_config.get("candidate_count", 12)),
+            grid_size=int(policy_config.get("grid_size", 32)),
+            max_waypoint_distance=float(policy_config.get("max_waypoint_distance", 0.22)),
+            min_uav_distance=float(policy_config.get("min_uav_distance", 0.035)),
+            no_fly_zones=list(policy_config.get("no_fly_zones", [])),
+            base_position=list(policy_config.get("base_position", [0.1, 0.1])),
+            candidate_generator=str(policy_config.get("candidate_generator", "task_aware")),
+        )
+    if policy_class == "direct_waypoint":
+        return DirectWaypointPolicy(
+            observation_space,
+            action_space,
+            **common,
+            max_delta=float(policy_config.get("max_delta", policy_config.get("max_waypoint_distance", 0.22))),
+            log_std_init=float(policy_config.get("log_std_init", -1.0)),
+            log_std_min=float(policy_config.get("log_std_min", -2.0)),
+            log_std_max=float(policy_config.get("log_std_max", 0.5)),
+        )
+    raise ValueError(f"Unsupported waypoint MARL policy class: {policy_class}")
 
 
-__all__ = ["MAPPOWaypointPolicy", "build_policy", "observation_to_tensor"]
+__all__ = [
+    "CandidateSelectionWaypointPolicy",
+    "DirectWaypointPolicy",
+    "MAPPOWaypointPolicy",
+    "PolicyOutput",
+    "build_policy",
+    "observation_to_tensor",
+]

@@ -52,7 +52,10 @@ class WaypointScenario:
         return np.stack([coverage, visits, belief, risk, target], axis=0).astype(np.float32)
 
     def generate_candidate_waypoints(self, world: MissionWorld, task_state: dict) -> tuple[np.ndarray, np.ndarray]:
-        raise NotImplementedError
+        """Optional planner helper kept out of the environment action API."""
+        del task_state
+        positions = world.get_uav_positions()
+        return positions[:, None, :].astype(np.float32), np.ones((len(positions), 1), dtype=bool)
 
     def step_update(self, world: MissionWorld, task_state: dict) -> None:
         del world, task_state

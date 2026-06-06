@@ -1,28 +1,81 @@
 # Wayffusion
 
-Wayffusion is a waypoint-level multi-UAV MARL mission suite. The main API follows PettingZoo ParallelEnv semantics: each UAV is an agent, each agent selects a discrete candidate waypoint index, and the environment simulates bounded waypoint execution rather than low-level flight control.
+Wayffusion is a waypoint-level multi-UAV MARL mission suite. The main API follows PettingZoo ParallelEnv semantics: each UAV is an agent, and each agent sends a final waypoint coordinate to the environment.
 
-The suite is designed for CTDE/MAPPO research and future real-drone waypoint experiments. Actor policies consume per-agent candidate waypoint observations; centralized critics can consume the provided global state.
+The environment simulates waypoint tracking, particle dynamics, safety checks, task updates, rewards, metrics, and visualization. Candidate waypoint generation is not part of the environment action API. It belongs to policy or planner code.
 
-## Main Environment
+## Main Components
 
-- Main environment: `envs/waypoint_marl_env.py::WaypointMultiUAVEnv`
-- Main training entry: `scripts/train_mappo_waypoint.py`
-- Main validation entry: `scripts/check/validate_waypoint_mappo.py`
-- Main policy: `policies/mappo_waypoint_policy.py::MAPPOWaypointPolicy`
-- Main trainer: `algorithms/mappo_waypoint.py::MAPPOWaypointTrainer`
+- Environment: `envs/waypoint_marl_env.py::WaypointMultiUAVEnv`
+- Training entry: `scripts/train_mappo_waypoint.py`
+- Validation entry: `scripts/check/validate_waypoint_mappo.py`
+- Candidate-selection policy: `policies/candidate_selection_policy.py::CandidateSelectionWaypointPolicy`
+- Direct waypoint policy: `policies/direct_waypoint_policy.py::DirectWaypointPolicy`
+- Action adapters: `envs/waypoint/control/action_adapters.py`
+- Dynamics backends: `envs/waypoint/control/dynamics_backends.py`
+- MAPPO trainer: `algorithms/mappo_waypoint.py::MAPPOWaypointTrainer`
 
-The action for each UAV is an integer candidate waypoint index:
+## Action API
+
+Default action mode is `waypoint`:
 
 ```python
 actions = {
-    "uav_0": 3,
-    "uav_1": 7,
-    "uav_2": 1,
+    "uav_0": np.asarray([0.32, 0.18], dtype=np.float32),
+    "uav_1": np.asarray([0.40, 0.22], dtype=np.float32),
+    "uav_2": np.asarray([0.24, 0.30], dtype=np.float32),
 }
 ```
 
-The selected candidate is a continuous waypoint coordinate. `WaypointExecutionModel` moves each UAV toward that waypoint with bounded speed, geofence/no-fly checks, minimum-distance checks, path-length accounting, and trajectory history.
+For 2D worlds, `action_space(agent_id)` is `Box([0, 0], [map_size, map_size], shape=(2,))`. A future 3D mode can extend this to `[x, y, altitude]`.
+
+The environment checks geofence, no-fly zones, maximum waypoint distance, minimum UAV distance, and optional connectivity constraints. Invalid waypoints are corrected to a safe fallback unless `strict_action_validation=true`.
+
+`candidate_index_legacy` exists only for diagnostics. It is not the mainline API.
+
+## Transition Dynamics
+
+The default transition stack is:
+
+```text
+Policy env_action [B,N,2]
+  -> WaypointMultiUAVEnv.step(dict[str, waypoint])
+  -> SafetyLayer.validate_waypoints
+  -> WaypointVelocityTracker
+  -> MPEParticleBackend
+  -> scenario reward/metrics
+```
+
+Default config:
+
+- `action_interface: waypoint`
+- `action_adapter.name: waypoint_velocity_tracker`
+- `dynamics_backend.name: mpe_particle`
+
+`ActionAdapter` is environment transition dynamics, not policy. It converts safe final waypoints into low-level acceleration-like controls. `DynamicsBackend` integrates the particle state and updates position, velocity, path length, trajectories, communication graph, and coverage footprints.
+
+Available adapters:
+
+- `WaypointVelocityTracker`: tracks a waypoint through desired velocity and acceleration control.
+- `WaypointPDTracker`: debug/ablation PD controller.
+- `VelocityToForceAdapter` and `DirectAccelerationAdapter`: smoke placeholders for future lower-level action interfaces.
+
+Available backends:
+
+- `MPEParticleBackend`: default MPE-like particle dynamics. It does not replace Wayffusion tasks with MPE tasks.
+- `KinematicPointBackend`: old bounded geometric waypoint step, kept for debug/ablation.
+
+## Policy Families
+
+`CandidateSelectionWaypointPolicy` internally generates task-aware candidate waypoints, samples a categorical index per UAV, maps that index to a final waypoint, and returns:
+
+- `env_action [B, N, 2]`: final waypoint sent to the environment.
+- `train_action [B, N]`: selected candidate index used for PPO log-prob recomputation.
+- `logprob [B, N]`, `entropy [B, N]`, `value [B]`.
+
+`DirectWaypointPolicy` directly samples a Gaussian waypoint delta per UAV, clips it by vector norm, converts it into a final waypoint, and uses the sampled delta as `train_action`.
+
+The trainer only requires a common `PolicyOutput`; it does not assume the policy is categorical or Gaussian.
 
 ## Mission Suite
 
@@ -35,41 +88,9 @@ The waypoint task family is under `tasks/waypoint/`:
 - `dynamic_target_escort`: waypoint-level dynamic target monitoring/escort.
 - `target_interception`: route-branch interception and containment over future target belief.
 
-Connectivity is a standalone mission type, not just a global constraint. The reward explicitly prevents "all UAVs stay near base" from becoming a high-score solution.
+Connectivity is a standalone mission type, not just a global constraint.
 
-## Observation And State
-
-Each agent observation includes:
-
-- `self_state`
-- `neighbor_relative_states`
-- `task_field`
-- `candidate_waypoints`
-- `candidate_features`
-- `candidate_mask`
-- `task_id`
-- `global_summary`
-- `all_uav_states`
-- `comm_adjacency`
-
-The centralized critic state is available through:
-
-```python
-env.get_global_state()
-```
-
-It includes global task field, all UAV states, all candidate waypoints, candidate masks, communication adjacency, task id, global info, and agent mask.
-
-## MAPPO Waypoint
-
-`MAPPOWaypointPolicy` uses a shared per-agent categorical actor:
-
-- encodes the global task field with a CNN;
-- encodes all UAV states with a shared agent encoder and optional self-attention;
-- encodes each candidate waypoint and candidate feature;
-- outputs masked candidate logits `[B, N, K]`;
-- samples one categorical waypoint index per UAV;
-- returns per-agent `logprob [B, N]` and `entropy [B, N]`.
+## MAPPO
 
 `MAPPOWaypointTrainer` uses:
 
@@ -77,30 +98,52 @@ It includes global task field, all UAV states, all candidate waypoints, candidat
 - team advantage broadcast to agents in the first version;
 - centralized value loss over `[B]`;
 - separate `terminated` and `truncated` handling;
-- bootstrap on truncation, no bootstrap on true termination;
+- bootstrap on truncation and no bootstrap on true termination;
 - CSV metrics, TensorBoard, checkpoints, eval media, and `best_eval_summary.json`.
 
 ## Quick Start
 
-Run waypoint API tests:
+Run tests:
 
 ```bash
 python -m pytest tests/test_waypoint_env_api.py
+python -m pytest tests/test_action_adapters.py
+python -m pytest tests/test_mpe_particle_backend.py
 python -m pytest tests/test_waypoint_scenarios.py
 python -m pytest tests/test_waypoint_rewards.py
-python -m pytest tests/test_waypoint_mappo_policy.py
+python -m pytest tests/test_candidate_selection_policy.py
+python -m pytest tests/test_direct_waypoint_policy.py
 python -m pytest tests/test_mappo_waypoint_trainer.py
 python -m pytest tests/test_waypoint_rendering.py
 ```
 
-Run validation with random baseline, greedy heuristic baseline, 5-update MAPPO smoke, and one GIF:
+Validate candidate-selection MAPPO:
 
 ```bash
 python scripts/check/validate_waypoint_mappo.py \
   --tasks area_coverage belief_search connectivity_expansion \
+  --policy-class candidate_selection_waypoint \
+  --dynamics-backend mpe_particle \
+  --action-adapter waypoint_velocity_tracker \
   --num_agents 3 \
   --total_updates 5 \
   --eval_episodes 2 \
+  --record_eval_episodes 1 \
+  --record_format gif \
+  --headless
+```
+
+Validate direct waypoint MAPPO:
+
+```bash
+python scripts/check/validate_waypoint_mappo.py \
+  --tasks area_coverage belief_search \
+  --policy-class direct_waypoint \
+  --dynamics-backend mpe_particle \
+  --action-adapter waypoint_velocity_tracker \
+  --num_agents 3 \
+  --total_updates 2 \
+  --eval_episodes 1 \
   --record_eval_episodes 1 \
   --record_format gif \
   --headless
@@ -152,22 +195,9 @@ Waypoint training outputs go under:
 outputs/training/mappo_waypoint/<timestamp>/<run_name>/
 ```
 
-Each training run writes:
-
-- `training_metrics.csv`
-- `tensorboard/`
-- `checkpoints/checkpoint_XXXX.pt`
-- `checkpoints/checkpoint_best_eval.pt`
-- `best_eval_summary.json`
-- optional `media/eval_XXXX/*.gif` or `*.mp4`
+Each training run writes `training_metrics.csv`, TensorBoard logs, checkpoints, `best_eval_summary.json`, and optional GIF/MP4 eval media.
 
 View TensorBoard:
-
-```bash
-tensorboard --logdir outputs/training/mappo_waypoint --bind_all --port 6006
-```
-
-If `tensorboard` is not on PATH in the conda environment:
 
 ```bash
 /opt/conda/bin/tensorboard --logdir outputs/training/mappo_waypoint --bind_all --port 6006

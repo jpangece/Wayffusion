@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from envs.waypoint.candidates import merge_and_pad_candidates, radial_candidates_around_agent
 from envs.waypoint.world import MissionWorld
+from planners.waypoint_candidates import merge_and_pad_candidates, radial_candidates_around_agent
 from tasks.waypoint.base import WaypointScenario, path_length_delta, safety_penalty_count
 
 

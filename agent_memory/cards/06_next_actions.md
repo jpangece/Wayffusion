@@ -792,14 +792,20 @@ Active pure MAPPO all4 long run after 2026-06-05:
   - PPO stability diagnostics: `approx_kl`, `clip_frac`, `ratio_mean`, `policy_std_mean`, `grad_norm`
 - If pure MAPPO remains low-success while BC warm-start/factorized specialists are high-success, record that architecture-level agent-wise ratios alone are not sufficient and the remaining gap likely comes from sparse team reward/exploration/credit assignment rather than only joint-logprob scaling.
 
-Waypoint-level MARL next actions after 2026-06-05 refactor:
+Waypoint-level MARL note after 2026-06-05 refactor, superseded by 2026-06-06 final-waypoint action refactor:
 
-- New mainline is now:
+- Historical mainline at that time was:
   - env: `envs/waypoint_marl_env.py::WaypointMultiUAVEnv`
   - policy: `policies/mappo_waypoint_policy.py::MAPPOWaypointPolicy`
   - trainer: `algorithms/mappo_waypoint.py::MAPPOWaypointTrainer`
   - script: `scripts/train_mappo_waypoint.py`
   - config: `configs/env/waypoint_missions.yaml` and `configs/policy/mappo_waypoint*.yaml`
+- Current mainline after 2026-06-06:
+  - env action API: final waypoint `[2]`, not candidate index;
+  - candidate policy: `policies/candidate_selection_policy.py::CandidateSelectionWaypointPolicy`;
+  - direct policy: `policies/direct_waypoint_policy.py::DirectWaypointPolicy`;
+  - compatibility alias: `policies/mappo_waypoint_policy.py::MAPPOWaypointPolicy`;
+  - policy output contract: `policies/policy_output.py::PolicyOutput`.
 - Smoke status:
   - all six waypoint pytest commands passed;
   - `validate_waypoint_mappo.py` passed and generated GIFs;
@@ -845,3 +851,83 @@ After 2026-06-06 cleanup:
   - training:
     - `/opt/conda/bin/python scripts/train_mappo_waypoint.py --config configs/policy/mappo_waypoint.yaml --env-config configs/env/waypoint_missions.yaml --tasks area_coverage belief_search priority_inspection connectivity_expansion --num_agents 4 --num_envs 8 --total_updates 1000 --eval_episodes 20 --record_eval_episodes 2 --record_format gif --headless`
 - If someone needs old centralized code or old specialist PPO/BC scripts, recover from git history rather than reintroducing them into the MARL branch.
+
+Environment reference for future agents:
+
+- Read `docs/waypoint_environment_guide_zh.md` before modifying env/reward/policy code.
+- Treat these as the active contracts:
+  - env API: `WaypointMultiUAVEnv.reset/step/get_global_state`
+  - default action: per-agent final waypoint coordinate `[2]`
+  - action space: `Box([0,0], [map_size,map_size], shape=(2,))`
+  - candidate index mode: `action_mode=candidate_index_legacy` only for diagnostics
+  - policy output: `PolicyOutput(env_action, train_action, logprob, entropy, value, aux)`
+  - candidate-selection actor: internal categorical logits over `[B,N,K]`, but env receives final waypoint `[B,N,2]`
+  - direct actor: Gaussian delta `[B,N,2]`, clipped to final waypoint `[B,N,2]`
+  - critic input: global state from `get_global_state`
+  - reward output: `team_reward`, `per_agent_rewards`, `components`, `metrics`, `success`
+- If changing observation/action/policy-output fields, update:
+  - `docs/waypoint_environment_guide_zh.md`
+  - waypoint tests
+  - `CandidateSelectionWaypointPolicy` and/or `DirectWaypointPolicy`
+  - `MAPPOWaypointTrainer`
+  - `agent_memory/cards/03_recent_modifications.md`
+
+After 2026-06-06 final-waypoint action refactor:
+
+- Current valid validation commands:
+  - candidate-selection:
+    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --policy-class candidate_selection_waypoint --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless`
+  - direct waypoint:
+    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search --policy-class direct_waypoint --num_agents 3 --total_updates 2 --eval_episodes 1 --record_eval_episodes 1 --record_format gif --headless`
+- Recent validated outputs:
+  - `outputs/debug/waypoint_mappo_validation/20260606_waypoint_action_candidate_validate_v2/`
+  - `outputs/debug/waypoint_mappo_validation/20260606_waypoint_action_direct_validate_v2/`
+- Current pytest target:
+  - `/opt/conda/bin/python -m pytest -q tests/test_waypoint_env_api.py tests/test_waypoint_scenarios.py tests/test_waypoint_rewards.py tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rendering.py`
+- Next engineering work:
+  - run a longer pure MAPPO comparison between `candidate_selection_waypoint` and `direct_waypoint`;
+  - add `HybridPlannerWaypointPolicy` only if direct/candidate results show complementary weaknesses;
+  - improve candidate-selection features with task-specific expected gain, but keep generation in policy/planner, not env;
+  - consider per-agent or mixed advantage using stored `per_agent_rewards [T,B,N]`.
+
+After 2026-06-06 ActionAdapter + MPE-like dynamics refactor:
+
+- Current default transition stack:
+  - external action interface: final waypoint `[2]`
+  - safety: `SafetyLayer.validate_waypoints`
+  - adapter: `WaypointVelocityTracker`
+  - dynamics backend: `MPEParticleBackend`
+  - reward: current waypoint scenarios
+- Current debug/ablation options:
+  - `--dynamics-backend kinematic_point`
+  - `--action-adapter waypoint_pd_tracker`
+  - config: `configs/env/waypoint_missions_kinematic_debug.yaml`
+  - config: `configs/env/waypoint_missions_pd_adapter_debug.yaml`
+- Current valid validation commands:
+  - candidate-selection + MPE:
+    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --policy-class candidate_selection_waypoint --dynamics-backend mpe_particle --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless`
+  - direct waypoint + MPE:
+    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search --policy-class direct_waypoint --dynamics-backend mpe_particle --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 2 --eval_episodes 1 --record_eval_episodes 1 --record_format gif --headless`
+  - direct waypoint + kinematic debug:
+    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage --policy-class direct_waypoint --dynamics-backend kinematic_point --num_agents 3 --total_updates 1 --eval_episodes 1 --headless`
+- Recent validated outputs:
+  - `outputs/debug/waypoint_mappo_validation/20260606_mpe_candidate_validate_final_v2/`
+  - `outputs/debug/waypoint_mappo_validation/20260606_mpe_direct_validate_final/`
+  - `outputs/debug/waypoint_mappo_validation/20260606_kinematic_direct_validate_final/`
+- Current pytest target:
+  - `/opt/conda/bin/python -m pytest -q tests/test_waypoint_env_api.py tests/test_action_adapters.py tests/test_mpe_particle_backend.py tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rewards.py tests/test_waypoint_rendering.py`
+- Metrics to inspect in long runs:
+  - `eval_success_rate`
+  - `eval_action_validity_rate`
+  - `eval_mean_speed`
+  - `eval_max_speed_observed`
+  - `eval_mean_control_norm`
+  - `eval_collision_count`
+  - `eval_no_fly_violation_count`
+  - `eval_geofence_violation_count`
+  - task-specific coverage/search/POI/connectivity metrics
+- Next engineering work after smoke:
+  - run long pure MAPPO with default MPE backend for candidate-selection and direct policies;
+  - ablate `mpe_particle` vs `kinematic_point`;
+  - ablate `waypoint_velocity_tracker` vs `waypoint_pd_tracker`;
+  - consider per-agent advantage mixing only after dynamics learning curves are collected.

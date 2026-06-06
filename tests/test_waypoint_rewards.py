@@ -25,6 +25,8 @@ def _setup(task: str):
 def _execute_reward(world, scenario, state, selected):
     prev = world.snapshot()
     info = WaypointExecutionModel().execute(world, np.asarray(selected, dtype=np.float32))
+    for key in ["collision_count", "no_fly_violation_count", "geofence_violation_count"]:
+        info.setdefault(key, 0)
     return scenario.compute_rewards(prev, world, state, info)
 
 
