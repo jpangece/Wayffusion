@@ -1,4 +1,4 @@
-name: mappo_waypoint
+name: mappo_connectivity_expansion_specialist
 algorithm: mappo_waypoint
 policy_class: direct_waypoint
 num_envs: 8
@@ -9,14 +9,14 @@ minibatch_size: 512
 gamma: 0.99
 gae_lambda: 0.95
 clip_coef: 0.2
-ent_coef: 0.01
-vf_coef: 0.5
-learning_rate: 0.0002
+ent_coef: 0.02
+vf_coef: 0.75
+learning_rate: 0.0001
 max_grad_norm: 0.5
 reward_norm: true
 advantage_norm: true
 lr_schedule: linear
-target_kl: 0.03
+target_kl: 0.02
 eval_interval: 50
 cnn_channels: [16, 32, 64]
 agent_hidden_dim: 64

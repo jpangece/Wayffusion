@@ -39,9 +39,14 @@ class CandidateSelectionWaypointPolicy(nn.Module):
         grid_size: int = 32,
         max_waypoint_distance: float = 0.22,
         min_uav_distance: float = 0.035,
+        comm_radius: float = 0.36,
+        base_comm_radius: float = 0.45,
         no_fly_zones: list[dict] | None = None,
         base_position: list[float] | None = None,
         candidate_generator: str = "task_aware",
+        connectivity_candidate_filter: bool = True,
+        candidate_prior_coef: float = 0.0,
+        connectivity_chain_candidates: bool = False,
     ):
         super().__init__()
         del action_space
@@ -50,9 +55,14 @@ class CandidateSelectionWaypointPolicy(nn.Module):
         self.grid_size = int(grid_size)
         self.max_waypoint_distance = float(max_waypoint_distance)
         self.min_uav_distance = float(min_uav_distance)
+        self.comm_radius = float(comm_radius)
+        self.base_comm_radius = float(base_comm_radius)
         self.no_fly_zones = list(no_fly_zones or [])
         self.base_position = torch.tensor(base_position or [0.1, 0.1], dtype=torch.float32)
         self.candidate_generator = str(candidate_generator)
+        self.connectivity_candidate_filter = bool(connectivity_candidate_filter)
+        self.candidate_prior_coef = float(candidate_prior_coef)
+        self.connectivity_chain_candidates = bool(connectivity_chain_candidates)
 
         cnn_channels = cnn_channels or [16, 32, 64]
         task_field_space = observation_space["task_field"] if "task_field" in observation_space else observation_space["global_task_field"]
@@ -86,7 +96,7 @@ class CandidateSelectionWaypointPolicy(nn.Module):
             self.agent_attention = nn.MultiheadAttention(agent_hidden_dim, heads, batch_first=True)
             self.agent_attention_norm = nn.LayerNorm(agent_hidden_dim)
 
-        candidate_dim = 2 + 6
+        candidate_dim = 2 + 9
         self.candidate_encoder = nn.Sequential(
             nn.Linear(candidate_dim, candidate_hidden_dim),
             nn.ReLU(),
@@ -177,6 +187,102 @@ class CandidateSelectionWaypointPolicy(nn.Module):
                 mask &= ~inside
         return mask
 
+    def _connectivity_features(self, positions: torch.Tensor, candidates: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        base = self.base_position.to(dtype=candidates.dtype, device=candidates.device)
+        current_radius = torch.linalg.norm(positions - base.view(1, 1, 2), dim=-1).unsqueeze(-1)
+        candidate_radius = torch.linalg.norm(candidates - base.view(1, 1, 1, 2), dim=-1)
+        radial_gain = (candidate_radius - current_radius) / max(self.max_waypoint_distance, 1e-6)
+        radius_norm = candidate_radius / max(self.map_size, 1e-6)
+
+        base_margin = 1.0 - candidate_radius / max(self.base_comm_radius, 1e-6)
+        pair_dist = torch.linalg.norm(candidates.unsqueeze(3) - positions.unsqueeze(1).unsqueeze(1), dim=-1)
+        num_agents = positions.shape[1]
+        if num_agents > 0:
+            self_mask = torch.eye(num_agents, dtype=torch.bool, device=candidates.device).view(1, num_agents, 1, num_agents)
+            pair_dist = pair_dist.masked_fill(self_mask, 1.0e6)
+        nearest_neighbor = pair_dist.min(dim=-1).values
+        neighbor_margin = 1.0 - nearest_neighbor / max(self.comm_radius, 1e-6)
+        connectivity_margin = torch.maximum(base_margin, neighbor_margin)
+        return radial_gain, radius_norm, connectivity_margin
+
+    def _candidate_prior(self, task_id: torch.Tensor, candidate_features: torch.Tensor) -> torch.Tensor:
+        distance = candidate_features[..., 2]
+        unvisited = candidate_features[..., 3]
+        belief = candidate_features[..., 4]
+        radial_gain = candidate_features[..., 6]
+        connectivity_margin = candidate_features[..., 8]
+        stay_penalty = (distance < 1.0e-3).float()
+        area_prior = 1.5 * unvisited + 0.1 * distance - 0.3 * stay_penalty
+        belief_prior = 1.5 * belief + 0.5 * unvisited + 0.1 * distance - 0.3 * stay_penalty
+        target_prior = 0.8 * belief + 0.4 * unvisited + 0.1 * distance - 0.3 * stay_penalty
+        connectivity_prior = (
+            1.0 * unvisited
+            + 1.2 * radial_gain.clamp(min=0.0)
+            + 1.0 * connectivity_margin.clamp(min=-0.5)
+            + 0.2 * distance
+            - 0.5 * stay_penalty
+        )
+        weights = task_id.float()
+        priors = torch.stack([area_prior, belief_prior, target_prior, connectivity_prior, target_prior, target_prior], dim=-1)
+        if weights.shape[-1] < priors.shape[-1]:
+            pad = priors.shape[-1] - weights.shape[-1]
+            weights = torch.nn.functional.pad(weights, (0, pad))
+        weights = weights[:, : priors.shape[-1]]
+        weighted = (priors * weights[:, None, None, :]).sum(dim=-1)
+        fallback = area_prior + 0.5 * belief_prior
+        has_task = weights.sum(dim=-1) > 0.0
+        return torch.where(has_task[:, None, None], weighted, fallback)
+
+    def _inject_connectivity_candidates(self, obs: dict[str, torch.Tensor], positions: torch.Tensor, candidates: torch.Tensor) -> torch.Tensor:
+        if not self.connectivity_chain_candidates:
+            return candidates
+        if obs["task_id"].shape[-1] <= 3 or candidates.shape[2] <= 1:
+            return candidates
+        is_connectivity = obs["task_id"][:, 3].float() > 0.5
+        if not bool(is_connectivity.any()):
+            return candidates
+
+        batch_size, num_agents, candidate_count, _ = candidates.shape
+        base = self.base_position.to(dtype=candidates.dtype, device=candidates.device)
+        center = torch.full((2,), self.map_size * 0.5, dtype=candidates.dtype, device=candidates.device)
+        primary = center - base
+        primary_angle = torch.atan2(primary[1], primary[0])
+        if num_agents > 1:
+            role = torch.linspace(-0.7, 0.7, num_agents, dtype=candidates.dtype, device=candidates.device)
+            rank = torch.linspace(0.0, 1.0, num_agents, dtype=candidates.dtype, device=candidates.device)
+        else:
+            role = torch.zeros(1, dtype=candidates.dtype, device=candidates.device)
+            rank = torch.zeros(1, dtype=candidates.dtype, device=candidates.device)
+        angles = primary_angle + role
+        role_dirs = torch.stack([torch.cos(angles), torch.sin(angles)], dim=-1)
+        lateral_dirs = torch.stack([-role_dirs[:, 1], role_dirs[:, 0]], dim=-1)
+        target_radius = min(self.map_size * 0.85, self.base_comm_radius * 0.55) + rank * min(self.comm_radius * 0.85, self.map_size * 0.35)
+        role_targets = (base.view(1, 2) + role_dirs * target_radius.unsqueeze(-1)).clamp(0.0, self.map_size)
+
+        def local_step_to(target: torch.Tensor) -> torch.Tensor:
+            delta = target.unsqueeze(0) - positions
+            dist = torch.linalg.norm(delta, dim=-1, keepdim=True)
+            scale = torch.clamp(self.max_waypoint_distance / torch.clamp(dist, min=1.0e-6), max=1.0)
+            return (positions + delta * scale).clamp(0.0, self.map_size)
+
+        outward = positions - base.view(1, 1, 2)
+        outward_norm = torch.linalg.norm(outward, dim=-1, keepdim=True)
+        outward_dir = torch.where(outward_norm > 1.0e-6, outward / torch.clamp(outward_norm, min=1.0e-6), role_dirs.view(1, num_agents, 2))
+
+        proposals = [
+            local_step_to(role_targets),
+            (positions + outward_dir * self.max_waypoint_distance).clamp(0.0, self.map_size),
+            (positions + lateral_dirs.view(1, num_agents, 2) * self.max_waypoint_distance * 0.75).clamp(0.0, self.map_size),
+            (positions - lateral_dirs.view(1, num_agents, 2) * self.max_waypoint_distance * 0.75).clamp(0.0, self.map_size),
+        ]
+        start = max(1, candidate_count - len(proposals))
+        updated = candidates.clone()
+        selector = is_connectivity.view(batch_size, 1, 1)
+        for offset, proposal in enumerate(proposals[: candidate_count - start]):
+            slot = start + offset
+            updated[:, :, slot, :] = torch.where(selector, proposal, updated[:, :, slot, :])
+        return updated
+
     def generate_candidates(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         field = self._task_field(obs)
         agents = obs["all_uav_states"]
@@ -206,24 +312,45 @@ class CandidateSelectionWaypointPolicy(nn.Module):
                     point = torch.stack([x.float() + 0.5, y.float() + 0.5], dim=-1) / float(self.grid_size) * self.map_size
                     candidates[:, agent_idx, 1 + radial_count + local_idx, :] = point.to(candidates.dtype)
 
+        candidates = self._inject_connectivity_candidates(obs, positions, candidates)
         candidates = candidates.clamp(0.0, self.map_size)
         rel = candidates - positions.unsqueeze(2)
         distance = torch.linalg.norm(rel, dim=-1)
         mask = distance <= self.max_waypoint_distance + 1e-6
         mask &= self._no_fly_mask(candidates)
         mask &= self._agent_mask(obs, batch_size, num_agents).unsqueeze(-1)
+        radial_gain, radius_norm, connectivity_margin = self._connectivity_features(positions, candidates)
+        if self.connectivity_candidate_filter and obs["task_id"].shape[-1] > 3:
+            is_connectivity = obs["task_id"][:, 3].float() > 0.5
+            connected_candidate = connectivity_margin >= -1e-6
+            mask = torch.where(is_connectivity.view(batch_size, 1, 1), mask & connected_candidate, mask)
         empty = ~mask.any(dim=-1)
         if empty.any():
             empty_b, empty_n = empty.nonzero(as_tuple=True)
             candidates[empty_b, empty_n, 0, :] = positions[empty_b, empty_n]
             mask[empty_b, empty_n, 0] = True
 
+        rel = candidates - positions.unsqueeze(2)
+        distance = torch.linalg.norm(rel, dim=-1)
+        radial_gain, radius_norm, connectivity_margin = self._connectivity_features(positions, candidates)
         rel_norm = rel / max(self.map_size, 1e-6)
         dist_norm = distance.unsqueeze(-1) / max(self.max_waypoint_distance, 1e-6)
         unvisited = (1.0 - self._sample_field_values(field, candidates, 0)).unsqueeze(-1)
         belief = self._sample_field_values(field, candidates, 2).unsqueeze(-1)
         no_fly = self._no_fly_mask(candidates).float().unsqueeze(-1)
-        features = torch.cat([rel_norm, dist_norm, unvisited, belief, no_fly], dim=-1)
+        features = torch.cat(
+            [
+                rel_norm,
+                dist_norm,
+                unvisited,
+                belief,
+                no_fly,
+                radial_gain.clamp(-1.0, 1.0).unsqueeze(-1),
+                radius_norm.clamp(0.0, 2.0).unsqueeze(-1),
+                connectivity_margin.clamp(-1.0, 1.0).unsqueeze(-1),
+            ],
+            dim=-1,
+        )
         return candidates.float(), features.float(), mask.bool()
 
     def forward(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
@@ -240,6 +367,8 @@ class CandidateSelectionWaypointPolicy(nn.Module):
         actor_context = torch.cat([agent_tokens, field_per_agent, task_per_agent, global_per_agent], dim=-1)
         actor_context = self.actor_context(actor_context).unsqueeze(2).expand(-1, -1, candidate_count, -1)
         logits = self.logit_head(torch.tanh(actor_context + candidate_tokens)).squeeze(-1)
+        if self.candidate_prior_coef != 0.0:
+            logits = logits + float(self.candidate_prior_coef) * self._candidate_prior(obs["task_id"], candidate_features)
         logits = logits.masked_fill(~candidate_mask, -1.0e9)
         logits = logits.masked_fill(~agent_mask.unsqueeze(-1), -1.0e9)
 

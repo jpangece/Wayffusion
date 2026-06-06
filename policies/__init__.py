@@ -41,9 +41,14 @@ def build_policy(policy_config: dict, observation_space, action_space):
             grid_size=int(policy_config.get("grid_size", 32)),
             max_waypoint_distance=float(policy_config.get("max_waypoint_distance", 0.22)),
             min_uav_distance=float(policy_config.get("min_uav_distance", 0.035)),
+            comm_radius=float(policy_config.get("comm_radius", 0.36)),
+            base_comm_radius=float(policy_config.get("base_comm_radius", 0.45)),
             no_fly_zones=list(policy_config.get("no_fly_zones", [])),
             base_position=list(policy_config.get("base_position", [0.1, 0.1])),
             candidate_generator=str(policy_config.get("candidate_generator", "task_aware")),
+            connectivity_candidate_filter=bool(policy_config.get("connectivity_candidate_filter", True)),
+            candidate_prior_coef=float(policy_config.get("candidate_prior_coef", 0.0)),
+            connectivity_chain_candidates=bool(policy_config.get("connectivity_chain_candidates", False)),
         )
     if policy_class == "direct_waypoint":
         return DirectWaypointPolicy(

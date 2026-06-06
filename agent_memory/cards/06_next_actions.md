@@ -1009,3 +1009,100 @@ After 2026-06-06 WaypointVelocityTracker scale recalibration:
   - rerun candidate-selection MAPPO health with the new default config;
   - rerun direct-waypoint smoke because `max_delta` changed from `0.22` to `0.20` and the adapter response changed;
   - inspect whether direct policy still barely moves or now produces useful waypoint deltas.
+
+After first MAPPO specialist smoke:
+
+- New tuning controller:
+  - `scripts/debug/tune_mappo_specialists.py`
+- Specialist configs:
+  - `configs/policy/specialists/mappo_area_coverage.yaml`;
+  - `configs/policy/specialists/mappo_belief_search.yaml`;
+  - `configs/policy/specialists/mappo_priority_inspection.yaml`;
+  - `configs/policy/specialists/mappo_connectivity_expansion.yaml`.
+- First debug smoke output:
+  - `outputs/debug/mappo_specialists/20260606_specialist_smoke01/`
+- Current task status from 10-update smoke:
+  - `area_coverage`: `CONVERGED` under short smoke criteria only;
+  - `belief_search`: `CONVERGED` under short smoke criteria only;
+  - `priority_inspection`: `NEED_MORE_TUNING`;
+  - `connectivity_expansion`: `NEED_MORE_TUNING`.
+- Do not launch formal long training for all four tasks yet.
+- Recommended next tuning commands:
+  - continue debug sweep for priority:
+    - `/opt/conda/bin/python scripts/debug/tune_mappo_specialists.py --stage debug --tasks priority_inspection --debug-max-trials-per-task 6 --debug-total-updates 20 --debug-num-envs 4 --debug-rollout-steps 128 --debug-eval-interval 5 --debug-eval-episodes 4 --debug-record-eval-episodes 1 --record-format gif --headless`
+  - continue debug sweep for connectivity:
+    - `/opt/conda/bin/python scripts/debug/tune_mappo_specialists.py --stage debug --tasks connectivity_expansion --debug-max-trials-per-task 6 --debug-total-updates 20 --debug-num-envs 4 --debug-rollout-steps 128 --debug-eval-interval 5 --debug-eval-episodes 4 --debug-record-eval-episodes 1 --record-format gif --headless`
+- Once priority/connectivity show positive, stable debug trends:
+  - run formal training with `--stage training`, but keep output under `outputs/training/mappo_specialists/`.
+- Need inspect:
+  - why `priority_inspection` reward is strongly negative despite weighted completion around `0.65`;
+  - whether POI repeat/deadline/distance penalties dominate;
+  - why `connectivity_expansion` progress can reach `~0.46` but success remains `0`;
+  - whether success requires both coverage and effective radius or if connectivity action filtering makes behavior too conservative.
+
+After MAPPO specialist debug round 2:
+
+- `priority_inspection` is now debug-converged:
+  - output root: `outputs/debug/mappo_specialists/20260606_specialist_debug02/`;
+  - best run: `priority_inspection__cand__N4__E4__rs128__lr2e-4__seed0__poi_vf`;
+  - success `1.0`;
+  - weighted POI completion `0.7779122805078398`;
+  - reward `34.27439065393992`.
+- `connectivity_expansion` is still `NEED_MORE_TUNING`, not DONE.
+  - diagnostic outputs:
+    - `outputs/debug/mappo_specialists/20260606_connectivity_debug03/`;
+    - `outputs/debug/mappo_specialists/20260606_connectivity_aggressive04/`;
+    - `outputs/debug/mappo_specialists/20260606_connectivity_policyfeat05/`;
+    - `outputs/debug/mappo_specialists/20260606_connectivity_prior06/`;
+    - `outputs/debug/mappo_specialists/20260606_connectivity_lowent07/`;
+    - `outputs/debug/mappo_specialists/20260606_connectivity_chaincand08/`.
+  - best current observation:
+    - effective radius can pass `success_radius=0.45`;
+    - connectivity violation is usually `0.0`;
+    - coverage remains below `success_coverage=0.35`, with best observed around `0.277` in debug03 and around `0.23` in later feature/prior trials.
+  - greedy/random baseline under aggressive connectivity scale also fails:
+    - greedy coverage around `0.20`;
+    - random coverage around `0.29`;
+    - both success `0.0`.
+- Do not launch formal 1000-update training for `connectivity_expansion` yet.
+- Formal training can be considered for `area_coverage`, `belief_search`, and `priority_inspection`, but still needs longer seed/robustness validation before claiming final task completion.
+- Next connectivity work should prioritize:
+  - inspect task reward components and success geometry rather than lowering thresholds;
+  - improve connectivity-specific candidate generation toward higher area coverage without clustering;
+  - compare stochastic vs deterministic eval because deterministic categorical eval can collapse toward low-movement candidates when logits are weak;
+  - inspect whether action validity/safety filtering rejects too many rollout actions (`action_validity_rate` in some connectivity training runs remains around `0.90-0.93`);
+  - consider task-specific reward scaling that makes coverage gain dominate radius-only expansion once radius already exceeds `success_radius`.
+- Current code status:
+  - `connectivity_chain_candidates` exists as an optional policy experiment but defaults to `false` because the first chain/fan trial was too conservative.
+  - `candidate_prior_coef` exists but connectivity specialist default is reset to `0.0` because prior `0.08` did not improve convergence.
+  - candidate-level connectivity features remain available to the policy:
+    - radial gain;
+    - radius from base;
+    - communication margin.
+
+After switching specialist mainline to direct waypoint MAPPO:
+
+- Default MAPPO configs now use `policy_class: direct_waypoint`:
+  - `configs/policy/mappo_waypoint.yaml`;
+  - `configs/policy/mappo_waypoint_debug.yaml`;
+  - `configs/policy/specialists/mappo_area_coverage.yaml`;
+  - `configs/policy/specialists/mappo_belief_search.yaml`;
+  - `configs/policy/specialists/mappo_priority_inspection.yaml`;
+  - `configs/policy/specialists/mappo_connectivity_expansion.yaml`.
+- Direct MAPPO semantics:
+  - actor outputs continuous Gaussian delta per UAV;
+  - env receives final waypoint `[B, N, 2]`;
+  - PPO logprob/ratio/entropy are per-agent continuous-action quantities;
+  - no candidate index and no categorical candidate sampling in the default specialist path.
+- Candidate-selection results above should now be treated as historical baselines, not current specialist status.
+- Before any formal training, rerun direct-specialist debug sweeps for all four tasks:
+  - `/opt/conda/bin/python scripts/debug/tune_mappo_specialists.py --stage debug --tasks area_coverage belief_search priority_inspection connectivity_expansion --debug-max-trials-per-task 3 --debug-total-updates 20 --debug-num-envs 4 --debug-rollout-steps 128 --debug-eval-interval 5 --debug-eval-episodes 4 --debug-record-eval-episodes 1 --record-format gif --timestamp <timestamp> --headless`
+- First direct smoke results:
+  - `outputs/debug/mappo_specialists/20260606_direct_specialist_smoke/`;
+  - `outputs/debug/mappo_specialists/20260606_direct_default_train_smoke/`;
+  - both validate runtime only, not convergence.
+- Direct-policy tuning priorities:
+  - monitor `mean_distance_to_waypoint_m`, `mean_desired_speed_mps`, `arrival_rate`, `command_reject_rate`;
+  - if direct policy barely moves, increase exploration via `log_std_init` or task-specific LR before changing adapter;
+  - if action validity drops, reduce `max_delta`/`log_std_max` before changing env safety;
+  - compare stochastic training metrics against deterministic eval because Gaussian mean can collapse to near-zero deltas early.

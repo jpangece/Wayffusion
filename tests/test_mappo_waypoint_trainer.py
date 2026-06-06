@@ -19,9 +19,15 @@ def _base_env_config():
     return env_config
 
 
-def _train_config(path: str):
+def _train_config(path: str, policy_class: str | None = None):
     with open(path, "r", encoding="utf-8") as handle:
         train_config = yaml.safe_load(handle)
+    if policy_class is not None:
+        train_config["policy_class"] = policy_class
+    if train_config.get("policy_class") == "candidate_selection_waypoint":
+        train_config.setdefault("candidate_hidden_dim", 32)
+        train_config.setdefault("candidate_count", 12)
+        train_config.setdefault("candidate_generator", "task_aware")
     train_config["num_envs"] = 2
     train_config["rollout_steps"] = 4
     train_config["total_updates"] = 1
@@ -64,7 +70,7 @@ def _run_collect_update(env_config: dict, train_config: dict):
 
 
 def test_mappo_waypoint_collect_update_and_truncated_bootstrap_candidate_selection():
-    _run_collect_update(_base_env_config(), _train_config("configs/policy/mappo_waypoint_debug.yaml"))
+    _run_collect_update(_base_env_config(), _train_config("configs/policy/mappo_waypoint_debug.yaml", policy_class="candidate_selection_waypoint"))
 
 
 def test_mappo_waypoint_collect_update_direct_waypoint():

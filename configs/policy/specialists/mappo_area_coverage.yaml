@@ -1,4 +1,4 @@
-name: mappo_waypoint
+name: mappo_area_coverage_specialist
 algorithm: mappo_waypoint
 policy_class: direct_waypoint
 num_envs: 8

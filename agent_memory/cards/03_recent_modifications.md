@@ -4535,3 +4535,275 @@ Key follow-up result supporting the default:
 Documentation:
 
 - Added `docs/waypoint_adapter_calibration_zh.md`.
+
+### MAPPO task-specialist tuning scaffold and first smoke results
+
+Date: 2026-06-06
+
+User requested debugging MAPPO task specialists for the first four waypoint missions, without changing adapter/env architecture.
+
+Scope:
+
+- No adapter changes beyond the already-completed scale/logging work.
+- No env interface changes.
+- Original `scripts/train_mappo_waypoint.py` remains intact.
+- Added a separate tuning controller for task specialists.
+
+Implementation changes:
+
+- Added specialist policy configs:
+  - `configs/policy/specialists/mappo_area_coverage.yaml`;
+  - `configs/policy/specialists/mappo_belief_search.yaml`;
+  - `configs/policy/specialists/mappo_priority_inspection.yaml`;
+  - `configs/policy/specialists/mappo_connectivity_expansion.yaml`.
+- Added `scripts/debug/tune_mappo_specialists.py`.
+  - Writes debug runs under `outputs/debug/mappo_specialists/<timestamp>/<task>/<run_name>/`.
+  - Writes formal training runs under `outputs/training/mappo_specialists/<timestamp>/<task>/<run_name>/`.
+  - Generates structured run names:
+    - `<task>__<policy>__N<num_agents>__E<num_envs>__rs<rollout_steps>__lr<lr>__seed<seed>__<tag>`.
+  - Saves each run snapshot:
+    - `snapshot/train_config.yaml`;
+    - `snapshot/env_config.yaml`;
+    - `snapshot/tuning_trial.yaml`;
+    - `snapshot/metadata.json`.
+  - Reads `training_metrics.csv` and `eval_metrics.csv` after each run.
+  - Emits per-task `tuning_summary.json` / `tuning_report.md`.
+  - Task states are strict:
+    - `CONVERGED`;
+    - `NEED_MORE_TUNING`;
+    - `FAILED_RUNTIME`.
+  - `NEED_MORE_TUNING` is not considered complete.
+- Fixed tuning script metric selection:
+  - task-specific eval metrics like `eval_area_coverage_coverage_ratio_mean` are now preferred over rollout metrics like `coverage_ratio`;
+  - best eval record selection now sorts by `eval_success_rate`, task progress, then `eval_reward`.
+
+First debug smoke:
+
+- Command:
+  - `/opt/conda/bin/python scripts/debug/tune_mappo_specialists.py --stage debug --tasks area_coverage belief_search priority_inspection connectivity_expansion --debug-max-trials-per-task 1 --debug-total-updates 10 --debug-num-envs 4 --debug-rollout-steps 64 --debug-eval-interval 5 --debug-eval-episodes 2 --debug-record-eval-episodes 1 --record-format gif --timestamp 20260606_specialist_smoke01 --headless`
+- Output root:
+  - `outputs/debug/mappo_specialists/20260606_specialist_smoke01/`
+- Result:
+  - `area_coverage`: `CONVERGED` under short smoke criteria;
+    - best success `1.0`;
+    - best reward `73.0937132500112`;
+    - best task progress / coverage `0.56005859375`;
+    - action validity `1.0`.
+  - `belief_search`: `CONVERGED` under short smoke criteria;
+    - best success `1.0`;
+    - best reward `81.9534784237461`;
+    - best task progress / searched mass `0.5647410899400711`;
+    - action validity `1.0`.
+  - `priority_inspection`: `NEED_MORE_TUNING`;
+    - best success `0.5`;
+    - best reward `-930.1237250449311`;
+    - best weighted POI completion `0.6530649548810702`;
+    - reason: below success threshold `0.70`, recent eval reward declined, weighted completion below `0.70`.
+  - `connectivity_expansion`: `NEED_MORE_TUNING`;
+    - best success `0.0`;
+    - best reward `-400.09641907388936`;
+    - best progress `0.4568578451871872`;
+    - reason: success below `0.65`, recent eval reward declined.
+
+Important interpretation:
+
+- The first smoke confirms the single-task training/eval/checkpoint/media chain works for all four tasks.
+- `area_coverage` and `belief_search` passed short smoke success criteria, but this is not long-seed robustness.
+- `priority_inspection` and `connectivity_expansion` remain active tuning targets and must not be marked DONE.
+- Formal `outputs/training/mappo_specialists/` runs should only be launched after debug trials show stable positive trends.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile scripts/debug/tune_mappo_specialists.py` -> passed.
+- `/opt/conda/bin/python -m pytest tests/test_mappo_waypoint_trainer.py` -> `2 passed`.
+- `/opt/conda/bin/python -m pytest tests/test_candidate_selection_policy.py` -> `1 passed`.
+- `/opt/conda/bin/python -m pytest tests/test_direct_waypoint_policy.py` -> `1 passed`.
+- `/opt/conda/bin/python -m pytest tests/test_waypoint_env_api.py` -> `1 passed`.
+- `/opt/conda/bin/python -m pytest tests/test_action_adapters.py` -> `4 passed`.
+
+### MAPPO specialist debug round 2 and connectivity diagnosis
+
+Date: 2026-06-06
+
+Additional specialist debug runs:
+
+- `outputs/debug/mappo_specialists/20260606_specialist_debug02/`
+  - Command:
+    - `/opt/conda/bin/python scripts/debug/tune_mappo_specialists.py --stage debug --tasks priority_inspection connectivity_expansion --debug-max-trials-per-task 2 --debug-total-updates 20 --debug-num-envs 4 --debug-rollout-steps 128 --debug-eval-interval 5 --debug-eval-episodes 4 --debug-record-eval-episodes 1 --record-format gif --timestamp 20260606_specialist_debug02 --headless`
+  - `priority_inspection`: `CONVERGED` under debug criteria.
+    - best run: `priority_inspection__cand__N4__E4__rs128__lr2e-4__seed0__poi_vf`;
+    - best success `1.0`;
+    - best reward `34.27439065393992`;
+    - weighted POI completion `0.7779122805078398`;
+    - action validity `1.0`.
+  - `connectivity_expansion`: still `NEED_MORE_TUNING`.
+    - best run: `connectivity_expansion__cand__N4__E4__rs128__lr2e-4__seed0__safe_ent`;
+    - best success `0.0`;
+    - best reward `-373.90547214691503`;
+    - best progress `0.5533719062805176`;
+    - action validity `0.9875`.
+
+- `outputs/debug/mappo_specialists/20260606_connectivity_debug03/`
+  - Trials: `safe01`, `safe_ent`, `safe_lr3e-4`.
+  - Result: `connectivity_expansion` remained `NEED_MORE_TUNING`.
+  - Best observed coverage/radius details:
+    - `safe01`: coverage around `0.2058`, effective radius around `0.5737`;
+    - `safe_lr3e-4`: coverage up to `0.2771`, effective radius around `0.5016`;
+    - all had `success_rate=0.0`.
+  - Important diagnosis:
+    - failure is not primarily disconnection;
+    - `connectivity_violation_rate=0.0`, `connected_to_base_ratio=1.0`;
+    - success fails because `coverage_ratio` stays below `success_coverage=0.35`, even when `effective_explored_radius` exceeds `success_radius=0.45`.
+
+Policy-side connectivity experiments:
+
+- Added candidate-level connectivity features in `policies/candidate_selection_policy.py`:
+  - candidate radial gain from base;
+  - candidate radius from base;
+  - communication margin to base or nearest current UAV;
+  - optional connectivity candidate filter.
+- Added config/build wiring:
+  - `comm_radius`;
+  - `base_comm_radius`;
+  - `connectivity_candidate_filter`;
+  - `candidate_prior_coef`;
+  - optional `connectivity_chain_candidates`.
+- Updated config synchronization in:
+  - `scripts/train_mappo_waypoint.py`;
+  - `scripts/debug/tune_mappo_specialists.py`.
+- Added a `safe_aggressive` connectivity trial in the tuning script:
+  - `max_waypoint_distance=0.30`;
+  - `max_speed=0.05`;
+  - `action_adapter.max_command_distance=0.30`;
+  - `action_adapter.max_speed=0.05`;
+  - `action_adapter.max_accel=0.12`;
+  - `action_adapter.control_smoothing=0.60`;
+  - `dynamics_backend.substeps=20`.
+- Added a `safe_lowent_move` connectivity trial:
+  - `learning_rate=5e-4`;
+  - `epochs=6`;
+  - `ent_coef=0.003`;
+  - `target_kl=0.08`.
+
+Connectivity experiment outputs after policy-side changes:
+
+- `outputs/debug/mappo_specialists/20260606_connectivity_aggressive04/`
+  - pre-feature aggressive trial;
+  - success `0.0`;
+  - best progress `0.560656726360321`;
+  - coverage at best eval update around `0.1528`;
+  - eval action validity `0.99375`.
+- `outputs/debug/mappo_specialists/20260606_connectivity_policyfeat05/`
+  - connectivity feature/filter trial;
+  - success `0.0`;
+  - best progress `0.4930112436413765`;
+  - coverage around `0.2295`;
+  - eval action validity `0.9875`.
+- `outputs/debug/mappo_specialists/20260606_connectivity_prior06/`
+  - candidate prior trial with `candidate_prior_coef=0.08`;
+  - success `0.0`;
+  - best progress `0.5151231065392494`;
+  - coverage around `0.2266`;
+  - eval action validity `0.9875`;
+  - did not improve enough, so default specialist config was reset to `candidate_prior_coef=0.0`.
+- `outputs/debug/mappo_specialists/20260606_connectivity_lowent07/`
+  - lower entropy / stronger PPO update trial;
+  - success `0.0`;
+  - best progress `0.4156763479113579`;
+  - coverage around `0.1914`;
+  - `approx_kl` increased slightly but still very small; no convergence.
+- `outputs/debug/mappo_specialists/20260606_connectivity_chaincand08/`
+  - optional chain/fan candidate trial;
+  - success `0.0`;
+  - coverage around `0.1621`;
+  - action validity `1.0`;
+  - movement became safer but too conservative/clustered, so `connectivity_chain_candidates` is now optional and default `false`.
+
+Connectivity heuristic baselines:
+
+- Under aggressive connectivity scale:
+  - greedy heuristic:
+    - success `0.0`;
+    - coverage `0.1998291015625`;
+    - effective radius `0.33987389504909515`;
+    - no disconnection;
+  - random candidate policy:
+    - success `0.0`;
+    - coverage `0.2899169921875`;
+    - effective radius `0.4960554353892803`;
+    - no disconnection.
+- Interpretation:
+  - current connectivity task is not solved by simple greedy/random candidate behavior;
+  - PPO is not the only bottleneck;
+  - coverage target `0.35` is above current candidate/planner baseline;
+  - next work should inspect connectivity-specific candidate generation, reward balance, and possibly task-level coverage incentives, not only PPO hyperparameters.
+
+Current specialist status:
+
+- `area_coverage`: debug-converged in short smoke; needs longer robustness run before formal DONE.
+- `belief_search`: debug-converged in short smoke; needs longer robustness run before formal DONE.
+- `priority_inspection`: debug-converged in round 2; needs longer robustness run before formal DONE.
+- `connectivity_expansion`: `NEED_MORE_TUNING`; not converged.
+
+Verification after policy-side changes:
+
+- `/opt/conda/bin/python -m py_compile policies/candidate_selection_policy.py policies/__init__.py scripts/debug/tune_mappo_specialists.py scripts/train_mappo_waypoint.py` -> passed.
+- `/opt/conda/bin/python -m pytest tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py` -> `2 passed`.
+- `/opt/conda/bin/python -m pytest tests/test_mappo_waypoint_trainer.py tests/test_waypoint_env_api.py tests/test_action_adapters.py` -> `7 passed`.
+
+### Switched MAPPO specialist mainline to direct waypoint actions
+
+Date: 2026-06-06
+
+User requested changing from candidate-selection MAPPO to a purer MAPPO setup where the actor directly outputs target waypoints.
+
+Implemented behavior:
+
+- `DirectWaypointPolicy` is now the default MAPPO policy in:
+  - `configs/policy/mappo_waypoint.yaml`;
+  - `configs/policy/mappo_waypoint_debug.yaml`;
+  - all four specialist configs under `configs/policy/specialists/`.
+- The policy outputs a stochastic continuous per-agent delta during training:
+  - `train_action`: `[B, N, 2]` Gaussian delta for PPO logprob;
+  - `env_action`: `[B, N, 2]` final waypoint coordinate passed to `WaypointMultiUAVEnv`;
+  - deterministic eval uses delta mean.
+- This removes candidate waypoint generation/selection from the specialist mainline:
+  - no candidate index action;
+  - no categorical candidate policy in default specialist configs;
+  - no BC or heuristic warm start.
+- The environment action interface remains unchanged:
+  - env receives final waypoint coordinates.
+- Candidate-selection policy is retained only as an explicit alternative/test path:
+  - `tests/test_candidate_selection_policy.py` now forces `policy_class=candidate_selection_waypoint`;
+  - `tests/test_mappo_waypoint_trainer.py` explicitly tests both candidate and direct branches.
+
+Config details:
+
+- `max_delta=0.20`, synchronized with `max_waypoint_distance=0.20`.
+- `log_std_init=-0.8`, `log_std_min=-1.8`, `log_std_max=0.1`.
+- Direct specialist run names now contain `__direct__` instead of `__cand__`.
+
+Smoke validation:
+
+- Direct specialist tuning smoke:
+  - command:
+    - `/opt/conda/bin/python scripts/debug/tune_mappo_specialists.py --stage debug --tasks area_coverage --debug-max-trials-per-task 1 --debug-total-updates 1 --debug-num-envs 2 --debug-rollout-steps 16 --debug-eval-interval 1 --debug-eval-episodes 1 --debug-record-eval-episodes 0 --timestamp 20260606_direct_specialist_smoke --headless`
+  - output:
+    - `outputs/debug/mappo_specialists/20260606_direct_specialist_smoke/area_coverage/area_coverage__direct__N4__E2__rs16__lr2e-4__seed0__dbg01/`
+  - result:
+    - chain works; one-update smoke is not a performance conclusion;
+    - eval success `0.0`, coverage `0.3134765625`.
+- Default train entry smoke:
+  - command:
+    - `/opt/conda/bin/python scripts/train_mappo_waypoint.py --config configs/policy/mappo_waypoint_debug.yaml --env-config configs/env/waypoint_missions.yaml --tasks area_coverage --num_agents 3 --num_envs 2 --total_updates 1 --rollout_steps 16 --eval_interval 1 --eval_episodes 1 --record_eval_episodes 0 --run_name direct_default_smoke --output-dir outputs/debug/mappo_specialists/20260606_direct_default_train_smoke/area_coverage/direct_default_smoke --headless --no-tensorboard`
+  - output:
+    - `outputs/debug/mappo_specialists/20260606_direct_default_train_smoke/area_coverage/direct_default_smoke/`
+  - result:
+    - direct default config loads and trains;
+    - printed `update=1 reward=0.382 eval_success=0.000 eval_reward=-0.760`.
+
+Verification after direct-mainline switch:
+
+- `/opt/conda/bin/python -m py_compile policies/direct_waypoint_policy.py policies/candidate_selection_policy.py policies/__init__.py scripts/train_mappo_waypoint.py scripts/debug/tune_mappo_specialists.py tests/test_candidate_selection_policy.py tests/test_mappo_waypoint_trainer.py` -> passed.
+- `/opt/conda/bin/python -m pytest tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py` -> `4 passed`.
+- `/opt/conda/bin/python -m pytest tests/test_waypoint_env_api.py tests/test_action_adapters.py` -> `5 passed`.

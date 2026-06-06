@@ -12,6 +12,10 @@ def _configs(num_agents: int):
         env_config = yaml.safe_load(handle)
     with open("configs/policy/mappo_waypoint_debug.yaml", "r", encoding="utf-8") as handle:
         policy_config = yaml.safe_load(handle)
+    policy_config["policy_class"] = "candidate_selection_waypoint"
+    policy_config["candidate_hidden_dim"] = 32
+    policy_config["candidate_count"] = 12
+    policy_config["candidate_generator"] = "task_aware"
     env_config["num_agents"] = num_agents
     policy_config["map_size"] = env_config["map_size"]
     policy_config["grid_size"] = env_config["grid_size"]

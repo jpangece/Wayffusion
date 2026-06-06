@@ -39,7 +39,17 @@ def safe_name(value: str) -> str:
 
 
 def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
-    for key in ["map_size", "grid_size", "max_waypoint_distance", "min_uav_distance", "base_position", "no_fly_zones"]:
+    for key in [
+        "map_size",
+        "grid_size",
+        "max_waypoint_distance",
+        "min_uav_distance",
+        "comm_radius",
+        "base_comm_radius",
+        "base_position",
+        "no_fly_zones",
+        "connectivity_candidate_filter",
+    ]:
         if key in env_config:
             train_config[key] = env_config[key]
     if "max_delta" not in train_config and "max_waypoint_distance" in env_config:

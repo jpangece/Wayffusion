@@ -1,4 +1,4 @@
-name: mappo_waypoint
+name: mappo_priority_inspection_specialist
 algorithm: mappo_waypoint
 policy_class: direct_waypoint
 num_envs: 8
@@ -10,7 +10,7 @@ gamma: 0.99
 gae_lambda: 0.95
 clip_coef: 0.2
 ent_coef: 0.01
-vf_coef: 0.5
+vf_coef: 0.75
 learning_rate: 0.0002
 max_grad_norm: 0.5
 reward_norm: true
