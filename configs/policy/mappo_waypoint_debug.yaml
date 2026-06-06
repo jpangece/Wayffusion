@@ -28,7 +28,7 @@ candidate_count: 12
 candidate_generator: task_aware
 map_size: 1.0
 grid_size: 32
-max_waypoint_distance: 0.22
+max_waypoint_distance: 0.20
 base_position: [0.10, 0.10]
 no_fly_zones:
   - center: [0.55, 0.55]

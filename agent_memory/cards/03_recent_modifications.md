@@ -4411,3 +4411,127 @@ Verification:
 - A non-sending env-file mapping check confirmed:
   - `missing_after_env_file=none`;
   - `WAYFFUSION_SMTP_USE_TLS` configured.
+
+### Waypoint renderer visual polish
+
+Date: 2026-06-06
+
+User requested prettier saved visualization and suggested drone icons. I avoided downloading external icon assets to avoid copyright/license and path dependency issues, and instead implemented a procedural vector quadrotor glyph directly in Matplotlib.
+
+Modified:
+
+- `envs/waypoint/rendering.py`
+
+Visual changes:
+
+- Replaced plain UAV scatter dots with a vector drone glyph:
+  - four arms;
+  - motor circles;
+  - dark central body;
+  - colored nose triangle indicating heading;
+  - `U{id}` label with white outline;
+  - disconnected UAVs still use red styling.
+- Added a warmer mission-map visual style:
+  - parchment-like background;
+  - subtle grid;
+  - custom coverage/belief/visit colormaps;
+  - cleaner title/HUD line.
+- Improved no-fly zones:
+  - translucent red fill;
+  - red border;
+  - hatch pattern;
+  - `NO-FLY` label with outline.
+- Improved base, waypoint, candidate, trajectory, velocity, POI, target, and communication-link styling.
+- Figure size/resolution increased from `5x5 @ 120 dpi` to `6x6 @ 130 dpi`, producing `780x780` RGB frames.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile envs/waypoint/rendering.py` -> passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_waypoint_rendering.py tests/test_waypoint_env_api.py` -> `2 passed`.
+- Preview image generated:
+  - `outputs/debug/rendering_preview/waypoint_render_preview.png`
+  - shape `(780, 780, 3)`, dtype `uint8`.
+
+Note:
+
+- Some preview UAVs appear near/clipped at the left boundary because the current baseline waypoint/dynamics behavior can drive agents close to the geofence. This is an environment/control issue already reflected by the adapter calibration `geofence_violation_rate`, not a renderer failure.
+
+### WaypointVelocityTracker scale recalibration
+
+Date: 2026-06-06
+
+User corrected the direction: do not add `RealDroneWaypointTracker`, do not change the env action interface, and keep using the existing `waypoint_velocity_tracker`. The work therefore focused on parameter scale, config synchronization, and logging diagnostics.
+
+Implementation changes:
+
+- `envs/waypoint/control/action_adapters.py`
+  - kept `WaypointVelocityTracker` as the default adapter;
+  - added `meters_per_unit` support, defaulting to `100.0`;
+  - added adapter diagnostics:
+    - `mean_distance_to_waypoint_m`;
+    - `arrival_rate`;
+    - `command_update_rate`;
+    - `command_reject_rate`;
+    - `mean_desired_speed_mps`;
+    - raw/clipped waypoint and per-agent arrived/update/reject masks in full adapter output.
+- `envs/waypoint_marl_env.py`
+  - changed default internal adapter scale to the calibrated short-waypoint setting;
+  - exposed the new adapter diagnostics in per-agent `info`.
+- `algorithms/mappo_waypoint.py`
+  - added rollout/eval logging for the new adapter diagnostics.
+- `utils/waypoint_evaluation.py`
+  - added adapter diagnostics to eval records.
+- Configs synchronized:
+  - `configs/env/waypoint_missions.yaml`;
+  - `configs/env/waypoint_missions_pd_adapter_debug.yaml`;
+  - `configs/policy/mappo_waypoint.yaml`;
+  - `configs/policy/mappo_waypoint_debug.yaml`;
+  - `configs/policy/direct_waypoint_debug.yaml`.
+- New profile configs:
+  - `configs/env/adapters/waypoint_velocity_tracker_conservative.yaml`;
+  - `configs/env/adapters/waypoint_velocity_tracker_default.yaml`;
+  - `configs/env/adapters/waypoint_velocity_tracker_aggressive.yaml`.
+- `scripts/check/calibrate_waypoint_adapter.py`
+  - updated old high-control search space to the current 100m/unit scale;
+  - now includes `max_speed` and `substeps` in staged calibration settings;
+  - synchronizes env `max_waypoint_distance`, adapter `max_command_distance`, top-level/dynamics `max_speed`, and `dt_decision`.
+- Tests updated:
+  - `tests/test_action_adapters.py`;
+  - `tests/test_waypoint_env_api.py`;
+  - `tests/test_mappo_waypoint_trainer.py`.
+
+Calibration outputs:
+
+- `outputs/debug/waypoint_adapter_scale_calibration_20260606/`
+- `outputs/debug/waypoint_adapter_scale_calibration_20260606_refined/`
+
+Important calibration findings:
+
+- `max_waypoint_distance=0.50` is too wide for the default local coverage/search/inspection setting. It behaves like a 50m per-decision target radius on a 100m map and produced worse tracking/action-validity behavior in probes.
+- `dt=0.1, substeps=10` gives roughly one second per env decision. It was safer in some cases but tracked local waypoint targets poorly.
+- `dt=0.1, substeps=20` gives roughly two seconds per env decision. It better matches a waypoint-replanning abstraction and improved local tracking/task progress.
+- Very low `max_accel` values from the physical intuition sweep (`0.015`, `0.025`, `0.040`) are too soft under real MPE core damping; they do not reach useful tracking speed in this backend. This does not mean real drones need high acceleration, only that MPE `action.u` is a force-like control with damping.
+
+Selected default:
+
+- `max_waypoint_distance = action_adapter.max_command_distance = policy.max_waypoint_distance = direct max_delta = 0.20` (`20m`);
+- `max_speed = action_adapter.max_speed = dynamics_backend.max_speed = 0.04` (`4m/s`);
+- `dynamics_backend.dt = 0.1`, `substeps = 20`, so one env step is about `2s`;
+- `slowdown_radius = 0.08` (`8m`);
+- `acceptance_radius = 0.020` (`2m`);
+- `velocity_gain = 4.0`;
+- `max_accel = 0.10`;
+- `control_smoothing = 0.45`.
+
+Key follow-up result supporting the default:
+
+- `def_020_s04_a100_2s`:
+  - score `1.922`;
+  - probe arrival `0.50`;
+  - task progress `0.191`;
+  - heuristic task success mean `1.00`;
+  - task no-fly/geofence corrections `0 / 0`.
+
+Documentation:
+
+- Added `docs/waypoint_adapter_calibration_zh.md`.

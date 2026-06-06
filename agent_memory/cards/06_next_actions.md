@@ -957,3 +957,55 @@ After 2026-06-06 real MPE core backend replacement:
   - Latest debug report:
     - `outputs/debug/final_debug_report.md`;
     - SMTP send status: `outputs/debug/email_sent.json`.
+
+After 2026-06-06 WaypointVelocityTracker scale recalibration:
+
+- Do not add `RealDroneWaypointTracker` unless the user explicitly reverses the latest instruction. The active adapter remains:
+  - `action_adapter.name=waypoint_velocity_tracker`.
+- Active default scale:
+  - `map_size=1.0` means roughly `100m x 100m`;
+  - `max_waypoint_distance=max_command_distance=0.20` (`20m`);
+  - `max_speed=0.04` (`4m/s`);
+  - `dynamics_backend.dt=0.1`, `substeps=20`, so one env decision is about `2s`;
+  - `acceptance_radius=0.020` (`2m`);
+  - `slowdown_radius=0.08` (`8m`);
+  - `velocity_gain=4.0`, `max_accel=0.10`, `control_smoothing=0.45`.
+- The following files must stay synchronized:
+  - `configs/env/waypoint_missions.yaml`:
+    - `max_waypoint_distance`;
+    - `max_speed`;
+    - `action_adapter.max_command_distance`;
+    - `action_adapter.max_speed`;
+    - `dynamics_backend.max_speed`;
+  - `configs/policy/mappo_waypoint.yaml`:
+    - `max_waypoint_distance`;
+  - `configs/policy/mappo_waypoint_debug.yaml`:
+    - `max_waypoint_distance`;
+  - `configs/policy/direct_waypoint_debug.yaml`:
+    - `max_delta`.
+- New adapter profiles:
+  - `configs/env/adapters/waypoint_velocity_tracker_conservative.yaml`;
+  - `configs/env/adapters/waypoint_velocity_tracker_default.yaml`;
+  - `configs/env/adapters/waypoint_velocity_tracker_aggressive.yaml`.
+- Latest calibration outputs:
+  - `outputs/debug/waypoint_adapter_scale_calibration_20260606/`;
+  - `outputs/debug/waypoint_adapter_scale_calibration_20260606_refined/`.
+- Key result:
+  - `def_020_s04_a100_2s` was the selected default:
+    - score `1.922`;
+    - local probe arrival `0.50`;
+    - task progress `0.191`;
+    - heuristic task success mean `1.00`;
+    - task no-fly/geofence corrections `0 / 0`.
+- Updated docs:
+  - `docs/waypoint_adapter_calibration_zh.md`.
+- New diagnostics now available in env info, rollout CSV, and eval records:
+  - `mean_distance_to_waypoint_m`;
+  - `arrival_rate`;
+  - `command_update_rate`;
+  - `command_reject_rate`;
+  - `mean_desired_speed_mps`.
+- Recommended next validation:
+  - rerun candidate-selection MAPPO health with the new default config;
+  - rerun direct-waypoint smoke because `max_delta` changed from `0.22` to `0.20` and the adapter response changed;
+  - inspect whether direct policy still barely moves or now produces useful waypoint deltas.

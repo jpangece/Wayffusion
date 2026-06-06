@@ -49,6 +49,11 @@ def _run_collect_update(env_config: dict, train_config: dict):
     assert np.isfinite(stats["mean_speed"])
     assert np.isfinite(stats["max_speed_observed"])
     assert np.isfinite(stats["mean_control_norm"])
+    assert np.isfinite(stats["mean_distance_to_waypoint_m"])
+    assert np.isfinite(stats["mean_desired_speed_mps"])
+    assert 0.0 <= stats["arrival_rate"] <= 1.0
+    assert 0.0 <= stats["command_update_rate"] <= 1.0
+    assert 0.0 <= stats["command_reject_rate"] <= 1.0
     assert stats["uses_real_mpe_core"] == 1.0
     assert stats["mpe_world_step_calls"] > 0.0
     update_stats = trainer.update(batch)

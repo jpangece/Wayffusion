@@ -43,6 +43,7 @@ class WaypointVelocityTracker:
     def __init__(self, config: dict[str, Any] | None = None):
         cfg = dict(config or {})
         self.name = "waypoint_velocity_tracker"
+        self.meters_per_unit = float(cfg.get("meters_per_unit", 100.0))
         self.max_command_distance = float(cfg.get("max_command_distance", 0.22))
         self.max_speed = float(cfg.get("max_speed", 0.08))
         self.slowdown_radius = float(cfg.get("slowdown_radius", 0.12))
@@ -86,6 +87,7 @@ class WaypointVelocityTracker:
         return self.latency_buffer.pop(0)
 
     def adapt(self, world: MissionWorld, waypoint_actions: np.ndarray, safety_info=None) -> AdapterOutput:
+        raw_waypoints = np.asarray(waypoint_actions, dtype=np.float32).copy()
         clipped = self._sanitize_waypoints(world, waypoint_actions)
         clipped = self._apply_latency(clipped)
         positions = world.get_uav_positions()
@@ -98,6 +100,8 @@ class WaypointVelocityTracker:
         if self.hover_when_arrived:
             desired[distance < self.acceptance_radius] = 0.0
 
+        desired_speed = np.linalg.norm(desired, axis=-1)
+        arrived = distance < self.acceptance_radius
         raw_control = self.velocity_gain * (desired - velocities)
         raw_control = _limit_norm(raw_control, self.max_accel)
         if self.tracking_noise_std > 0.0:
@@ -113,10 +117,13 @@ class WaypointVelocityTracker:
         accepted = np.ones(len(world.uavs), dtype=bool)
         if safety_info is not None and hasattr(safety_info, "valid_mask"):
             accepted = np.asarray(safety_info.valid_mask, dtype=bool).copy()
+        command_rejected = ~accepted
         for idx, uav in enumerate(world.uavs):
             uav.current_waypoint = clipped[idx].copy()
             uav.last_desired_velocity = desired[idx].copy()
         control_norms = np.linalg.norm(controls, axis=-1).astype(np.float32)
+        distance_m = distance.astype(np.float32) * float(self.meters_per_unit)
+        desired_speed_mps = desired_speed.astype(np.float32) * float(self.meters_per_unit)
         return AdapterOutput(
             controls=controls.astype(np.float32),
             desired_velocities=desired.astype(np.float32),
@@ -125,10 +132,27 @@ class WaypointVelocityTracker:
             control_norms=control_norms,
             info={
                 "adapter_name": self.name,
+                "meters_per_unit": float(self.meters_per_unit),
+                "raw_waypoints": raw_waypoints.astype(np.float32),
+                "distance_to_waypoint": distance.astype(np.float32),
+                "distance_to_waypoint_m": distance_m.astype(np.float32),
+                "arrived_mask": arrived.astype(bool),
+                "command_updated_mask": accepted.astype(bool),
+                "command_rejected_mask": command_rejected.astype(bool),
                 "adapter_finite": bool(np.isfinite(controls).all() and np.isfinite(desired).all()),
+                "mean_distance_to_waypoint": float(distance.mean()) if len(distance) else 0.0,
+                "mean_distance_to_waypoint_m": float(distance_m.mean()) if len(distance_m) else 0.0,
+                "arrival_rate": float(arrived.mean()) if len(arrived) else 0.0,
+                "command_update_rate": float(accepted.mean()) if len(accepted) else 1.0,
+                "command_reject_rate": float(command_rejected.mean()) if len(command_rejected) else 0.0,
                 "mean_control_norm": float(control_norms.mean()) if len(control_norms) else 0.0,
                 "max_control_norm": float(control_norms.max()) if len(control_norms) else 0.0,
-                "mean_desired_speed": float(np.linalg.norm(desired, axis=-1).mean()) if len(desired) else 0.0,
+                "mean_desired_speed": float(desired_speed.mean()) if len(desired_speed) else 0.0,
+                "mean_desired_speed_mps": float(desired_speed_mps.mean()) if len(desired_speed_mps) else 0.0,
+                "max_speed_mps": float(self.max_speed * self.meters_per_unit),
+                "max_command_distance_m": float(self.max_command_distance * self.meters_per_unit),
+                "slowdown_radius_m": float(self.slowdown_radius * self.meters_per_unit),
+                "acceptance_radius_m": float(self.acceptance_radius * self.meters_per_unit),
                 "acceptance_radius": float(self.acceptance_radius),
             },
         )

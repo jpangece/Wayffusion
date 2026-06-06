@@ -158,6 +158,11 @@ class MAPPOWaypointTrainer:
         mean_speeds = []
         max_speeds = []
         mean_control_norms = []
+        mean_distance_to_waypoint_m = []
+        arrival_rates = []
+        command_update_rates = []
+        command_reject_rates = []
+        mean_desired_speed_mps = []
         collision_counts = []
         no_fly_counts = []
         geofence_counts = []
@@ -213,6 +218,11 @@ class MAPPOWaypointTrainer:
                 mean_speeds.append(float(info.get("mean_speed", 0.0)))
                 max_speeds.append(float(info.get("max_speed_observed", 0.0)))
                 mean_control_norms.append(float(info.get("mean_control_norm", 0.0)))
+                mean_distance_to_waypoint_m.append(float(info.get("mean_distance_to_waypoint_m", 0.0)))
+                arrival_rates.append(float(info.get("arrival_rate", 0.0)))
+                command_update_rates.append(float(info.get("command_update_rate", 1.0)))
+                command_reject_rates.append(float(info.get("command_reject_rate", 0.0)))
+                mean_desired_speed_mps.append(float(info.get("mean_desired_speed_mps", 0.0)))
                 collision_counts.append(float(info.get("collision_count", 0.0)))
                 no_fly_counts.append(float(info.get("no_fly_violation_count", 0.0)))
                 geofence_counts.append(float(info.get("geofence_violation_count", 0.0)))
@@ -256,6 +266,11 @@ class MAPPOWaypointTrainer:
             "mean_speed": float(np.mean(mean_speeds)) if mean_speeds else 0.0,
             "max_speed_observed": float(np.max(max_speeds)) if max_speeds else 0.0,
             "mean_control_norm": float(np.mean(mean_control_norms)) if mean_control_norms else 0.0,
+            "mean_distance_to_waypoint_m": float(np.mean(mean_distance_to_waypoint_m)) if mean_distance_to_waypoint_m else 0.0,
+            "arrival_rate": float(np.mean(arrival_rates)) if arrival_rates else 0.0,
+            "command_update_rate": float(np.mean(command_update_rates)) if command_update_rates else 1.0,
+            "command_reject_rate": float(np.mean(command_reject_rates)) if command_reject_rates else 0.0,
+            "mean_desired_speed_mps": float(np.mean(mean_desired_speed_mps)) if mean_desired_speed_mps else 0.0,
             "collision_count": float(np.sum(collision_counts)) if collision_counts else 0.0,
             "no_fly_violation_count": float(np.sum(no_fly_counts)) if no_fly_counts else 0.0,
             "geofence_violation_count": float(np.sum(geofence_counts)) if geofence_counts else 0.0,
@@ -395,6 +410,11 @@ class MAPPOWaypointTrainer:
             "eval_mean_speed": float(overall.get("mean_speed_mean", 0.0)),
             "eval_max_speed_observed": float(overall.get("max_speed_observed_mean", 0.0)),
             "eval_mean_control_norm": float(overall.get("mean_control_norm_mean", 0.0)),
+            "eval_mean_distance_to_waypoint_m": float(overall.get("mean_distance_to_waypoint_m_mean", 0.0)),
+            "eval_arrival_rate": float(overall.get("arrival_rate_mean", 0.0)),
+            "eval_command_update_rate": float(overall.get("command_update_rate_mean", 1.0)),
+            "eval_command_reject_rate": float(overall.get("command_reject_rate_mean", 0.0)),
+            "eval_mean_desired_speed_mps": float(overall.get("mean_desired_speed_mps_mean", 0.0)),
             "eval_collision_count": float(overall.get("collision_count_mean", 0.0)),
             "eval_no_fly_violation_count": float(overall.get("no_fly_violation_count_mean", 0.0)),
             "eval_geofence_violation_count": float(overall.get("geofence_violation_count_mean", 0.0)),

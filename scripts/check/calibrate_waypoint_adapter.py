@@ -26,12 +26,14 @@ from utils.waypoint_vector_env import make_waypoint_env_batch
 
 
 PARAM_SPACE = {
-    "max_command_distance": [0.16, 0.20, 0.22, 0.26],
-    "slowdown_radius": [0.08, 0.10, 0.12, 0.16, 0.20],
-    "velocity_gain": [2.0, 3.0, 4.0, 5.0, 6.0],
-    "max_accel": [0.12, 0.18, 0.25, 0.35, 0.45],
-    "control_smoothing": [0.20, 0.35, 0.50, 0.70, 1.00],
-    "acceptance_radius": [0.015, 0.025, 0.035],
+    "max_command_distance": [0.15, 0.20, 0.25, 0.30],
+    "max_speed": [0.03, 0.04, 0.05],
+    "slowdown_radius": [0.05, 0.08, 0.10],
+    "velocity_gain": [3.0, 4.0, 5.0],
+    "max_accel": [0.04, 0.08, 0.10, 0.12],
+    "control_smoothing": [0.30, 0.45, 0.60],
+    "acceptance_radius": [0.015, 0.020, 0.030],
+    "substeps": [10, 20],
 }
 FIXED_ADAPTER = {
     "name": "waypoint_velocity_tracker",
@@ -40,6 +42,15 @@ FIXED_ADAPTER = {
     "tracking_noise_std": 0.0,
     "clip_to_geofence": True,
     "reject_no_fly_waypoints": True,
+}
+ADAPTER_SETTING_KEYS = {
+    "max_command_distance",
+    "max_speed",
+    "slowdown_radius",
+    "velocity_gain",
+    "max_accel",
+    "control_smoothing",
+    "acceptance_radius",
 }
 PROBES = [
     "single_step_far",
@@ -76,7 +87,9 @@ def deep_update(base: dict, override: dict) -> dict:
 
 
 def adapter_config(setting: dict[str, float]) -> dict:
-    return {**FIXED_ADAPTER, **{key: float(value) for key, value in setting.items()}}
+    cfg = {**FIXED_ADAPTER, "meters_per_unit": 100.0}
+    cfg.update({key: float(setting[key]) for key in ADAPTER_SETTING_KEYS if key in setting})
+    return cfg
 
 
 def env_config_for(base: dict, task: str, num_agents: int, seed: int, setting: dict[str, float]) -> dict:
@@ -89,29 +102,37 @@ def env_config_for(base: dict, task: str, num_agents: int, seed: int, setting: d
     cfg["action_interface"] = "waypoint"
     cfg["execution_model"] = "mpe_core"
     cfg["strict_source"] = True
+    cfg["physical_scale"] = {"meters_per_unit": 100.0}
+    cfg["max_waypoint_distance"] = float(setting.get("max_command_distance", cfg.get("max_waypoint_distance", 0.20)))
+    cfg["max_speed"] = float(setting.get("max_speed", cfg.get("max_speed", 0.04)))
+    cfg["dt_decision"] = float(setting.get("dt", 0.1)) * float(setting.get("substeps", cfg.get("dynamics_backend", {}).get("substeps", 20)))
     cfg["action_adapter"] = adapter_config(setting)
     cfg.setdefault("dynamics_backend", {})
     cfg["dynamics_backend"]["name"] = "mpe_core"
     cfg["dynamics_backend"]["source"] = "third_party_openai_mpe"
+    cfg["dynamics_backend"]["dt"] = float(setting.get("dt", cfg["dynamics_backend"].get("dt", 0.1)))
+    cfg["dynamics_backend"]["substeps"] = int(setting.get("substeps", cfg["dynamics_backend"].get("substeps", 20)))
+    cfg["dynamics_backend"]["max_speed"] = float(setting.get("max_speed", cfg["dynamics_backend"].get("max_speed", cfg["max_speed"])))
     return cfg
 
 
 def generate_settings(search_mode: str, max_settings: int) -> list[dict[str, float]]:
     base = {
-        "max_command_distance": 0.22,
-        "slowdown_radius": 0.12,
+        "max_command_distance": 0.20,
+        "max_speed": 0.04,
+        "slowdown_radius": 0.08,
         "velocity_gain": 4.0,
-        "max_accel": 0.25,
-        "control_smoothing": 0.35,
-        "acceptance_radius": 0.025,
+        "max_accel": 0.10,
+        "control_smoothing": 0.45,
+        "acceptance_radius": 0.020,
+        "substeps": 20,
     }
     staged = [
         base,
-        {**base, "max_command_distance": 0.16, "slowdown_radius": 0.16, "velocity_gain": 2.0, "max_accel": 0.12, "control_smoothing": 0.20, "acceptance_radius": 0.035},
-        {**base, "max_command_distance": 0.20, "slowdown_radius": 0.16, "velocity_gain": 3.0, "max_accel": 0.18, "control_smoothing": 0.35, "acceptance_radius": 0.035},
-        {**base, "max_command_distance": 0.26, "slowdown_radius": 0.08, "velocity_gain": 5.0, "max_accel": 0.35, "control_smoothing": 0.70, "acceptance_radius": 0.015},
-        {**base, "max_command_distance": 0.26, "slowdown_radius": 0.10, "velocity_gain": 6.0, "max_accel": 0.45, "control_smoothing": 1.00, "acceptance_radius": 0.015},
-        {**base, "slowdown_radius": 0.20, "velocity_gain": 4.0, "max_accel": 0.25, "control_smoothing": 0.50, "acceptance_radius": 0.025},
+        {**base, "max_command_distance": 0.20, "max_speed": 0.03, "velocity_gain": 3.5, "max_accel": 0.08, "control_smoothing": 0.40, "acceptance_radius": 0.025},
+        {**base, "max_command_distance": 0.25, "max_speed": 0.04, "max_accel": 0.08},
+        {**base, "max_command_distance": 0.30, "max_speed": 0.05, "slowdown_radius": 0.10, "velocity_gain": 5.0, "max_accel": 0.12, "control_smoothing": 0.60},
+        {**base, "substeps": 10},
     ]
     keys = list(PARAM_SPACE)
     seen = {tuple(item[key] for key in keys) for item in staged}
@@ -130,6 +151,8 @@ def generate_settings(search_mode: str, max_settings: int) -> list[dict[str, flo
                 + abs(item["max_accel"] - base["max_accel"])
                 + abs(item["control_smoothing"] - base["control_smoothing"])
                 + abs(item["acceptance_radius"] - base["acceptance_radius"])
+                + abs(item["max_speed"] - base["max_speed"])
+                + 0.01 * abs(item["substeps"] - base["substeps"])
             )
         )
     for item in combos:
@@ -597,8 +620,15 @@ def write_recommended_configs(base_config: dict, profiles: dict[str, dict], outp
         write_yaml(output_dir / "top_configs" / f"{name}.yaml", cfg)
     tuned = deepcopy(base_config)
     tuned["action_adapter"] = adapter_config({key: float(profiles["default"][key]) for key in PARAM_SPACE})
+    tuned["physical_scale"] = {"meters_per_unit": 100.0}
+    tuned["max_waypoint_distance"] = float(profiles["default"]["max_command_distance"])
+    tuned["max_speed"] = float(profiles["default"]["max_speed"])
+    tuned["dt_decision"] = 0.1 * float(profiles["default"]["substeps"])
     tuned.setdefault("dynamics_backend", {})["name"] = "mpe_core"
     tuned["dynamics_backend"]["source"] = "third_party_openai_mpe"
+    tuned["dynamics_backend"]["dt"] = 0.1
+    tuned["dynamics_backend"]["substeps"] = int(profiles["default"]["substeps"])
+    tuned["dynamics_backend"]["max_speed"] = float(profiles["default"]["max_speed"])
     tuned["strict_source"] = True
     tuned["execution_model"] = "mpe_core"
     tuned_path = ROOT / "configs" / "env" / "waypoint_missions_tuned.yaml"

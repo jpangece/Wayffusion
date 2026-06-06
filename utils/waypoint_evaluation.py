@@ -99,6 +99,7 @@ def evaluate_waypoint_policy_episodes(
         if should_record and frames:
             recording_path = write_episode_media(frames, record_root, f"{record_prefix}_ep{episode_idx:03d}_{info.get('task_name', task_name)}", record_format, record_fps)
         metrics = dict(info.get("task_metrics", {}))
+        adapter_info = dict(info.get("adapter_info", {}))
         record = {
             "episode": episode_idx,
             "return": float(total_reward),
@@ -113,6 +114,11 @@ def evaluate_waypoint_policy_episodes(
             "mean_speed": float(info.get("mean_speed", 0.0)),
             "max_speed_observed": float(info.get("max_speed_observed", 0.0)),
             "mean_control_norm": float(info.get("mean_control_norm", 0.0)),
+            "mean_distance_to_waypoint_m": float(adapter_info.get("mean_distance_to_waypoint_m", info.get("mean_distance_to_waypoint_m", 0.0))),
+            "arrival_rate": float(adapter_info.get("arrival_rate", info.get("arrival_rate", 0.0))),
+            "command_update_rate": float(adapter_info.get("command_update_rate", info.get("command_update_rate", 1.0))),
+            "command_reject_rate": float(adapter_info.get("command_reject_rate", info.get("command_reject_rate", 0.0))),
+            "mean_desired_speed_mps": float(adapter_info.get("mean_desired_speed_mps", info.get("mean_desired_speed_mps", 0.0))),
             "collision_count": float(info.get("collision_count", 0.0)),
             "no_fly_violation_count": float(info.get("no_fly_violation_count", 0.0)),
             "geofence_violation_count": float(info.get("geofence_violation_count", 0.0)),

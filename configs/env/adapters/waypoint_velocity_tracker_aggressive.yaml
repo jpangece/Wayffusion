@@ -1,0 +1,17 @@
+profile: aggressive
+name: waypoint_velocity_tracker
+meters_per_unit: 100.0
+max_command_distance: 0.30
+max_speed: 0.05
+slowdown_radius: 0.10
+velocity_gain: 5.0
+max_accel: 0.12
+control_smoothing: 0.60
+acceptance_radius: 0.020
+hover_when_arrived: true
+command_latency_steps: 0
+tracking_noise_std: 0.0
+clip_to_geofence: true
+reject_no_fly_waypoints: true
+recommended_dt: 0.1
+recommended_substeps: 20

@@ -1,5 +1,7 @@
 seed: 0
 map_size: 1.0
+physical_scale:
+  meters_per_unit: 100.0
 world_dim: 2
 action_interface: waypoint
 action_mode: waypoint
@@ -10,9 +12,9 @@ execution_model: mpe_core
 grid_size: 32
 num_agents: 4
 max_steps: 80
-dt_decision: 1.0
-max_speed: 0.08
-max_waypoint_distance: 0.22
+dt_decision: 2.0
+max_speed: 0.04
+max_waypoint_distance: 0.20
 min_uav_distance: 0.035
 sensor_radius: 0.12
 comm_radius: 0.36
@@ -26,21 +28,22 @@ action_adapter:
   name: waypoint_pd_tracker
   kp: 2.0
   kd: 2.8
-  max_command_distance: 0.22
-  max_speed: 0.08
-  max_accel: 0.25
-  control_smoothing: 0.35
-  acceptance_radius: 0.025
+  meters_per_unit: 100.0
+  max_command_distance: 0.20
+  max_speed: 0.04
+  max_accel: 0.10
+  control_smoothing: 0.45
+  acceptance_radius: 0.020
   clip_to_geofence: true
   reject_no_fly_waypoints: true
 dynamics_backend:
   name: mpe_core
   source: third_party_openai_mpe
   dt: 0.1
-  substeps: 10
+  substeps: 20
   mass: 1.0
   damping: 0.25
-  max_speed: 0.08
+  max_speed: 0.04
   agent_size: 0.02
   agent_accel: 1.0
   action_scale: 1.0

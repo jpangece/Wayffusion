@@ -60,15 +60,17 @@ class WaypointMultiUAVEnv:
         self._build_spaces()
 
     def _action_adapter_config(self) -> dict[str, Any]:
+        physical_scale = dict(self.config.get("physical_scale", {}))
         cfg = {
             "name": "waypoint_velocity_tracker",
             "max_command_distance": float(self.config.get("max_waypoint_distance", 0.22)),
-            "max_speed": float(self.config.get("max_speed", 0.08)),
-            "slowdown_radius": 0.12,
+            "meters_per_unit": float(physical_scale.get("meters_per_unit", 100.0)),
+            "max_speed": float(self.config.get("max_speed", 0.04)),
+            "slowdown_radius": 0.08,
             "velocity_gain": 4.0,
-            "max_accel": 0.25,
-            "control_smoothing": 0.35,
-            "acceptance_radius": 0.025,
+            "max_accel": 0.10,
+            "control_smoothing": 0.45,
+            "acceptance_radius": 0.020,
             "hover_when_arrived": True,
             "command_latency_steps": 0,
             "tracking_noise_std": 0.0,
@@ -84,10 +86,10 @@ class WaypointMultiUAVEnv:
             "name": "mpe_core",
             "source": "third_party_openai_mpe",
             "dt": 0.1,
-            "substeps": 10,
+            "substeps": 20,
             "mass": 1.0,
             "damping": 0.25,
-            "max_speed": float(self.config.get("max_speed", 0.08)),
+            "max_speed": float(self.config.get("max_speed", 0.04)),
             "agent_size": 0.02,
             "agent_accel": 1.0,
             "action_scale": 1.0,
@@ -412,6 +414,7 @@ class WaypointMultiUAVEnv:
     def _build_agent_info(self, agent_idx: int) -> dict[str, Any]:
         reward_result = self.last_reward_result or {}
         metrics = dict(reward_result.get("metrics", self.current_scenario.get_metrics(self.world, self.task_state)))
+        adapter_info = dict(self.last_transition_info.get("adapter_info", {}))
         info = {
             "team_reward": float(reward_result.get("team_reward", 0.0)),
             "per_agent_rewards": np.asarray(reward_result.get("per_agent_rewards", np.zeros(self.num_agents, dtype=np.float32)), dtype=np.float32),
@@ -425,12 +428,17 @@ class WaypointMultiUAVEnv:
             "action_mode": self.action_mode,
             "action_adapter": str(self._action_adapter_config().get("name", "waypoint_velocity_tracker")),
             "dynamics_backend": str(self._dynamics_backend_config().get("name", "mpe_core")),
-            "adapter_info": dict(self.last_transition_info.get("adapter_info", {})),
+            "adapter_info": adapter_info,
             "dynamics_info": dict(self.last_transition_info.get("dynamics_info", {})),
             "safety_info": dict(self.last_transition_info.get("safety_info", {})),
             "mean_speed": float(self.last_transition_info.get("mean_speed", 0.0)),
             "max_speed_observed": float(self.last_transition_info.get("max_speed_observed", 0.0)),
             "mean_control_norm": float(self.last_transition_info.get("mean_control_norm", 0.0)),
+            "mean_distance_to_waypoint_m": float(adapter_info.get("mean_distance_to_waypoint_m", 0.0)),
+            "arrival_rate": float(adapter_info.get("arrival_rate", 0.0)),
+            "command_update_rate": float(adapter_info.get("command_update_rate", 1.0)),
+            "command_reject_rate": float(adapter_info.get("command_reject_rate", 0.0)),
+            "mean_desired_speed_mps": float(adapter_info.get("mean_desired_speed_mps", 0.0)),
             "collision_count": int(self.last_transition_info.get("collision_count", 0)),
             "no_fly_violation_count": int(self.last_transition_info.get("no_fly_violation_count", 0)),
             "geofence_violation_count": int(self.last_transition_info.get("geofence_violation_count", 0)),

@@ -52,6 +52,11 @@ def test_waypoint_parallel_api_reset_step_and_global_state():
         "mean_speed",
         "max_speed_observed",
         "mean_control_norm",
+        "mean_distance_to_waypoint_m",
+        "arrival_rate",
+        "command_update_rate",
+        "command_reject_rate",
+        "mean_desired_speed_mps",
     ]:
         assert key in info
     assert np.asarray(info["per_agent_rewards"]).shape == (3,)
@@ -65,4 +70,8 @@ def test_waypoint_parallel_api_reset_step_and_global_state():
     assert np.isfinite(info["mean_speed"])
     assert np.isfinite(info["max_speed_observed"])
     assert np.isfinite(info["mean_control_norm"])
+    assert np.isfinite(info["mean_distance_to_waypoint_m"])
+    assert 0.0 <= info["arrival_rate"] <= 1.0
+    assert 0.0 <= info["command_update_rate"] <= 1.0
+    assert 0.0 <= info["command_reject_rate"] <= 1.0
     assert env.state()["all_uav_states"].shape == (3, 8)

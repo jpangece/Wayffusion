@@ -24,7 +24,7 @@ joint_hidden_dim: 96
 attention_heads: 4
 use_attention: true
 map_size: 1.0
-max_delta: 0.22
+max_delta: 0.20
 log_std_init: -1.0
 log_std_min: -2.0
 log_std_max: 0.2
