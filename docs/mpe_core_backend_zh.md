@@ -15,18 +15,38 @@ dynamics_backend:
 
 ## 当前 MPE source
 
-`MPECoreBackend` 会按顺序尝试导入：
+`MPECoreBackend` 不再自动 fallback，也不再按环境里“哪个包能 import”自动选择 source。source 必须由 config 显式指定；如果指定 source 导入失败，会直接报错，要求人工修改 config。
 
-1. `mpe2.core`
-2. `mpe2.mpe.core`
-3. `pettingzoo.mpe._mpe_utils.core`
-4. `third_party.openai_mpe.core`
+当前支持的 source：
 
-本机当前没有安装 `mpe2` 或 `pettingzoo`，所以验证使用的是：
+1. `third_party_openai_mpe`
+   - module: `third_party.openai_mpe.core`
+   - 默认值
+   - 仓库本地 vendored OpenAI MPE core
+2. `mpe2`
+   - module: `mpe2._mpe_utils.core`
+   - 需要环境安装 `mpe2`
+   - 需要手动在 env config 中设置
+3. `pettingzoo_mpe`
+   - module: `pettingzoo.mpe._mpe_utils.core`
+   - 仅当对应 PettingZoo 版本暴露该内部路径时可用
+
+默认 env config 使用本地 vendored core：
 
 ```text
 third_party_openai_mpe
+third_party/openai_mpe/core.py
 ```
+
+如果要切到当前环境已安装的 `mpe2==1.1.0`，人工修改：
+
+```yaml
+dynamics_backend:
+  name: mpe_core
+  source: mpe2
+```
+
+注意：不会自动从 `mpe2` 回退到 `third_party_openai_mpe`，也不会自动从 `third_party_openai_mpe` 切到 `mpe2`。
 
 vendored 文件：
 
@@ -58,7 +78,7 @@ MPE agent 参数由 env config 设置：
 
 ```yaml
 dynamics_backend:
-  source: mpe2
+  source: third_party_openai_mpe
   dt: 0.1
   substeps: 10
   damping: 0.25

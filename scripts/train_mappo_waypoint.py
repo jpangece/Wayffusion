@@ -46,7 +46,13 @@ def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
         train_config["max_delta"] = env_config["max_waypoint_distance"]
 
 
-def make_output_dir(timestamp: str | None, run_name: str) -> Path:
+def make_output_dir(timestamp: str | None, run_name: str, output_dir: str | None = None) -> Path:
+    if output_dir is not None:
+        output = Path(output_dir)
+        if not output.is_absolute():
+            output = ROOT / output
+        output.mkdir(parents=True, exist_ok=True)
+        return output
     run_timestamp = timestamp or datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
     output_dir = ROOT / "outputs" / "training" / "mappo_waypoint" / run_timestamp / safe_name(run_name)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -103,6 +109,7 @@ def main() -> None:
     parser.add_argument("--envs_per_task", type=int, default=None)
     parser.add_argument("--total_updates", type=int, default=None)
     parser.add_argument("--rollout_steps", type=int, default=None)
+    parser.add_argument("--eval_interval", type=int, default=None)
     parser.add_argument("--eval_episodes", type=int, default=5)
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--tensorboard", action=argparse.BooleanOptionalAction, default=True)
@@ -112,6 +119,7 @@ def main() -> None:
     parser.add_argument("--record_interval", type=int, default=1)
     parser.add_argument("--run_name", default=None)
     parser.add_argument("--run_timestamp", default=None)
+    parser.add_argument("--output-dir", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--env_backend", choices=["sync", "thread"], default="sync")
     parser.add_argument("--env_workers", type=int, default=None)
@@ -133,13 +141,15 @@ def main() -> None:
         train_config["total_updates"] = int(args.total_updates)
     if args.rollout_steps is not None:
         train_config["rollout_steps"] = int(args.rollout_steps)
+    if args.eval_interval is not None:
+        train_config["eval_interval"] = int(args.eval_interval)
     sync_policy_env_config(train_config, env_config)
 
     env_batch = build_env_batch(env_config, train_config, task_names, args.envs_per_task, args.env_backend, args.env_workers)
     policy = build_policy(train_config, env_batch.envs[0].global_observation_space, env_batch.envs[0].action_space_n)
     trainer = MAPPOWaypointTrainer(env_batch, policy, train_config)
     run_name = args.run_name or f"{train_config.get('name', 'mappo_waypoint')}_{'_'.join(task_names)}_N{env_config['num_agents']}"
-    output_dir = make_output_dir(args.run_timestamp, run_name)
+    output_dir = make_output_dir(args.run_timestamp, run_name, args.output_dir)
     snapshot = output_dir / "snapshot"
     snapshot.mkdir(parents=True, exist_ok=True)
     (snapshot / "train_config.yaml").write_text(yaml.safe_dump(train_config, sort_keys=False), encoding="utf-8")

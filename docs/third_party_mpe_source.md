@@ -1,9 +1,9 @@
 # Third-Party MPE Core Source
 
 Wayffusion's waypoint MARL environment requires real MPE particle dynamics. The
-preferred dependency is `mpe2`, followed by PettingZoo MPE internals. The local
-validation environment did not have either package installed, so Wayffusion also
-vendors the upstream OpenAI MPE core as a deterministic fallback.
+default source is the vendored local OpenAI MPE core in
+`third_party/openai_mpe/core.py`. Installed package sources such as `mpe2` are
+manual alternatives, not automatic fallbacks.
 
 ## Upstream
 
@@ -11,6 +11,21 @@ vendors the upstream OpenAI MPE core as a deterministic fallback.
 - Vendored file: `multiagent/core.py`
 - Local path: `third_party/openai_mpe/core.py`
 - Upstream README snapshot: `third_party/openai_mpe/UPSTREAM_README.md`
+
+## Runtime Source Selection
+
+`MPECoreBackend` does not automatically fall back across sources. The source is
+selected explicitly through `dynamics_backend.source`.
+
+Supported values:
+
+- `third_party_openai_mpe`: imports `third_party.openai_mpe.core`; default.
+- `mpe2`: imports `mpe2._mpe_utils.core`; requires installing `mpe2`.
+- `pettingzoo_mpe`: imports `pettingzoo.mpe._mpe_utils.core`; only works for PettingZoo versions exposing that internal module.
+
+The source actually used by a run is reported in validation/training metrics as
+`mpe_source`. If a configured source cannot be imported, backend construction
+fails and the user must edit the env config manually.
 
 ## License Status
 

@@ -64,7 +64,7 @@ Available adapters:
 
 Only supported backend:
 
-- `MPECoreBackend`: calls actual MPE `World.step()` from `mpe2`/PettingZoo if importable, otherwise from the vendored OpenAI MPE core in `third_party/openai_mpe/core.py`.
+- `MPECoreBackend`: calls actual MPE `World.step()` from the explicitly configured source. The default source is the vendored local OpenAI MPE core in `third_party/openai_mpe/core.py`; using installed `mpe2` requires manually setting `dynamics_backend.source: mpe2`.
 
 ## Policy Families
 

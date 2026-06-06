@@ -82,7 +82,7 @@ class WaypointMultiUAVEnv:
     def _dynamics_backend_config(self) -> dict[str, Any]:
         cfg = {
             "name": "mpe_core",
-            "source": "mpe2",
+            "source": "third_party_openai_mpe",
             "dt": 0.1,
             "substeps": 10,
             "mass": 1.0,

@@ -4108,3 +4108,306 @@ Interpretation:
 - Wayffusion now keeps its own waypoint MARL task/reward/observation layer, but physical particle dynamics come from actual MPE core.
 - The runnable mainline no longer offers handwritten particle dynamics or kinematic waypoint stepping.
 - Smoke validation proves integration correctness and media/logging compatibility; it is not a long-training performance conclusion.
+
+### Runtime MPE source check after installing `mpe2`
+
+Date: 2026-06-06
+
+User installed `mpe2` through pip in the conda environment. I rechecked the active runtime with `/opt/conda/bin/python`.
+
+Installed packages now include:
+
+- `mpe2==1.1.0`
+- `pettingzoo==1.26.1`
+- `gymnasium==1.3.0`
+- `pygame-ce==2.5.7`
+
+Available MPE core sources now are:
+
+- `mpe2._mpe_utils.core`
+  - path: `/opt/conda/lib/python3.11/site-packages/mpe2/_mpe_utils/core.py`
+  - exposes `World` and `Agent`
+  - available as a manual source through `dynamics_backend.source: mpe2`
+- `third_party.openai_mpe.core`
+  - path: `third_party/openai_mpe/core.py`
+  - vendored official OpenAI MPE core
+  - selected by default after the follow-up no-auto-fallback change below
+
+Unavailable / not exposed in this environment:
+
+- `mpe2.core`
+- `mpe2.mpe.core`
+- `pettingzoo.mpe._mpe_utils.core`
+
+Runtime check before the no-auto-fallback follow-up:
+
+- `MPE_SOURCE=mpe2`
+- `MPE_CORE_MODULE=mpe2._mpe_utils.core`
+- `backend.source=mpe2`
+- smoke env step reported:
+  - `mpe_source=mpe2`
+  - `uses_real_mpe_core=True`
+  - `mpe_world_step_calls=10`
+- `/opt/conda/bin/python -m pytest -q tests/test_mpe_core_backend.py` -> `5 passed`
+
+Important caveat:
+
+- Installing `mpe2` upgraded `gymnasium` from `0.29.1` to `1.3.0`.
+- Pip reported a dependency conflict: `lerobot 0.1.0 requires gymnasium==0.29.1`.
+- Wayffusion waypoint tests passed for the MPE backend smoke path, but any unrelated `lerobot` workflows should be checked separately if needed.
+
+### MPE core source made explicit, local vendored core is default
+
+Date: 2026-06-06
+
+User requested that Wayffusion should default to the local core and should not silently auto-fallback between MPE sources. I changed the source selection contract accordingly.
+
+Implementation changes:
+
+- `envs/waypoint/control/dynamics_backends.py`
+  - removed module-import-time auto probing across `mpe2`, PettingZoo MPE, and vendored OpenAI MPE;
+  - added `DEFAULT_MPE_SOURCE="third_party_openai_mpe"`;
+  - added explicit supported source map:
+    - `third_party_openai_mpe -> third_party.openai_mpe.core`;
+    - `mpe2 -> mpe2._mpe_utils.core`;
+    - `pettingzoo_mpe -> pettingzoo.mpe._mpe_utils.core`;
+  - `MPECoreBackend(config)` now imports only the configured source;
+  - if the configured source is missing or unsupported, backend construction raises immediately and asks the user to edit `dynamics_backend.source`;
+  - no automatic fallback occurs.
+- `configs/env/waypoint_missions.yaml`
+  - changed `dynamics_backend.source` from `mpe2` to `third_party_openai_mpe`.
+- `configs/env/waypoint_missions_pd_adapter_debug.yaml`
+  - changed `dynamics_backend.source` from `mpe2` to `third_party_openai_mpe`.
+- `envs/waypoint_marl_env.py`
+  - changed the internal default `_dynamics_backend_config()` source from `mpe2` to `third_party_openai_mpe`.
+- `tests/test_mpe_core_backend.py`
+  - added coverage that default `MPECoreBackend` source is `third_party_openai_mpe`;
+  - added coverage that manually setting `source=mpe2` selects `mpe2`;
+  - added coverage that an unsupported source raises instead of falling back.
+
+Current contract:
+
+- default source: `third_party_openai_mpe`;
+- optional manual source: `mpe2`;
+- optional manual source: `pettingzoo_mpe` only if the installed PettingZoo version exposes the internal core path;
+- no automatic source fallback.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile envs/waypoint/control/dynamics_backends.py envs/waypoint_marl_env.py` -> passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_mpe_core_backend.py tests/test_waypoint_env_api.py tests/test_mappo_waypoint_trainer.py` -> `9 passed`.
+- `git diff --check` -> passed.
+- explicit source smoke:
+  - default `build_dynamics_backend({"name": "mpe_core"})` -> `third_party_openai_mpe`;
+  - manual `build_dynamics_backend({"name": "mpe_core", "source": "mpe2"})` -> `mpe2`;
+  - unsupported source raises `ValueError`;
+  - `WaypointMultiUAVEnv` default step reports `mpe_source=third_party_openai_mpe` and `mpe_world_step_calls=10`.
+- validate smoke:
+  - command: `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage --policy-class direct_waypoint --dynamics-backend mpe_core --action-adapter waypoint_velocity_tracker --num_agents 2 --total_updates 1 --eval_episodes 1 --record_eval_episodes 0 --headless --run_timestamp 20260606_explicit_local_core_smoke`
+  - output: `outputs/debug/waypoint_mappo_validation/20260606_explicit_local_core_smoke/`
+  - `passed=true`;
+  - `mpe_source=third_party_openai_mpe`;
+  - `uses_real_mpe_core=true`;
+  - `mpe_world_step_calls=690.0`.
+
+### Local MPE source check, adapter calibration, and MAPPO health debug suite
+
+Date: 2026-06-06
+
+User requested a debug-only suite under `outputs/debug` to verify local MPE core source stability, calibrate `WaypointVelocityTracker`, run short MAPPO health checks, and attempt SMTP notification.
+
+Code changes:
+
+- `scripts/train_mappo_waypoint.py`
+  - added `--output-dir` so debug runs can be forced into `outputs/debug`;
+  - added `--eval_interval` CLI override;
+  - old default output under `outputs/training/mappo_waypoint/...` remains unchanged when `--output-dir` is omitted.
+- Added `scripts/check/check_mpe_core_source.py`
+  - prints Python/module source state;
+  - builds default `WaypointMultiUAVEnv`;
+  - runs one env step;
+  - fails unless `mpe_source=third_party_openai_mpe`, `uses_real_mpe_core=true`, `mpe_world_step_calls>0`, backend name is `mpe_core`;
+  - writes `outputs/debug/mpe_core_source_check/source_check_summary.json`.
+- Added `scripts/check/calibrate_waypoint_adapter.py`
+  - staged search over `WaypointVelocityTracker` parameters;
+  - enforces `dynamics_backend.name=mpe_core` and `dynamics_backend.source=third_party_openai_mpe`;
+  - records synthetic probe metrics, heuristic task rollout metrics, top-k media, top-k MAPPO smoke;
+  - writes calibration CSV/JSON/plots/media under `outputs/debug/adapter_calibration/...`;
+  - only writes tuned adapter/env configs if hard constraints pass.
+- Added `scripts/check/summarize_mappo_health.py`
+  - scans debug MAPPO run dirs;
+  - summarizes finite losses/rewards, action validity, MPE source, step calls, GIFs, checkpoints;
+  - writes CSV/JSON/Markdown under `outputs/debug/mappo_health_check/`.
+- Added `scripts/check/send_smtp_report.py`
+  - reads SMTP settings from `WAYFFUSION_SMTP_*`;
+  - generates `outputs/debug/final_debug_report.md`;
+  - if SMTP env is missing, writes `outputs/debug/email_not_sent_missing_env.json` and does not claim success.
+- Added `scripts/check/run_adapter_and_mappo_debug_suite.py`
+  - one-shot orchestrator for source check, pytest subset, calibration, MAPPO health runs, summary, report/email.
+- Added `tests/test_vendor_mpe_integrity.py`
+  - verifies vendored OpenAI MPE files exist;
+  - verifies local core exposes `World`/`Agent`;
+  - verifies default backend uses `third_party_openai_mpe`, not installed `mpe2`.
+
+Verification commands:
+
+- `/opt/conda/bin/python -m py_compile envs/waypoint/control/dynamics_backends.py scripts/check/check_mpe_core_source.py scripts/check/calibrate_waypoint_adapter.py scripts/check/summarize_mappo_health.py scripts/check/send_smtp_report.py scripts/check/run_adapter_and_mappo_debug_suite.py scripts/train_mappo_waypoint.py` -> passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_mpe_core_backend.py tests/test_vendor_mpe_integrity.py tests/test_action_adapters.py tests/test_waypoint_env_api.py tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rewards.py tests/test_waypoint_rendering.py` -> `26 passed`.
+- `git diff --check` -> passed.
+
+Source check result:
+
+- command: `/opt/conda/bin/python scripts/check/check_mpe_core_source.py --env-config configs/env/waypoint_missions.yaml --output-dir /workspace/Wayffusion/Wayffusion/outputs/debug/mpe_core_source_check`
+- output: `outputs/debug/mpe_core_source_check/source_check_summary.json`
+- `passed=true`;
+- `mpe2_installed=true`, but default runtime source remains `third_party_openai_mpe`;
+- `mpe_core_file=/workspace/Wayffusion/Wayffusion/third_party/openai_mpe/core.py`;
+- `mpe_world_class=third_party.openai_mpe.core.World`;
+- `mpe_world_step_calls=10`.
+
+Adapter calibration result:
+
+- command: `/opt/conda/bin/python scripts/check/calibrate_waypoint_adapter.py --env-config configs/env/waypoint_missions.yaml --tasks area_coverage belief_search priority_inspection connectivity_expansion --num-agents-list 3 4 --seeds 0 1 2 --episodes-per-setting 2 --search-mode staged --max-settings 80 --record-top-k 5 --record-format gif --output-dir /workspace/Wayffusion/Wayffusion/outputs/debug/adapter_calibration/local_core_velocity_tracker_v1 --headless`
+- output: `outputs/debug/adapter_calibration/local_core_velocity_tracker_v1/`
+- `passed=false`, `calibration_failed=true`;
+- 80 settings evaluated, 0 passed hard constraints;
+- failure distribution from ranked CSV:
+  - `geofence_violation_rate`: 80/80;
+  - `no_fly_violation_rate`: 39/80;
+  - `arrival_rate`: 44/80;
+  - `control_saturation_rate`: 1/80.
+- top-ranked setting:
+  - `max_command_distance=0.26`;
+  - `slowdown_radius=0.08`;
+  - `velocity_gain=4.0`;
+  - `max_accel=0.25`;
+  - `control_smoothing=0.35`;
+  - `acceptance_radius=0.035`;
+  - failed `no_fly_violation_rate,geofence_violation_rate`.
+- Because full calibration failed, smoke-generated `configs/env/adapters/*.yaml` and `configs/env/waypoint_missions_tuned.yaml` were removed and should not be treated as active tuned configs.
+
+MAPPO health check result:
+
+- Since calibration failed, health runs used baseline `configs/env/waypoint_missions.yaml`.
+- All outputs are under `outputs/debug/mappo_health_check/`.
+- `summarize_mappo_health.py` output:
+  - `outputs/debug/mappo_health_check/mappo_health_summary.csv`;
+  - `outputs/debug/mappo_health_check/mappo_health_summary.json`;
+  - `outputs/debug/mappo_health_check/mappo_health_report.md`;
+  - overall `passed=true`.
+- Runs:
+  - `candidate_4task_baseline_adapter_seed0`
+    - output: `outputs/debug/mappo_health_check/candidate_4task_baseline_adapter_seed0`;
+    - final eval reward `26.812326235490517`;
+    - best eval reward `26.812326235490517`;
+    - final eval success `0.875`;
+    - action validity `1.0`;
+    - max speed observed `0.0499451570212841`;
+    - mean control norm `0.11711919493973255`;
+    - collision count `0.0`;
+    - connectivity violation rate `0.4375`;
+    - `mpe_source=third_party_openai_mpe`;
+    - GIFs generated.
+  - `candidate_connectivity_baseline_adapter_seed1`
+    - output: `outputs/debug/mappo_health_check/candidate_connectivity_baseline_adapter_seed1`;
+    - final eval reward `-971.1769845654115`;
+    - best eval reward `207.20086109121405`;
+    - final eval success `0.5`;
+    - action validity `1.0`;
+    - max speed observed `0.02463107102084905`;
+    - mean control norm `0.09193762764334679`;
+    - collision count `0.0`;
+    - connectivity violation rate `0.45`;
+    - `mpe_source=third_party_openai_mpe`;
+    - GIFs generated.
+  - `direct_2task_baseline_adapter_seed0`
+    - output: `outputs/debug/mappo_health_check/direct_2task_baseline_adapter_seed0`;
+    - final eval reward `3.8754229935014286`;
+    - best eval reward `3.93165630705096`;
+    - final eval success `0.0`;
+    - action validity `1.0`;
+    - max speed observed `7.771865057293326e-05`;
+    - mean control norm `0.00016366552517865784`;
+    - collision count `0.0`;
+    - connectivity violation rate `0.0`;
+    - `mpe_source=third_party_openai_mpe`;
+    - GIFs generated.
+
+Interpretation:
+
+- The local MPE core source contract is stable: installed `mpe2` is not used unless config manually requests it.
+- MAPPO rollout/update/eval/media paths are healthy under the baseline adapter and local MPE core.
+- Adapter calibration did not find a parameter set satisfying hard safety constraints. The dominant issue is geofence/no-fly correction under MPE dynamics and the current probe/task waypoint choices, not NaN or source fallback.
+- Direct waypoint policy health runs are finite but produce very small movement/control under the debug config; this is a policy/scale issue to inspect before using direct waypoint as the main learner.
+
+Metric interpretation for adapter calibration:
+
+- `geofence_violation_rate`
+  - Meaning: rate at which MPE dynamics moves UAVs outside the map/geofence and Wayffusion hard-safety projection has to correct the position.
+  - In this calibration: failed in 80/80 settings.
+  - Observed range: min `0.01247891865079365`, max `0.03628844246031746`, mean `0.020876970176091268`.
+  - Interpretation: target waypoints / probe paths / heuristic task targets are too close to map boundaries or allow MPE integration to drift outside the boundary before projection.
+- `no_fly_violation_rate`
+  - Meaning: rate at which commanded or executed waypoint motion enters a configured no-fly zone and has to be corrected.
+  - In this calibration: failed in 39/80 settings.
+  - Observed range: min `0.002189980158730158`, max `0.017513640873015872`, mean `0.009903062996031744`.
+  - Interpretation: some target generation paths do not keep enough clearance from the no-fly circle; adapter tuning alone cannot fully fix unsafe target geometry.
+- `arrival_rate`
+  - Meaning: fraction of synthetic probe UAV-target pairs where the UAV reaches within `acceptance_radius` of the target.
+  - In this calibration: failed in 44/80 settings.
+  - Observed range: min `0.27314814814814814`, max `0.7824074074074073`, mean `0.5712094907407408`.
+  - Interpretation: some conservative/low-accel/high-slowdown settings are too slow or do not track probes strongly enough within the fixed probe horizon.
+- `action_validity_rate`
+  - Meaning: validity of incoming env waypoint actions as API inputs: present, finite, correct shape, and not malformed.
+  - In this calibration: passed in all 80 settings.
+  - Observed value: min/max/mean all `1.0`.
+  - Interpretation: policy/heuristic actions are syntactically valid. This metric does not mean the executed motion is safe; geofence/no-fly violations are execution/safety-correction metrics.
+
+Important conclusion:
+
+- The calibration failure is not caused by malformed actions, source fallback, NaNs, speed violations, or collision blow-up.
+- The failure is mainly due to safety-margin issues in target/probe generation under real MPE dynamics.
+- Next work should inspect top-5 GIFs and add/validate waypoint safety margins before trying another adapter-only search.
+
+SMTP result:
+
+- command: `/opt/conda/bin/python scripts/check/send_smtp_report.py --report-md /workspace/Wayffusion/Wayffusion/outputs/debug/final_debug_report.md --summary-json /workspace/Wayffusion/Wayffusion/outputs/debug/mappo_health_check/mappo_health_summary.json --no-fail-if-missing-env`
+- SMTP was not sent because all required `WAYFFUSION_SMTP_*` environment variables were missing.
+- Generated files:
+  - `outputs/debug/final_debug_report.md`;
+  - `outputs/debug/email_not_sent_missing_env.json`.
+
+### SMTP env-file support and successful report send
+
+Date: 2026-06-06
+
+User provided SMTP secrets in `.secrets/wayffusion_mail.env`. Secret values were not printed or written to memory.
+
+Implementation change:
+
+- `scripts/check/send_smtp_report.py`
+  - added `--env-file`;
+  - added simple dotenv loading for env files;
+  - added aliases from the user's file format:
+    - `SMTP_HOST -> WAYFFUSION_SMTP_HOST`;
+    - `SMTP_PORT -> WAYFFUSION_SMTP_PORT`;
+    - `SMTP_USER -> WAYFFUSION_SMTP_USER`;
+    - `SMTP_PASSWORD -> WAYFFUSION_SMTP_PASSWORD`;
+    - `SMTP_FROM -> WAYFFUSION_SMTP_FROM`;
+    - `EMAIL_TO -> WAYFFUSION_SMTP_TO`;
+    - `SMTP_STARTTLS` / `SMTP_SSL` -> `WAYFFUSION_SMTP_USE_TLS`;
+  - no secret values are persisted in code, docs, or memory.
+
+Execution:
+
+- First send used a temporary in-shell mapping from `.secrets/wayffusion_mail.env` to `WAYFFUSION_SMTP_*`.
+- `scripts/check/send_smtp_report.py` exited with code `0`.
+- `outputs/debug/email_sent.json` exists and reports `sent=true`.
+- The stale prior `outputs/debug/email_not_sent_missing_env.json` was removed.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile scripts/check/send_smtp_report.py` -> passed.
+- A non-sending env-file mapping check confirmed:
+  - `missing_after_env_file=none`;
+  - `WAYFFUSION_SMTP_USE_TLS` configured.

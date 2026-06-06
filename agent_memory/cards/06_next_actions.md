@@ -910,9 +910,13 @@ After 2026-06-06 real MPE core backend replacement:
   - `MPEParticleBackend`
   - `KinematicPointBackend`
 - Current actual local MPE source:
-  - `third_party_openai_mpe`
-  - reason: local `/opt/conda/bin/python` has neither `mpe2` nor `pettingzoo` installed.
-  - requirements now include `mpe2>=1.1.0`; if installed later, wrapper tries `mpe2._mpe_utils.core` first.
+  - default configured source: `third_party_openai_mpe`
+  - path: `third_party/openai_mpe/core.py`
+  - reason: source selection is now explicit and does not auto-fallback based on installed packages.
+  - manual alternative: set `dynamics_backend.source: mpe2` to use `/opt/conda/lib/python3.11/site-packages/mpe2/_mpe_utils/core.py`.
+  - if the configured source cannot be imported, backend construction fails; edit the config manually.
+  - note: installing `mpe2` upgraded `gymnasium` to `1.3.0`; pip reported this conflicts with `lerobot==0.1.0` requiring `gymnasium==0.29.1`.
+  - latest smoke: `outputs/debug/waypoint_mappo_validation/20260606_explicit_local_core_smoke/` passed with `mpe_source=third_party_openai_mpe`.
 - Current valid validation commands:
   - candidate-selection + real MPE core:
     - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --policy-class candidate_selection_waypoint --dynamics-backend mpe_core --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless`
@@ -928,9 +932,28 @@ After 2026-06-06 real MPE core backend replacement:
   - `outputs/debug/waypoint_mappo_validation/20260606_mpe_core_direct_validate/`
 - Metrics that prove real MPE backend use:
   - `uses_real_mpe_core=true`
-  - `mpe_source=third_party_openai_mpe` in current local env
+  - `mpe_source=third_party_openai_mpe` for the default config
+  - `mpe_source=mpe2` only when `dynamics_backend.source: mpe2` is set manually
   - `mpe_world_step_calls > 0`
 - Next engineering work:
-  - run longer pure MAPPO under `mpe_core` for candidate-selection and direct waypoint policies;
-  - compare learning curves before adding additional algorithm tricks;
-  - if dynamics behavior seems too conservative, tune ActionAdapter gains or MPE `dt/substeps/max_speed/action_scale`, not by reintroducing handwritten dynamics.
+  - Investigate why 80-setting `WaypointVelocityTracker` calibration failed all hard constraints:
+    - `geofence_violation_rate` failed in 80/80 settings;
+    - `no_fly_violation_rate` failed in 39/80 settings;
+    - `arrival_rate` failed in 44/80 settings.
+  - First diagnostic should separate controller quality from probe/heuristic waypoint feasibility:
+    - inspect top-5 GIFs under `outputs/debug/adapter_calibration/local_core_velocity_tracker_v1/media/`;
+    - check whether synthetic/task target paths command agents too close to map boundaries or through no-fly zones;
+    - consider adding a safety-margin waypoint projector before adapter calibration, not by reintroducing handwritten dynamics.
+  - Do not treat `configs/env/waypoint_missions_tuned.yaml` as active; full calibration failed and the smoke-generated tuned config was removed.
+  - Continue MAPPO health/performance work from baseline local-core outputs:
+    - `outputs/debug/mappo_health_check/candidate_4task_baseline_adapter_seed0/`;
+    - `outputs/debug/mappo_health_check/candidate_connectivity_baseline_adapter_seed1/`;
+    - `outputs/debug/mappo_health_check/direct_2task_baseline_adapter_seed0/`.
+  - Candidate-selection MAPPO health is finite and can produce nonzero success; direct waypoint debug is finite but barely moves under current scaling, so inspect `DirectWaypointPolicy` action scale/log_std and adapter command magnitude before long direct-policy training.
+  - SMTP env file is now supported:
+    - use `scripts/check/send_smtp_report.py --env-file .secrets/wayffusion_mail.env ...`;
+    - user env-file aliases `SMTP_*` / `EMAIL_TO` are mapped to `WAYFFUSION_SMTP_*`;
+    - do not print or commit `.secrets/wayffusion_mail.env`.
+  - Latest debug report:
+    - `outputs/debug/final_debug_report.md`;
+    - SMTP send status: `outputs/debug/email_sent.json`.

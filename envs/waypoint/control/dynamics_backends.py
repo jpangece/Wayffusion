@@ -11,30 +11,50 @@ from envs.waypoint.world import MissionWorld
 
 
 REMOVED_BACKENDS = {"mpe_particle", "mpe_like_particle", "kinematic_point"}
+DEFAULT_MPE_SOURCE = "third_party_openai_mpe"
+MPE_CORE_SOURCES = {
+    "third_party_openai_mpe": "third_party.openai_mpe.core",
+    "mpe2": "mpe2._mpe_utils.core",
+    "pettingzoo_mpe": "pettingzoo.mpe._mpe_utils.core",
+}
+MPE_SOURCE_ALIASES = {
+    "local": "third_party_openai_mpe",
+    "third_party": "third_party_openai_mpe",
+    "openai_mpe": "third_party_openai_mpe",
+    "vendored_openai_mpe": "third_party_openai_mpe",
+}
 
 
-def _load_mpe_core():
-    candidates = [
-        ("mpe2._mpe_utils.core", "mpe2"),
-        ("mpe2.core", "mpe2"),
-        ("mpe2.mpe.core", "mpe2"),
-        ("pettingzoo.mpe._mpe_utils.core", "pettingzoo_mpe"),
-        ("third_party.openai_mpe.core", "third_party_openai_mpe"),
-    ]
-    errors: list[str] = []
-    for module_name, source in candidates:
-        try:
-            module = import_module(module_name)
-            if hasattr(module, "World") and hasattr(module, "Agent"):
-                return module, source
-        except Exception as exc:  # pragma: no cover - diagnostic only
-            errors.append(f"{module_name}: {type(exc).__name__}: {exc}")
-    raise ImportError("Could not import a usable MPE core module. Tried: " + "; ".join(errors))
+def _canonical_mpe_source(source: str | None) -> str:
+    requested = str(source or DEFAULT_MPE_SOURCE)
+    return MPE_SOURCE_ALIASES.get(requested, requested)
 
 
-MPE_CORE_MODULE, MPE_SOURCE = _load_mpe_core()
-MPEWorld = MPE_CORE_MODULE.World
-MPEAgent = MPE_CORE_MODULE.Agent
+def _load_mpe_core(source: str | None = None):
+    """Load the explicitly requested MPE core source.
+
+    This intentionally does not fall back across sources. Reproducible dynamics
+    require selecting the source in the env config rather than depending on
+    whichever optional package happens to be installed.
+    """
+
+    canonical = _canonical_mpe_source(source)
+    if canonical not in MPE_CORE_SOURCES:
+        supported = ", ".join(sorted(MPE_CORE_SOURCES))
+        raise ValueError(f"Unsupported MPE core source: {source!r}. Supported sources: {supported}.")
+    module_name = MPE_CORE_SOURCES[canonical]
+    try:
+        module = import_module(module_name)
+    except Exception as exc:
+        raise ImportError(
+            f"Could not import configured MPE core source {canonical!r} from {module_name!r}. "
+            "Edit dynamics_backend.source manually instead of relying on automatic fallback."
+        ) from exc
+    if not (hasattr(module, "World") and hasattr(module, "Agent")):
+        raise ImportError(
+            f"Configured MPE core source {canonical!r} ({module_name}) does not expose World and Agent."
+        )
+    return module, canonical
 
 
 @dataclass
@@ -96,8 +116,10 @@ class MPECoreBackend(DynamicsBackend):
 
     def __init__(self, config: dict[str, Any] | None = None):
         cfg = dict(config or {})
-        self.requested_source = str(cfg.get("source", MPE_SOURCE))
-        self.source = str(MPE_SOURCE)
+        self.requested_source = str(cfg.get("source", DEFAULT_MPE_SOURCE))
+        self.mpe_core_module, self.source = _load_mpe_core(self.requested_source)
+        self.mpe_world_cls = self.mpe_core_module.World
+        self.mpe_agent_cls = self.mpe_core_module.Agent
         self.dt = float(cfg.get("dt", cfg.get("physics_dt", 0.1)))
         self.substeps = int(cfg.get("substeps", 10))
         self.damping = float(cfg.get("damping", 0.25))
@@ -118,7 +140,7 @@ class MPECoreBackend(DynamicsBackend):
         self.mpe_world_step_calls = 0
 
     def reset(self, world: MissionWorld) -> None:
-        self.mpe_world = MPEWorld()
+        self.mpe_world = self.mpe_world_cls()
         self.mpe_world.dim_p = 2
         self.mpe_world.dim_c = 0
         self.mpe_world.dt = float(self.dt)
@@ -128,7 +150,7 @@ class MPECoreBackend(DynamicsBackend):
         self.mpe_agents = []
         self.agent_name_to_mpe_agent = {}
         for idx, uav in enumerate(world.uavs):
-            agent = MPEAgent()
+            agent = self.mpe_agent_cls()
             agent.name = f"uav_{idx}"
             agent.movable = True
             agent.collide = True
@@ -284,7 +306,7 @@ class MPECoreBackend(DynamicsBackend):
             info={
                 "dynamics_backend": self.name,
                 "dynamics_finite": finite,
-                "mpe_source": MPE_SOURCE,
+                "mpe_source": self.source,
                 "requested_mpe_source": self.requested_source,
                 "uses_real_mpe_core": True,
                 "mpe_world_step_calls": int(last_step_calls),

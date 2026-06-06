@@ -34,6 +34,7 @@ def test_mpe_core_backend_creates_real_mpe_world_and_agents():
     world, config = _world_and_config()
     backend = MPECoreBackend(config["dynamics_backend"])
     backend.reset(world)
+    assert backend.source == "third_party_openai_mpe"
     assert hasattr(backend, "mpe_world")
     assert backend.mpe_world is not None
     assert len(backend.mpe_agents) == 3
@@ -78,6 +79,17 @@ def test_removed_self_written_backends_are_not_available():
         build_dynamics_backend({"name": "mpe_particle"})
     with pytest.raises(ValueError, match="Use mpe_core"):
         build_dynamics_backend({"name": "kinematic_point"})
+
+
+def test_mpe_core_source_is_explicit_not_auto_fallback():
+    local_backend = build_dynamics_backend({"name": "mpe_core"})
+    assert local_backend.source == "third_party_openai_mpe"
+
+    mpe2_backend = build_dynamics_backend({"name": "mpe_core", "source": "mpe2"})
+    assert mpe2_backend.source == "mpe2"
+
+    with pytest.raises(ValueError, match="Unsupported MPE core source"):
+        build_dynamics_backend({"name": "mpe_core", "source": "missing_source"})
 
 
 def test_backend_wrapper_does_not_contain_self_written_particle_integration():
