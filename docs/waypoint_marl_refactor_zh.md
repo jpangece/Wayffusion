@@ -236,7 +236,7 @@ MAPPO trainer 变化：
 - `configs/env/waypoint_missions.yaml`
   - 新增 `action_mode: waypoint`
   - 新增 `waypoint_dim: 2`
-  - 新增 `execution_model: kinematic_point`
+  - 新增 `execution_model`；当前已更新为 `mpe_core`
   - 删除 env 主配置中的 `candidate_count`
 - `configs/policy/mappo_waypoint*.yaml`
   - `policy_class: candidate_selection_waypoint`
@@ -266,95 +266,43 @@ MAPPO trainer 变化：
 
 这些结果证明 final waypoint action API、candidate-selection policy、direct waypoint policy、MAPPO rollout/update/eval/GIF 链路均可运行。它们不是长训练性能结论。
 
-## 2026-06-06 MPE-like dynamics backend refactor
+## 2026-06-06 Real MPE core backend replacement
 
-本轮目标是在不改变 final waypoint 外部动作接口的前提下，把旧的几何 waypoint execution 扩展为可配置 transition dynamics。
+上一轮自写 particle backend 已被删除，原因是它没有调用 OpenAI MPE / MPE2 / PettingZoo MPE 的底层 `World.step()`。当前主线只允许真实 MPE core dynamics。
 
-新增结构：
-
-- `envs/waypoint/control/action_adapters.py`
-  - `AdapterOutput`
-  - `WaypointVelocityTracker`
-  - `WaypointPDTracker`
-  - `VelocityToForceAdapter`
-  - `DirectAccelerationAdapter`
-  - `build_action_adapter`
-- `envs/waypoint/control/dynamics_backends.py`
-  - `DynamicsInfo`
-  - `MPEParticleBackend`
-  - `KinematicPointBackend`
-  - `build_dynamics_backend`
-- `envs/waypoint/control/__init__.py`
-- `tests/test_action_adapters.py`
-- `tests/test_mpe_particle_backend.py`
-- `docs/waypoint_mpe_dynamics_refactor.md`
-- `configs/env/waypoint_missions_kinematic_debug.yaml`
-- `configs/env/waypoint_missions_pd_adapter_debug.yaml`
-
-默认 transition stack：
+当前默认 transition stack：
 
 ```text
 final waypoint action
   -> SafetyLayer.validate_waypoints
   -> WaypointVelocityTracker
-  -> MPEParticleBackend
+  -> MPECoreBackend
+  -> real MPE World.step()
+  -> sync MPE agent state back to Wayffusion UAVState
   -> scenario.compute_rewards
 ```
 
-默认配置：
+当前默认配置：
 
 ```yaml
 action_interface: waypoint
 action_adapter:
   name: waypoint_velocity_tracker
 dynamics_backend:
-  name: mpe_particle
+  name: mpe_core
 ```
 
-关键实现：
+关键变更：
 
-- `SafetyLayer` 新增 `SafetyResult` 和 `validate_waypoints(...)`。
-- `WaypointMultiUAVEnv.step(...)` 现在合并 safety、adapter、dynamics 信息后传给 scenario reward。
-- `UAVState` 增加 `mass`、`radius`、`last_control`、`last_desired_velocity`。
-- `MissionWorld.from_config(...)` 读取 nested `dynamics_backend` 中的 `physics_dt/substeps/mass/damping/radius/max_speed`。
-- 初始 UAV 布置改为按 particle radius 更保守地采样，避免 MPE contact radius 下 episode 起点天然过近。
-- `CandidateSelectionWaypointPolicy.act_deterministic(...)` 增加 deterministic eval 去冲突，避免多个 UAV 在 eval 中选择过近 waypoint。
-- `MAPPOWaypointTrainer` rollout/eval 记录 dynamics metrics：
-  - `mean_speed`
-  - `max_speed_observed`
-  - `mean_control_norm`
-  - `collision_count`
-  - `no_fly_violation_count`
-  - `geofence_violation_count`
+- 删除可用后端 `mpe_particle`、`mpe_like_particle`、`kinematic_point`。
+- 删除可 import 类 `MPEParticleBackend`、`KinematicPointBackend`。
+- 新增 `MPECoreBackend`，真实持有 MPE `World` / `Agent`。
+- `MPECoreBackend.step(...)` 只设置 `agent.action.u` 并调用 `mpe_world.step()`，不在 wrapper 中重写 velocity integration、damping、contact force 或 max-speed clipping。
+- 当前本机没有安装 `mpe2` / `pettingzoo`，所以使用 vendored OpenAI MPE core：`third_party/openai_mpe/core.py`。
+- `tests/test_mpe_core_backend.py` 用 monkeypatch/spy 验证 `mpe_world.step()` 被调用。
+- validation summary 记录 `uses_real_mpe_core`、`mpe_source`、`mpe_world_step_calls`。
 
-验证结果：
+详细说明见：
 
-- `py_compile` waypoint 主线通过。
-- `git diff --check` 通过。
-- pytest：
-  - command: `/opt/conda/bin/python -m pytest -q tests/test_waypoint_env_api.py tests/test_action_adapters.py tests/test_mpe_particle_backend.py tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rewards.py tests/test_waypoint_rendering.py`
-  - result: `18 passed`
-- candidate-selection + MPE validate：
-  - output: `outputs/debug/waypoint_mappo_validation/20260606_mpe_candidate_validate_final_v2/`
-  - `passed=true`
-  - `action_validity_rate=1.0`
-  - `max_speed_observed=0.039999742060899734`
-  - `adapter_finite=true`
-  - `dynamics_finite=true`
-  - GIFs generated.
-- direct waypoint + MPE validate:
-  - output: `outputs/debug/waypoint_mappo_validation/20260606_mpe_direct_validate_final/`
-  - `passed=true`
-  - `action_validity_rate=1.0`
-  - `max_speed_observed=0.039999742060899734`
-  - `adapter_finite=true`
-  - `dynamics_finite=true`
-  - GIFs generated.
-- direct waypoint + kinematic debug validate:
-  - output: `outputs/debug/waypoint_mappo_validation/20260606_kinematic_direct_validate_final/`
-  - `passed=true`
-  - `action_validity_rate=0.9916666666666667`
-  - `max_speed_observed=0.07999999821186066`
-  - GIFs generated.
-
-这些结果证明 ActionAdapter + DynamicsBackend 集成、MPE-like particle 默认后端、kinematic debug 后端、candidate/direct policy、MAPPO rollout/update/eval/GIF 链路均可运行。它们不是长训练性能结论。
+- `docs/mpe_core_backend_zh.md`
+- `docs/third_party_mpe_source.md`

@@ -2,7 +2,7 @@
 
 Wayffusion is a waypoint-level multi-UAV MARL mission suite. The main API follows PettingZoo ParallelEnv semantics: each UAV is an agent, and each agent sends a final waypoint coordinate to the environment.
 
-The environment simulates waypoint tracking, particle dynamics, safety checks, task updates, rewards, metrics, and visualization. Candidate waypoint generation is not part of the environment action API. It belongs to policy or planner code.
+The environment simulates waypoint tracking, real MPE core particle dynamics, safety checks, task updates, rewards, metrics, and visualization. Candidate waypoint generation is not part of the environment action API. It belongs to policy or planner code.
 
 ## Main Components
 
@@ -42,7 +42,7 @@ Policy env_action [B,N,2]
   -> WaypointMultiUAVEnv.step(dict[str, waypoint])
   -> SafetyLayer.validate_waypoints
   -> WaypointVelocityTracker
-  -> MPEParticleBackend
+  -> MPECoreBackend
   -> scenario reward/metrics
 ```
 
@@ -50,9 +50,11 @@ Default config:
 
 - `action_interface: waypoint`
 - `action_adapter.name: waypoint_velocity_tracker`
-- `dynamics_backend.name: mpe_particle`
+- `dynamics_backend.name: mpe_core`
 
-`ActionAdapter` is environment transition dynamics, not policy. It converts safe final waypoints into low-level acceleration-like controls. `DynamicsBackend` integrates the particle state and updates position, velocity, path length, trajectories, communication graph, and coverage footprints.
+`ActionAdapter` is environment transition dynamics, not policy. It converts safe final waypoints into low-level MPE physical actions. `MPECoreBackend` owns the physical backend call: it synchronizes Wayffusion UAV state into MPE agents, writes `agent.action.u`, calls the real MPE `World.step()`, then synchronizes MPE agent state back into Wayffusion.
+
+Wayffusion no longer uses a self-written MPE-style particle backend. The old handwritten particle backend and kinematic waypoint backend were removed from the runnable mainline. If a config asks for `mpe_particle` or `kinematic_point`, backend construction fails and tells the user to use `mpe_core`.
 
 Available adapters:
 
@@ -60,10 +62,9 @@ Available adapters:
 - `WaypointPDTracker`: debug/ablation PD controller.
 - `VelocityToForceAdapter` and `DirectAccelerationAdapter`: smoke placeholders for future lower-level action interfaces.
 
-Available backends:
+Only supported backend:
 
-- `MPEParticleBackend`: default MPE-like particle dynamics. It does not replace Wayffusion tasks with MPE tasks.
-- `KinematicPointBackend`: old bounded geometric waypoint step, kept for debug/ablation.
+- `MPECoreBackend`: calls actual MPE `World.step()` from `mpe2`/PettingZoo if importable, otherwise from the vendored OpenAI MPE core in `third_party/openai_mpe/core.py`.
 
 ## Policy Families
 
@@ -108,7 +109,7 @@ Run tests:
 ```bash
 python -m pytest tests/test_waypoint_env_api.py
 python -m pytest tests/test_action_adapters.py
-python -m pytest tests/test_mpe_particle_backend.py
+python -m pytest tests/test_mpe_core_backend.py
 python -m pytest tests/test_waypoint_scenarios.py
 python -m pytest tests/test_waypoint_rewards.py
 python -m pytest tests/test_candidate_selection_policy.py
@@ -123,7 +124,7 @@ Validate candidate-selection MAPPO:
 python scripts/check/validate_waypoint_mappo.py \
   --tasks area_coverage belief_search connectivity_expansion \
   --policy-class candidate_selection_waypoint \
-  --dynamics-backend mpe_particle \
+  --dynamics-backend mpe_core \
   --action-adapter waypoint_velocity_tracker \
   --num_agents 3 \
   --total_updates 5 \
@@ -139,7 +140,7 @@ Validate direct waypoint MAPPO:
 python scripts/check/validate_waypoint_mappo.py \
   --tasks area_coverage belief_search \
   --policy-class direct_waypoint \
-  --dynamics-backend mpe_particle \
+  --dynamics-backend mpe_core \
   --action-adapter waypoint_velocity_tracker \
   --num_agents 3 \
   --total_updates 2 \

@@ -1,281 +1,149 @@
-你现在在 xiancaigua/Wayffusion 仓库的 MARL branch 上继续工作。
+你现在在 xiancaigua/Wayffusion 仓库的 MARL branch 上继续重构。
 
-上一轮重构已经完成：
+非常重要：本轮不是继续扩展当前自写的 MPE-like particle backend。
 
-- WaypointMultiUAVEnv 默认动作接口已经从 candidate index 改成 final waypoint。
-- WaypointMultiUAVEnv.step() 默认接收 dict[str, np.ndarray]，每架 UAV 的 action 是 [x, y] waypoint。
-- action_space(agent_id) 已经是 Box([0,0], [map_size,map_size], shape=(2,))。
-- candidate waypoint generation 已经从 env/task 中迁移到 policy/planner 侧。
-- planners/waypoint_candidates.py 已经存在。
-- candidate_index_legacy 只作为 debug/legacy action mode。
-- PolicyOutput 已经存在。
-- CandidateSelectionWaypointPolicy 已经存在。
-- DirectWaypointPolicy 已经存在。
-- MAPPO trainer 已经支持 env_action [B,N,D] 与 train_action/logprob 分离。
-- candidate-selection validate 和 direct waypoint validate 都已经通过。
-- GIF 保存仍然工作。
+当前代码里虽然有 MPEParticleBackend，但它只是自己写的 MPE-like 粒子动力学，并没有真正调用 OpenAI MPE / MPE2 / PettingZoo MPE 的底层 World / Agent / Entity / step / integrate_state 逻辑。
 
-本轮不要重复做以上工作，不要把环境动作接口改回 candidate index，不要重新大改 policy/trainer 主结构。
+这不符合当前要求。
 
-本轮目标是继续重构底层运动模型：
+当前要求是：
 
-1. 把当前过于简单的 waypoint execution model 替换/扩展为可配置 dynamics backend。
-2. 新增 ActionAdapter 层，把 final waypoint 转换为低层控制量。
-3. 新增 MPE-like particle dynamics backend，作为默认动力学后端。
-4. 保留当前 kinematic point model 作为 debug / ablation backend。
-5. 确保现有 final waypoint action interface、candidate-selection policy、direct waypoint policy、MAPPO trainer、GIF/MP4、validation 全部继续工作。
-6. ActionAdapter 必须被视为 environment transition dynamics 的一部分，而不是 policy 的一部分。
+只使用成熟 MPE 底层动力学。
+如果不是实际 MPE core，就删除或彻底重构。
+不要保留自写 particle integration / contact force / damping / collision backend。
+不要保留 MPE-like 作为 fallback。
+不要把自写 MPE-like 改个名字继续留下。
+不要再说“类似 MPE”。
+必须真正使用 MPE / MPE2 / OpenAI MPE core 的底层动力学。
 
 ============================================================
-1. 总体架构目标
+0. 本轮核心目标
 ============================================================
 
-当前环境主动作已经是 final waypoint。现在需要把 env.step 内部执行逻辑改成：
+把当前自写的：
 
-Policy
-  outputs env_action = final waypoint [B,N,2]
-    ↓
-WaypointMultiUAVEnv.step(actions: dict[str, waypoint])
+envs/waypoint/control/dynamics_backends.py::MPEParticleBackend
+
+彻底替换为真正的 MPE core backend。
+
+目标架构：
+
+Wayffusion policy
+  outputs final waypoint [N,2]
     ↓
 SafetyLayer
-  validates / clips / rejects final waypoints
+  validates waypoint
     ↓
 ActionAdapter
-  converts waypoint command into low-level control
+  converts waypoint to MPE physical action
     ↓
-DynamicsBackend
-  executes continuous particle dynamics
+MPECoreBackend
+  uses actual MPE/MPE2/OpenAI MPE World.step() / Agent / Entity / state / action
     ↓
-Scenario
-  updates task state and computes reward / metrics
+sync MPE agent states back to Wayffusion UAVState
+    ↓
+Wayffusion scenario reward / task field / coverage / belief / connectivity
 
-默认组合必须是：
+强调：
 
-action_interface: waypoint
-action_adapter: waypoint_velocity_tracker
-dynamics_backend: mpe_particle
-
-保留 debug / ablation 组合：
-
-action_interface: waypoint
-action_adapter: waypoint_velocity_tracker
-dynamics_backend: kinematic_point
+- Wayffusion 的任务、reward、observation、coverage/belief/connectivity 继续保留。
+- 但底层动力学积分、速度更新、阻尼、接触力、碰撞力，不允许自己写。
+- 这些必须由 MPE core 的 World.step() 等底层逻辑完成。
 
 ============================================================
-2. 新增 ActionAdapter 层
+1. 依赖选择原则
 ============================================================
 
-新增文件，推荐路径：
+优先顺序：
 
-envs/waypoint/control/
-  __init__.py
-  action_adapters.py
-  dynamics_backends.py
+1. 优先使用 mpe2 包。
+   - 因为 PettingZoo 文档已经说明 pettingzoo.mpe 已迁移到 mpe2。
+   - 在 requirements 中加入 mpe2。
+   - 优先从 mpe2 中找到可复用的 core/world/agent/entity 结构。
 
-或者如果当前项目结构更适合，也可以使用：
+2. 如果 mpe2 不暴露可复用 core classes，则使用 PettingZoo/MPE 内部 core。
+   - 可以通过安装 pettingzoo[mpe] 或 mpe2 后 inspect 包结构。
+   - 但不要依赖即将移除的 pettingzoo.mpe 作为长期主方案，除非 mpe2 没有暴露底层 core。
 
-envs/waypoint/action_adapters.py
-envs/waypoint/dynamics_backends.py
+3. 如果 pip package 不暴露 core，只允许 vendor 官方 OpenAI multiagent-particle-envs 的 core.py。
+   - 必须放到 third_party/openai_mpe/。
+   - 必须保留 LICENSE / attribution / README。
+   - vendor 文件必须尽量原样保存。
+   - 不允许把 vendor core 改成自己的自写版本。
+   - 所有 Wayffusion 适配逻辑写在 wrapper 中，不要直接魔改 third_party core。
 
-但命名必须清楚。
+不允许：
 
-ActionAdapter 的职责：
-
-- 输入 final waypoint action 和当前 world state。
-- 输出 low-level control，例如 acceleration / force command。
-- 不负责 reward。
-- 不负责 candidate generation。
-- 不负责 policy sampling。
-- 不根据 task_name 偷偷改变行为。
-- 它是 environment dynamics 的一部分，必须写进 env config 和 snapshot。
-
-定义统一输出结构：
-
-@dataclass
-class AdapterOutput:
-    controls: np.ndarray              # [N,2], acceleration-like or force-like control
-    desired_velocities: np.ndarray    # [N,2]
-    accepted_mask: np.ndarray         # [N]
-    clipped_waypoints: np.ndarray     # [N,2]
-    control_norms: np.ndarray         # [N]
-    info: dict
-
-如果实现中需要其他字段，可以扩展，但以上字段必须有。
+- 继续使用当前手写 MPEParticleBackend 的积分公式。
+- 继续保留自己写的 collision force。
+- 继续保留 KinematicPointBackend 作为默认或 fallback。
+- 在 backend 里自己写：
+  velocity = (1-damping) * velocity + force / mass * dt
+  position = position + velocity * dt
+  这种 MPE-like integration。
+- 自己写 contact_force / penetration / collision response。
+- 用“我们实现了 MPE-like”作为完成标准。
 
 ============================================================
-3. 默认 ActionAdapter：WaypointVelocityTracker
+2. 删除或替换旧自写 backend
 ============================================================
 
-新增：
+当前文件：
 
-class WaypointVelocityTracker
+envs/waypoint/control/dynamics_backends.py
 
-它是默认 adapter。
+里面的这些内容不符合要求：
 
-输入：
+- MPEParticleBackend 里自写的 velocity integration
+- MPEParticleBackend 里自写的 collision/contact force
+- MPEParticleBackend 里自写的 no-fly/geofence projection as physical dynamics
+- KinematicPointBackend 旧几何移动 backend
 
-- world
-- waypoint_actions [N,2]
-- optional safety_info
+请做以下修改：
 
-核心公式：
+1. 删除当前 MPEParticleBackend 的自写实现。
+2. 删除 KinematicPointBackend，或者至少不要作为可选 backend 出现在 config/build 函数中。
+3. 新增唯一主 backend：
 
-e_i = w_i - p_i
-d_i = ||e_i||
-dir_i = e_i / (d_i + eps)
+class MPECoreBackend
 
-先生成期望速度：
+4. build_dynamics_backend(config) 只允许：
 
-v_des_i =
-    max_speed
-    * min(1, d_i / slowdown_radius)
-    * dir_i
+name == "mpe_core"
 
-如果 d_i < acceptance_radius 且 hover_when_arrived=True：
+如果 config 使用：
 
-v_des_i = 0
+- mpe_particle
+- mpe_like_particle
+- kinematic_point
 
-然后做速度闭环：
+必须 raise ValueError，并提示这些 backend 已被删除，因为项目现在只允许真实 MPE core dynamics。
 
-a_cmd_i = velocity_gain * (v_des_i - v_i)
+也就是说，不要再保留：
 
-限制最大加速度：
+dynamics_backend:
+  name: mpe_particle
 
-||a_cmd_i|| <= max_accel
+默认必须改成：
 
-可选控制平滑：
-
-a_cmd_i =
-    (1 - control_smoothing) * previous_control_i
-    + control_smoothing * raw_a_cmd_i
-
-其中：
-
-- control_smoothing = 1.0 表示不平滑。
-- control_smoothing 越小，控制变化越平滑。
-
-可选 tracking noise：
-
-a_cmd_i += Normal(0, tracking_noise_std)
-
-配置默认值：
-
-action_adapter:
-  name: waypoint_velocity_tracker
-  max_command_distance: 0.22
-  max_speed: 0.08
-  slowdown_radius: 0.12
-  velocity_gain: 4.0
-  max_accel: 0.25
-  control_smoothing: 0.35
-  acceptance_radius: 0.025
-  hover_when_arrived: true
-  command_latency_steps: 0
-  tracking_noise_std: 0.0
-  clip_to_geofence: true
-  reject_no_fly_waypoints: true
-
-要求：
-
-- reset(world) 清空 previous_control / latency buffer。
-- adapt(world, waypoint_actions, safety_info=None) 返回 AdapterOutput。
-- controls 不得 NaN。
-- control_norms 不得超过 max_accel + tolerance。
-- 远距离时 desired velocity 接近 max_speed。
-- 近距离时 desired velocity 自动减小。
-- acceptance_radius 内能 hover / brake。
+dynamics_backend:
+  name: mpe_core
 
 ============================================================
-4. 对照 Adapter：WaypointPDTracker
+3. 新增 MPECoreBackend
 ============================================================
 
-新增：
+新增或重写：
 
-class WaypointPDTracker
+envs/waypoint/control/dynamics_backends.py
 
-它作为 ablation / debug controller，不是默认主线。
-
-公式：
-
-a_cmd_i = kp * (w_i - p_i) - kd * v_i
-
-然后限制：
-
-||a_cmd_i|| <= max_accel
-
-可选控制平滑同上。
-
-默认配置：
-
-action_adapter:
-  name: waypoint_pd_tracker
-  kp: 2.0
-  kd: 2.8
-  max_accel: 0.25
-  control_smoothing: 0.35
-  acceptance_radius: 0.025
-
-要求：
-
-- 加速度方向应大体朝向 waypoint。
-- 当前速度方向过大时 damping 项应能减速。
-- acceleration norm 不超过 max_accel。
-- 主要用于 ablation，不作为默认。
-
-============================================================
-5. 预留 Velocity / Force Adapter
-============================================================
-
-为了后续研究不同动作接口，预留但不必作为默认训练主线：
-
-VelocityToForceAdapter:
-  input action = desired velocity [N,2]
-  a_cmd = velocity_gain * (v_des - v)
-
-DirectAccelerationAdapter 或 DirectForceAdapter:
-  input action = low-level control [N,2]
-  output = clipped action
-
-要求：
-
-- 可以先做 smoke 版本。
-- 不破坏当前 waypoint 主线。
-- README 简要说明预留能力即可。
-
-============================================================
-6. 新增 DynamicsBackend 抽象
-============================================================
-
-新增统一接口：
-
-class DynamicsBackend:
-    def reset(self, world): ...
-    def step(self, world, controls, adapter_output=None, safety_result=None) -> DynamicsInfo: ...
-
-DynamicsBackend 负责：
-
-- 连续动力学积分
-- velocity update
-- position update
-- damping
-- mass
-- max speed clipping
-- collision/contact force
-- disturbance / wind / action noise
-- geofence / no-fly hard handling
-- min inter-UAV distance or collision handling
-- path length update
-- trajectory update
-- communication graph update
-- coverage footprint update
-
-定义统一输出结构：
+保留通用结构：
 
 @dataclass
 class DynamicsInfo:
-    path_length_delta: np.ndarray     # [N]
-    arrived_mask: np.ndarray          # [N]
-    rejected_mask: np.ndarray         # [N]
+    path_length_delta: np.ndarray
+    arrived_mask: np.ndarray
+    rejected_mask: np.ndarray
     safety_violation_count: int
     min_pairwise_distance: float
     collision_count: int
@@ -288,589 +156,429 @@ class DynamicsInfo:
     substeps: int
     info: dict
 
-如果项目里已有 transition_info 字段，请保持兼容。scenario.compute_rewards 依赖的字段不能丢。
+但是 DynamicsBackend 只实现：
 
-============================================================
-7. 默认 DynamicsBackend：MPEParticleBackend
-============================================================
+class MPECoreBackend(DynamicsBackend)
 
-新增：
+MPECoreBackend 必须真实持有 MPE world / agents。
 
-class MPEParticleBackend
+推荐内部字段：
 
-它是默认 dynamics backend。
+self.mpe_world
+self.mpe_agents
+self.agent_name_to_mpe_agent
+self.dt
+self.substeps
+self.last_positions
+self.last_velocities
+
+MPECoreBackend.reset(world):
+
+1. 创建 MPE World。
+2. 创建与 Wayffusion UAV 数量相同的 MPE Agent。
+3. 对每个 agent 设置：
+   - movable = True
+   - collide = True
+   - silent = True unless communication needed later
+   - size / radius
+   - accel
+   - max_speed
+   - mass
+   - state.p_pos = Wayffusion UAV position
+   - state.p_vel = Wayffusion UAV velocity
+   - action.u = zeros
+4. 将 MPE world 的 dt / damping / contact_force / contact_margin 等参数设置为 config 中对应参数。
+5. 不要自己手写这些 dynamics 参数的作用，只设置给 MPE world，让 MPE world.step() 使用。
+6. 保存映射关系。
+
+MPECoreBackend.step(world, controls, adapter_output, safety_result):
+
+1. 将 Wayffusion UAVState 同步到 MPE agents：
+   - MPE agent.state.p_pos = uav.position
+   - MPE agent.state.p_vel = uav.velocity
+
+2. 将 adapter_output.controls 转成 MPE physical action：
+   - agent.action.u = controls[i]
+   - 如果 MPE core action.u 语义是 force / acceleration / normalized force，需要按 MPE core 的要求做 scale。
+   - 这个 scale 是 action adapter / wrapper 的职责，但底层积分必须仍由 MPE core.step() 做。
+
+3. 调用 MPE world.step()。
+   - 如果需要 substeps，则每个 substep 都调用 MPE world.step()。
+   - 不允许自己写 integration loop 替代 MPE world.step()。
+   - 可以在每个 substep 前同步 action.u。
+   - 可以在每个 substep 后做 Wayffusion 特有的 hard safety projection，但必须记录为 safety correction，不要伪装成 MPE dynamics。
+
+4. 从 MPE agents 同步回 Wayffusion UAVState：
+   - uav.position = agent.state.p_pos
+   - uav.velocity = agent.state.p_vel
+   - uav.last_control = controls[i]
+   - uav.path_length += distance moved
+   - uav.trajectory.append(position)
+   - battery update 可以保留 Wayffusion 自己的任务层消耗逻辑
+
+5. 更新 Wayffusion world:
+   - world.step_count += 1
+   - world.update_communication_graph()
+   - world.accumulate_sensor_footprints()
+
+6. 返回 DynamicsInfo。
 
 注意：
 
-- 不要直接使用 PettingZoo MPE 的任务环境。
-- 不要把 Wayffusion 任务替换成 simple_spread/simple_tag 等 MPE 任务。
-- 只实现或借鉴 MPE-like particle dynamics 作为底层动力学。
-- Wayffusion 的 tasks/scenario/reward/observation 继续保留。
-
-如果移植 OpenAI MPE core 的代码，必须检查并保留 license / attribution；不要无说明复制。
-
-MPEParticleBackend 的核心状态：
-
-每个 UAV 至少有：
-
-- position p_i
-- velocity v_i
-- mass
-- radius / size
-- max_speed
-- last_control
-- trajectory
-
-核心更新公式：
-
-v_i <- (1 - damping) * v_i + (control_i + env_force_i) / mass_i * physics_dt
-
-if ||v_i|| > max_speed:
-    v_i <- v_i / ||v_i|| * max_speed
-
-p_i <- p_i + v_i * physics_dt
-
-每个 decision step 内执行多个 physics substeps：
-
-decision_dt = 1.0
-physics_dt = 0.05
-substeps = int(decision_dt / physics_dt)
-
-for substep in range(substeps):
-    optionally add action noise
-    optionally add wind / environment disturbance
-    optionally compute contact/collision force
-    integrate velocity
-    clip max speed
-    integrate position
-    enforce boundary / no-fly / collision constraints
-    update trajectory
-
-默认配置：
-
-dynamics_backend:
-  name: mpe_particle
-  decision_dt: 1.0
-  physics_dt: 0.05
-  substeps: 20
-  mass: 1.0
-  damping: 0.20
-  max_speed: 0.08
-  radius: 0.02
-  contact_force: 100.0
-  contact_margin: 0.01
-  enable_collision_force: true
-  enable_boundary_projection: true
-  enable_no_fly_projection: true
-  wind_std: 0.0
-  action_noise_std: 0.0
-  position_noise_std: 0.0
-
-要求：
-
-- 速度连续，不允许像旧模型一样直接把位置几何推进到 max step。
-- max_speed_observed 不超过 max_speed + tolerance。
-- path_length_delta finite。
-- 所有输出不能 NaN。
-- wind_std/action_noise_std 为 0 时，给定 seed 应该 deterministic。
-- 需要记录 mean_speed、max_speed_observed、mean_control_norm 等 dynamics metrics。
+- 位置/速度积分必须来自 MPE world.step()。
+- 碰撞/contact force 必须来自 MPE core。
+- damping 必须来自 MPE core。
+- max speed clipping 必须来自 MPE core。
+- 不允许在 MPECoreBackend 中自己重新实现以上内容。
 
 ============================================================
-8. 保留 KinematicPointBackend
+4. ActionAdapter 的保留边界
 ============================================================
 
-将当前简单 waypoint execution 逻辑改造成：
+ActionAdapter 可以保留，因为 Wayffusion 外部 action 是 waypoint，而 MPE core 接收 physical action。
 
-class KinematicPointBackend
+但 ActionAdapter 不能再承担底层动力学积分责任。
 
-它可以保留当前行为：
+允许保留：
 
-p_next =
-    p + direction_to_waypoint * min(distance, max_speed * decision_dt)
+- WaypointVelocityTracker
+- WaypointPDTracker
+- VelocityToForceAdapter
+- DirectAccelerationAdapter
 
-但只能作为 debug / ablation，不作为默认。
+但它们的输出必须明确命名为：
 
-配置：
+mpe_action_u
 
-dynamics_backend:
-  name: kinematic_point
+或者：
 
-要求：
+physical_action
 
-- 与新 DynamicsBackend 接口兼容。
-- 返回相同 DynamicsInfo 字段。
-- validate 脚本支持 kinematic_point smoke test。
+不要再叫 force backend 或 dynamics integration。
 
-============================================================
-9. SafetyLayer 增强 final waypoint 检查
-============================================================
+ActionAdapter 只做：
 
-上一轮已经将 env action 改成 final waypoint。本轮需要确保 SafetyLayer 支持 final waypoint 的完整检查。
+waypoint -> MPE physical action.u
 
-新增或完善：
+它可以计算：
 
-class SafetyResult:
-    safe_waypoints: np.ndarray
-    valid_mask: np.ndarray
-    clipped_mask: np.ndarray
-    rejected_mask: np.ndarray
-    geofence_violation_mask: np.ndarray
-    no_fly_violation_mask: np.ndarray
-    distance_violation_mask: np.ndarray
-    connectivity_violation_mask: np.ndarray
-    info: dict
+- desired_velocity
+- proportional velocity tracking control
+- PD control
+- clipping action.u
 
-SafetyLayer.validate_waypoints(world, waypoints, config) -> SafetyResult
-
-要求：
-
-1. waypoint 超出 geofence：
-   - clip_to_geofence=True 时投影
-   - strict_action_validation=True 时 raise
-   - 否则替换 fallback
-
-2. waypoint 落入 no-fly zone：
-   - reject_no_fly_waypoints=True 时替换 fallback
-   - 或投影到最近安全边界
-
-3. waypoint 离当前位置过远：
-   - max_command_distance 限制
-   - 远航点截断为 local waypoint：
-     p + max_command_distance * direction
-
-4. optional joint connectivity hard check：
-   - 如果任务是 connectivity_expansion 或 require_connectivity=True，则检查所有 UAV 同时朝 safe_waypoints 执行后的通信图是否可能断连。
-   - 如果会断连，替换导致断连的 waypoint 为 fallback。
-   - info 中记录 connectivity_action_rejected_count。
-   - 不要求第一版求全局最优组合，但不能只做单个候选点独立检查。
-
-5. fallback waypoint：
-   - stay
-   - return-to-base
-   - nearest connected safe point
-   可以先实现 stay 和 return-to-base。
+但不能更新 position / velocity。
 
 ============================================================
-10. 修改 WaypointMultiUAVEnv.step 内部执行顺序
+5. 配置重构
 ============================================================
 
-保持当前 external API 不变：
-
-step(actions: dict[str, np.ndarray])
-
-内部改成：
-
-1. parse waypoint actions -> raw_waypoints [N,2]
-2. safety_result = SafetyLayer.validate_waypoints(...)
-3. adapter_output = ActionAdapter.adapt(world, safety_result.safe_waypoints, safety_result)
-4. prev_world = world.snapshot()
-5. scenario.step_update(world, task_state) if needed
-6. dynamics_info = DynamicsBackend.step(world, adapter_output.controls, adapter_output, safety_result)
-7. update communication graph / coverage footprint if backend did not already do it
-8. reward_result = scenario.compute_rewards(prev_world, world, task_state, transition_info)
-9. build observations / rewards / terminations / truncations / infos
-
-transition_info passed to scenario should merge:
-
-- safety_result info
-- adapter_output info
-- dynamics_info fields
-
-info returned by env.step must include at least:
-
-- selected_waypoints / safe_waypoints
-- action_validity
-- adapter_info
-- dynamics_info
-- mean_speed
-- max_speed_observed
-- mean_control_norm
-- collision_count
-- path_length
-- task_metrics
-- reward_components
-- team_reward
-- per_agent_rewards
-
-============================================================
-11. 修改 World / UAVState
-============================================================
-
-检查 envs/waypoint/entities.py 和 envs/waypoint/world.py。
-
-UAVState 需要支持 MPE-like dynamics：
-
-- position
-- velocity
-- mass
-- radius / size
-- current_waypoint
-- last_control
-- last_desired_velocity
-- battery
-- path_length
-- trajectory
-- connected_to_base
-- last_action_valid
-- status
-
-MissionWorld 需要支持或读取：
-
-- decision_dt
-- physics_dt
-- substeps
-- mass
-- damping
-- max_speed
-- radius
-- no_fly_zones
-- geofence
-- base_position
-- comm_radius
-- base_comm_radius
-- pairwise distance
-- communication graph
-- coverage footprint update
-
-不要把 task-specific reward 写进 world。
-
-============================================================
-12. 配置文件修改
-============================================================
-
-更新：
+修改：
 
 configs/env/waypoint_missions.yaml
 
-确保包含：
+默认改为：
 
-action_interface: waypoint
-waypoint_dim: 2
-
-action_adapter:
-  name: waypoint_velocity_tracker
-  max_command_distance: 0.22
+dynamics_backend:
+  name: mpe_core
+  source: mpe2
+  dt: 0.1
+  substeps: 10
+  damping: 0.25
+  contact_force: 100.0
+  contact_margin: 0.01
+  agent_size: 0.02
+  agent_accel: 1.0
   max_speed: 0.08
-  slowdown_radius: 0.12
-  velocity_gain: 4.0
-  max_accel: 0.25
-  control_smoothing: 0.35
-  acceptance_radius: 0.025
-  hover_when_arrived: true
-  command_latency_steps: 0
-  tracking_noise_std: 0.0
-  clip_to_geofence: true
-  reject_no_fly_waypoints: true
+  action_scale: 1.0
+
+删除或废弃：
 
 dynamics_backend:
   name: mpe_particle
-  decision_dt: 1.0
-  physics_dt: 0.05
-  substeps: 20
-  mass: 1.0
-  damping: 0.20
-  max_speed: 0.08
-  radius: 0.02
-  contact_force: 100.0
-  contact_margin: 0.01
-  enable_collision_force: true
-  enable_boundary_projection: true
-  enable_no_fly_projection: true
-  wind_std: 0.0
-  action_noise_std: 0.0
-  position_noise_std: 0.0
 
-新增或更新 debug config：
+删除：
 
 configs/env/waypoint_missions_kinematic_debug.yaml
 
-其中：
+或者将其改成 expected-failure / deprecated 文档，不要作为可运行配置存在。
 
-dynamics_backend:
-  name: kinematic_point
-
-可选新增：
+删除或修改：
 
 configs/env/waypoint_missions_pd_adapter_debug.yaml
 
-其中：
+如果保留，只能切换 adapter，不允许切换到非 MPE backend。
 
-action_adapter:
-  name: waypoint_pd_tracker
+所有 env config 中不得再出现：
 
-不要把 candidate_count 移回 env 主配置。candidate_count 应继续留在 policy config。
+- mpe_particle
+- mpe_like_particle
+- kinematic_point
 
-============================================================
-13. 不要破坏现有 Policy / Trainer
-============================================================
-
-上一轮已经完成：
-
-- PolicyOutput
-- CandidateSelectionWaypointPolicy
-- DirectWaypointPolicy
-- MAPPO trainer 支持 env_action / train_action 分离
-
-本轮不要重写这些主结构。
-
-只允许做必要适配：
-
-- obs/global_state 中如果需要 dynamics metadata，可加入。
-- trainer 记录 dynamics metrics。
-- validate 支持 dynamics_backend/action_adapter 参数。
-- candidate/direct policies 继续输出 env_action [B,N,2]。
-
-必须保持：
-
-- candidate-selection policy validate 继续通过。
-- direct waypoint policy validate 继续通过。
+如果出现，测试应该失败。
 
 ============================================================
-14. 测试新增与修改
+6. 依赖与 vendor 策略
 ============================================================
-
-保留上一轮已通过的测试，并新增/增强以下测试。
 
 新增：
 
-tests/test_action_adapters.py
+requirements.txt 或 requirements-server.txt 中加入：
 
-测试 WaypointVelocityTracker：
+mpe2
 
-- far waypoint: desired speed 接近 max_speed
-- near waypoint: desired speed 低于 far case
-- acceleration/control norm <= max_accel + tolerance
-- acceptance_radius 内 hover_when_arrived 时 desired velocity 接近 0
-- output finite
+如果使用 vendor OpenAI MPE core，则新增：
 
-测试 WaypointPDTracker：
+third_party/openai_mpe/
+  LICENSE
+  README.md
+  core.py
+  __init__.py
 
-- acceleration 大体朝向 waypoint
-- 当前速度过大时 damping 项能产生减速效果
-- control norm <= max_accel + tolerance
-- output finite
+并新增：
+
+docs/third_party_mpe_source.md
+
+说明：
+
+- 使用哪个 upstream。
+- 版本 / commit / package。
+- 为什么 vendor。
+- 哪些文件原样保留。
+- Wayffusion wrapper 在哪里。
+- 不要把 vendor core 和 Wayffusion adapter 混在一起。
+
+优先尝试 mpe2 import：
+
+python -c "import mpe2; import pkgutil; print(mpe2.__file__); print([m.name for m in pkgutil.walk_packages(mpe2.__path__, mpe2.__name__+'.') if 'core' in m.name or 'world' in m.name])"
+
+如果找不到 core，再尝试 pettingzoo.mpe 内部结构。
+
+如果仍找不到，再 vendor OpenAI MPE core。
+
+最终必须在代码中能说明：
+
+MPECoreBackend 使用的是：
+- mpe2 internal core
+或
+- pettingzoo.mpe internal core
+或
+- third_party/openai_mpe/core.py
+
+但绝不能是自己写的 particle backend。
+
+============================================================
+7. 测试要求：必须证明不是自写后端
+============================================================
 
 新增：
+
+tests/test_mpe_core_backend.py
+
+必须测试：
+
+1. MPECoreBackend 能创建真实 MPE world / agent 对象。
+   assert hasattr(backend, "mpe_world")
+   assert len(backend.mpe_agents) == num_agents
+
+2. MPECoreBackend.step() 必须调用 MPE world.step()。
+   - 使用 monkeypatch / spy 包装 backend.mpe_world.step。
+   - 调用 backend.step(...)
+   - assert world.step 被调用 substeps 次或至少一次。
+
+3. dynamics_backends.py 不再包含自写 MPEParticleBackend。
+   - assert not hasattr(module, "MPEParticleBackend")
+   - assert build_dynamics_backend({"name": "mpe_particle"}) raises ValueError
+   - assert build_dynamics_backend({"name": "kinematic_point"}) raises ValueError
+
+4. 禁止自写 integration 关键模式。
+   可以做文本测试，读取 dynamics_backends.py，确保不存在明显自写积分片段：
+   - "(1.0 - self.damping) * velocities"
+   - "positions + velocities *"
+   - "_collision_forces"
+   - "contact_force * penetration"
+   这些逻辑只能出现在 third_party/openai_mpe/core.py 或 site-packages，不允许出现在 Wayffusion backend wrapper 中。
+
+5. step 后 Wayffusion UAVState 与 MPE agent state 同步：
+   - uav.position == agent.state.p_pos
+   - uav.velocity == agent.state.p_vel
+
+6. max_speed / damping / contact 参数来自 MPE core config，并设置到 MPE world / agents。
+   不要求在 wrapper 里重新实现。
+
+7. finite:
+   - position finite
+   - velocity finite
+   - DynamicsInfo finite
+
+============================================================
+8. 更新旧测试
+============================================================
+
+删除或重写：
 
 tests/test_mpe_particle_backend.py
 
-测试 MPEParticleBackend：
+改成：
 
-- step 后 position/velocity finite
-- velocity 连续，不是直接 teleport
-- max_speed_observed <= max_speed + tolerance
-- wind_std=0/action_noise_std=0 时 deterministic
-- path_length_delta finite
-- collision/contact 或 min-distance 逻辑不产生 NaN
-- DynamicsInfo 字段完整
+tests/test_mpe_core_backend.py
 
-修改：
+所有测试中不允许再 import：
+
+MPEParticleBackend
+KinematicPointBackend
+
+更新：
 
 tests/test_waypoint_env_api.py
-
-增加断言：
-
-- env.step(info) 包含 adapter_info
-- env.step(info) 包含 dynamics_info
-- info 包含 mean_speed / max_speed_observed / mean_control_norm
-- action_space 仍然是 Box waypoint，不退回 candidate index
-
-修改：
-
 tests/test_mappo_waypoint_trainer.py
-
-增加断言：
-
-- collect_rollout 能记录 dynamics metrics
-- candidate-selection policy + mpe_particle backend smoke 通过
-- direct waypoint policy + mpe_particle backend smoke 通过
-- truncated bootstrap 仍然正确
-
-修改或增强：
-
-tests/test_waypoint_rewards.py
-
-确保 reward 仍能读取 transition_info：
-
-- path_length_delta
-- safety_violation_count
-- collision_count
-- no_fly_violation_count
-- geofence_violation_count
-
-修改：
-
 tests/test_waypoint_rendering.py
+tests/test_action_adapters.py
 
-确保使用 MPEParticleBackend 后：
+确保它们默认使用：
 
-- render("rgb_array") 正常
-- GIF 生成正常
-- trajectory 看起来不是空的
+dynamics_backend.name = mpe_core
+
+而不是 mpe_particle。
 
 ============================================================
-15. Validate Script 修改
+9. validate 脚本更新
 ============================================================
 
 修改：
 
 scripts/check/validate_waypoint_mappo.py
 
-新增参数：
+删除 CLI choices 中的：
 
---dynamics-backend mpe_particle | kinematic_point
---action-adapter waypoint_velocity_tracker | waypoint_pd_tracker
-
-保持已有：
-
---policy-class candidate_selection_waypoint | direct_waypoint
-
-默认：
-
---policy-class candidate_selection_waypoint
 --dynamics-backend mpe_particle
---action-adapter waypoint_velocity_tracker
+--dynamics-backend kinematic_point
 
-validate_summary.json 增加：
+只允许：
 
-- action_interface
-- action_adapter
-- dynamics_backend
-- mean_speed
-- max_speed_observed
-- mean_control_norm
-- collision_count
-- no_fly_violation_count
-- geofence_violation_count
-- dynamics_finite
-- adapter_finite
-- gif_paths
-- passed
+--dynamics-backend mpe_core
+
+或者直接默认不暴露 backend 选择。
+
+如果用户传：
+
+--dynamics-backend mpe_particle
+
+必须报错，并提示：
+
+mpe_particle was removed because it was a self-written MPE-like backend. Use mpe_core.
+
+summary 中记录：
+
+dynamics_backend: mpe_core
+mpe_source: mpe2 / pettingzoo_mpe / third_party_openai_mpe
+mpe_world_step_calls
+uses_real_mpe_core: true
 
 passed 条件增加：
 
-- no NaN
-- finite reward
-- finite policy/value losses
-- action_validity_rate >= 0.99
-- max_speed_observed <= max_speed + tolerance
-- adapter_finite == true
-- dynamics_finite == true
-- at least one GIF path exists
-- for candidate-selection policy: candidate_mask_empty_count == 0
-
-必须支持以下命令：
-
-python scripts/check/validate_waypoint_mappo.py \
-  --tasks area_coverage belief_search connectivity_expansion \
-  --policy-class candidate_selection_waypoint \
-  --dynamics-backend mpe_particle \
-  --action-adapter waypoint_velocity_tracker \
-  --num_agents 3 \
-  --total_updates 5 \
-  --eval_episodes 2 \
-  --record_eval_episodes 1 \
-  --record_format gif \
-  --headless
-
-python scripts/check/validate_waypoint_mappo.py \
-  --tasks area_coverage belief_search \
-  --policy-class direct_waypoint \
-  --dynamics-backend mpe_particle \
-  --action-adapter waypoint_velocity_tracker \
-  --num_agents 3 \
-  --total_updates 2 \
-  --eval_episodes 1 \
-  --record_eval_episodes 1 \
-  --record_format gif \
-  --headless
-
-python scripts/check/validate_waypoint_mappo.py \
-  --tasks area_coverage \
-  --policy-class direct_waypoint \
-  --dynamics-backend kinematic_point \
-  --num_agents 3 \
-  --total_updates 1 \
-  --eval_episodes 1 \
-  --headless
+uses_real_mpe_core == true
+mpe_world_step_calls > 0
 
 ============================================================
-16. 可视化修改
+10. README / 文档更新
 ============================================================
 
-保留 render("rgb_array") 和 GIF/MP4 保存。
+更新 README：
 
-渲染中尽量增加：
+必须明确写：
 
-- current waypoint command / safe waypoint
-- actual UAV trajectory
-- optional velocity vector
-- communication links
-- no-fly zones
-- coverage / belief / POI / target
-- collision / disconnected 标记
-- task name
-- step
-- main metrics
+- Wayffusion no longer uses a self-written MPE-like particle backend.
+- The only supported dynamics backend is MPECoreBackend.
+- MPECoreBackend calls actual MPE world.step().
+- Wayffusion keeps its own task/reward/observation layer, but physical particle dynamics come from MPE core.
+- Old MPE-like backend and kinematic backend were removed.
 
-使用 MPEParticleBackend 后，trajectory 应该体现连续速度积分，不应像 teleport。
+删除或修改之前 README 中：
 
-============================================================
-17. 文档更新
-============================================================
-
-更新 README 和已有 docs，不要重复解释上一轮已经完成的 candidate migration，但要新增说明：
-
-- action interface 已经是 final waypoint。
-- candidate selection 是 policy family，不是 env main API。
-- 本轮新增 action_adapter 和 dynamics_backend。
-- 默认：
-  - action_interface = waypoint
-  - action_adapter = waypoint_velocity_tracker
-  - dynamics_backend = mpe_particle
-- ActionAdapter 是 environment transition dynamics 的组成部分。
-- MPEParticleBackend 是 MPE-like particle dynamics backend，不是直接替换成 MPE 原始任务。
-- KinematicPointBackend 仅用于 debug / ablation。
-- WaypointVelocityTracker 与 WaypointPDTracker 的设计区别。
+- MPE-like particle dynamics
+- KinematicPointBackend
+- debug/ablation kinematic backend
+- mpe_particle
 
 新增文档：
 
-docs/waypoint_mpe_dynamics_refactor.md
+docs/mpe_core_backend_zh.md
 
 内容包括：
 
-1. 为什么需要从 kinematic point 升级到 MPE-like particle dynamics。
-2. ActionAdapter / DynamicsBackend 的边界。
-3. WaypointVelocityTracker 的公式。
-4. WaypointPDTracker 的公式。
-5. MPEParticleBackend 的公式。
-6. 如何通过 config 切换 backend / adapter。
-7. 如何做 ablation：
-   - mpe_particle vs kinematic_point
-   - waypoint_velocity_tracker vs waypoint_pd_tracker
-   - candidate-selection policy vs direct waypoint policy
+1. 为什么删除自写 MPE-like backend。
+2. 当前使用的 MPE source：
+   - mpe2
+   - pettingzoo.mpe
+   - or third_party/openai_mpe
+3. Wayffusion UAVState 如何映射到 MPE Agent。
+4. Waypoint adapter 如何映射到 MPE action.u。
+5. MPE world.step 如何被调用。
+6. 哪些仍是 Wayffusion 自己的：
+   - tasks
+   - reward
+   - task_field
+   - coverage/belief grids
+   - connectivity graph
+   - rendering
+7. 哪些必须来自 MPE core：
+   - velocity integration
+   - damping
+   - contact/collision force
+   - max_speed clipping
+8. 如何验证不是自写后端。
 
 ============================================================
-18. 必须运行的命令
+11. 删除旧文件 / 清理残留
+============================================================
+
+搜索全仓库：
+
+mpe_particle
+MPEParticleBackend
+mpe_like
+KinematicPointBackend
+kinematic_point
+MPE-like
+self-written particle
+bounded geometric waypoint step
+
+处理规则：
+
+- 除 migration notes / deprecated note 外，不允许作为可用 backend 出现。
+- 不允许配置中使用。
+- 不允许 README 中推荐。
+- 不允许 validate 脚本接受。
+- 不允许 tests import。
+- 不允许 build_dynamics_backend 支持。
+
+如果保留历史说明，必须明确标记：
+
+Removed / deprecated / not supported.
+
+============================================================
+12. 必须运行的命令
 ============================================================
 
 完成后运行：
 
-python -m pytest tests/test_waypoint_env_api.py
+python -m py_compile envs/waypoint/control/dynamics_backends.py
+python -m pytest tests/test_mpe_core_backend.py
 python -m pytest tests/test_action_adapters.py
-python -m pytest tests/test_mpe_particle_backend.py
+python -m pytest tests/test_waypoint_env_api.py
 python -m pytest tests/test_candidate_selection_policy.py
 python -m pytest tests/test_direct_waypoint_policy.py
 python -m pytest tests/test_mappo_waypoint_trainer.py
 python -m pytest tests/test_waypoint_rewards.py
 python -m pytest tests/test_waypoint_rendering.py
 
-然后运行：
+运行 validate：
 
 python scripts/check/validate_waypoint_mappo.py \
   --tasks area_coverage belief_search connectivity_expansion \
   --policy-class candidate_selection_waypoint \
-  --dynamics-backend mpe_particle \
+  --dynamics-backend mpe_core \
   --action-adapter waypoint_velocity_tracker \
   --num_agents 3 \
   --total_updates 5 \
@@ -879,12 +587,12 @@ python scripts/check/validate_waypoint_mappo.py \
   --record_format gif \
   --headless
 
-再运行：
+运行 direct waypoint smoke：
 
 python scripts/check/validate_waypoint_mappo.py \
   --tasks area_coverage belief_search \
   --policy-class direct_waypoint \
-  --dynamics-backend mpe_particle \
+  --dynamics-backend mpe_core \
   --action-adapter waypoint_velocity_tracker \
   --num_agents 3 \
   --total_updates 2 \
@@ -893,42 +601,45 @@ python scripts/check/validate_waypoint_mappo.py \
   --record_format gif \
   --headless
 
-再运行 kinematic debug：
+负向测试：
 
 python scripts/check/validate_waypoint_mappo.py \
   --tasks area_coverage \
   --policy-class direct_waypoint \
-  --dynamics-backend kinematic_point \
+  --dynamics-backend mpe_particle \
   --num_agents 3 \
   --total_updates 1 \
   --eval_episodes 1 \
   --headless
 
-如果命令失败，不要假装成功。必须说明：
-
-- 哪个命令失败
-- 失败原因
-- 已完成哪些静态检查
-- 需要用户补哪些依赖或配置
+这个命令应该失败，并提示 mpe_particle 已删除。
 
 ============================================================
-19. 最终回复要求
+13. 最终回复要求
 ============================================================
 
 完成后请结构化说明：
 
-1. 新增了哪些 ActionAdapter。
-2. WaypointVelocityTracker 的公式和参数。
-3. WaypointPDTracker 的公式和用途。
-4. 新增了哪些 DynamicsBackend。
-5. MPEParticleBackend 的动力学公式和实现位置。
-6. KinematicPointBackend 是否保留为 debug / ablation。
-7. WaypointMultiUAVEnv.step 当前内部执行顺序。
-8. SafetyLayer 对 final waypoint 做了哪些检查。
-9. transition_info / dynamics_info 包含哪些字段。
-10. MAPPO trainer 是否继续兼容 candidate-selection policy 和 direct waypoint policy。
-11. 可视化/GIF/MP4 是否仍然工作。
-12. pytest 结果。
-13. validate_waypoint_mappo.py 三个命令的结果。
-14. 生成的 GIF 路径。
-15. 如有未完成内容，明确列出，不要隐藏。
+1. 是否删除了自写 MPEParticleBackend。
+2. 是否删除了 KinematicPointBackend / kinematic_point backend。
+3. 新的 MPECoreBackend 使用的真实 MPE source 是：
+   - mpe2
+   - pettingzoo.mpe
+   - third_party/openai_mpe
+4. MPE world / agents 在哪里创建。
+5. Wayffusion UAVState 如何同步到 MPE agent.state。
+6. ActionAdapter 输出如何写入 MPE agent.action.u。
+7. MPE world.step() 在哪里被调用。
+8. 如何证明不是自写 integration。
+9. 哪些旧关键词已清理：
+   - mpe_particle
+   - MPEParticleBackend
+   - kinematic_point
+   - KinematicPointBackend
+10. pytest 结果。
+11. validate candidate-selection 结果。
+12. validate direct waypoint 结果。
+13. negative test 是否按预期失败。
+14. GIF 路径。
+15. 如果无法直接使用 mpe2 core，是否 vendor 了 OpenAI MPE core，并说明 license/attribution。
+16. 如有未完成内容，明确列出，不要隐藏。

@@ -27,6 +27,8 @@ class AdapterOutput:
     def to_info(self) -> dict[str, Any]:
         return {
             "controls": self.controls.astype(np.float32),
+            "physical_action": self.controls.astype(np.float32),
+            "mpe_action_u": self.controls.astype(np.float32),
             "desired_velocities": self.desired_velocities.astype(np.float32),
             "accepted_mask": self.accepted_mask.astype(bool),
             "clipped_waypoints": self.clipped_waypoints.astype(np.float32),

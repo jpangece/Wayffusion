@@ -1,0 +1,17 @@
+No standalone LICENSE file was found in the upstream repository when this
+vendor snapshot was created.
+
+Source checked:
+
+- https://github.com/openai/multiagent-particle-envs
+- https://raw.githubusercontent.com/openai/multiagent-particle-envs/master/LICENSE
+- https://raw.githubusercontent.com/openai/multiagent-particle-envs/master/LICENSE.md
+- https://raw.githubusercontent.com/openai/multiagent-particle-envs/master/COPYING
+
+Those raw LICENSE/COPYING URLs returned 404 at vendoring time.
+
+The vendored `core.py` is retained for attribution and reproducibility because
+Wayffusion needs to call the real OpenAI MPE `World.step()` implementation.
+Before redistributing Wayffusion externally, verify the upstream licensing
+status and replace this notice with the correct upstream license if one becomes
+available.

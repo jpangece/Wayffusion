@@ -118,6 +118,9 @@ def evaluate_waypoint_policy_episodes(
             "geofence_violation_count": float(info.get("geofence_violation_count", 0.0)),
             "adapter_finite": float(bool(info.get("adapter_info", {}).get("adapter_finite", True))),
             "dynamics_finite": float(bool(info.get("dynamics_info", {}).get("dynamics_finite", True))),
+            "uses_real_mpe_core": float(bool(info.get("dynamics_info", {}).get("uses_real_mpe_core", False))),
+            "mpe_world_step_calls": float(info.get("dynamics_info", {}).get("mpe_world_step_calls", 0.0)),
+            "mpe_source": str(info.get("dynamics_info", {}).get("mpe_source", "")),
             **{key: float(value) for key, value in metrics.items() if isinstance(value, (int, float, np.integer, np.floating, bool))},
         }
         if recording_path is not None:

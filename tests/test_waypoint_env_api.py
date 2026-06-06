@@ -58,7 +58,10 @@ def test_waypoint_parallel_api_reset_step_and_global_state():
     assert np.asarray(info["selected_waypoints"]).shape == (3, 2)
     assert info["action_mode"] == "waypoint"
     assert info["action_adapter"] == "waypoint_velocity_tracker"
-    assert info["dynamics_backend"] == "mpe_particle"
+    assert info["dynamics_backend"] == "mpe_core"
+    assert info["dynamics_info"]["uses_real_mpe_core"] is True
+    assert info["dynamics_info"]["mpe_world_step_calls"] > 0
+    assert info["dynamics_info"]["mpe_source"]
     assert np.isfinite(info["mean_speed"])
     assert np.isfinite(info["max_speed_observed"])
     assert np.isfinite(info["mean_control_norm"])

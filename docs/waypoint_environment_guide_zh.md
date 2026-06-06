@@ -141,7 +141,7 @@ action_interface: waypoint
 action_adapter:
   name: waypoint_velocity_tracker
 dynamics_backend:
-  name: mpe_particle
+  name: mpe_core
 ```
 
 `SafetyLayer.validate_waypoints(...)` 是主线安全入口：
@@ -173,21 +173,19 @@ a_cmd_i = kp * (w_i - p_i) - kd * v_i
 ||a_cmd_i|| <= max_accel
 ```
 
-`MPEParticleBackend` 是默认动力学后端：
+`MPECoreBackend` 是唯一主线动力学后端。它不在 Wayffusion wrapper 内重写粒子积分，而是：
 
 ```text
-v_i <- (1 - damping) * v_i + (control_i + env_force_i) / mass_i * physics_dt
-v_i <- clip_norm(v_i, max_speed)
-p_i <- p_i + v_i * physics_dt
+Wayffusion UAVState
+  -> MPE Agent.state
+  -> agent.action.u
+  -> real MPE World.step()
+  -> sync back to Wayffusion UAVState
 ```
 
-每个 decision step 内执行多个 physics substeps。backend 负责 damping、max-speed clipping、contact/collision force、boundary/no-fly projection、path length、trajectory、通信图和 coverage footprint 更新。
+速度积分、damping、contact/collision force、max-speed clipping 来自真实 MPE core。Wayffusion 仍负责任务层 safety correction 记录、path length、trajectory、通信图和 coverage footprint 更新。
 
-`KinematicPointBackend` 保留旧 debug/ablation 行为：
-
-- 不瞬移。
-- 每步最多移动 `max_speed * dt_decision`。
-- 沿 waypoint 方向几何推进，不做 MPE-like 连续速度积分。
+旧的自写 particle backend 和 kinematic waypoint backend 已从主线删除。`mpe_particle`、`kinematic_point` 等名字只会触发错误提示，不能作为可运行配置使用。
 
 `WaypointExecutionModel` 仍存在，但主线 env 默认使用 `DynamicsBackend`。
 

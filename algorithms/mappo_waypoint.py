@@ -161,6 +161,8 @@ class MAPPOWaypointTrainer:
         collision_counts = []
         no_fly_counts = []
         geofence_counts = []
+        real_mpe_flags = []
+        mpe_step_calls = []
         terminal_success = []
         terminal_path = []
         terminal_collision = []
@@ -214,6 +216,9 @@ class MAPPOWaypointTrainer:
                 collision_counts.append(float(info.get("collision_count", 0.0)))
                 no_fly_counts.append(float(info.get("no_fly_violation_count", 0.0)))
                 geofence_counts.append(float(info.get("geofence_violation_count", 0.0)))
+                dyn = info.get("dynamics_info", {})
+                real_mpe_flags.append(float(bool(dyn.get("uses_real_mpe_core", False))))
+                mpe_step_calls.append(float(dyn.get("mpe_world_step_calls", 0.0)))
                 if "terminal_info" in info:
                     terminal_success.append(float(info.get("success", False)))
                     terminal_path.append(float(info.get("path_length", 0.0)))
@@ -254,6 +259,8 @@ class MAPPOWaypointTrainer:
             "collision_count": float(np.sum(collision_counts)) if collision_counts else 0.0,
             "no_fly_violation_count": float(np.sum(no_fly_counts)) if no_fly_counts else 0.0,
             "geofence_violation_count": float(np.sum(geofence_counts)) if geofence_counts else 0.0,
+            "uses_real_mpe_core": float(np.mean(real_mpe_flags)) if real_mpe_flags else 0.0,
+            "mpe_world_step_calls": float(np.mean(mpe_step_calls)) if mpe_step_calls else 0.0,
             "rollout_terminal_success_rate": float(np.mean(terminal_success)) if terminal_success else 0.0,
             "rollout_terminal_path_length": float(np.mean(terminal_path)) if terminal_path else 0.0,
             "rollout_terminal_collision_rate": float(np.mean(terminal_collision)) if terminal_collision else 0.0,
@@ -391,7 +398,11 @@ class MAPPOWaypointTrainer:
             "eval_collision_count": float(overall.get("collision_count_mean", 0.0)),
             "eval_no_fly_violation_count": float(overall.get("no_fly_violation_count_mean", 0.0)),
             "eval_geofence_violation_count": float(overall.get("geofence_violation_count_mean", 0.0)),
+            "eval_uses_real_mpe_core": float(overall.get("uses_real_mpe_core_mean", 0.0)),
+            "eval_mpe_world_step_calls": float(overall.get("mpe_world_step_calls_mean", 0.0)),
         }
+        if "mpe_source" in overall:
+            result["eval_mpe_source"] = str(overall["mpe_source"])
         for task_name, summary in task_summaries.items():
             safe = task_name.replace("-", "_")
             for key, value in summary.items():

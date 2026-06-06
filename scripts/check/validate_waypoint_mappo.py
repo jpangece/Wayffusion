@@ -74,6 +74,9 @@ def run_baseline(env_config: dict, tasks: list[str], method: str, episodes: int,
         "geofence_violation_count": float(np.sum([item.get("geofence_violation_count", 0.0) for item in metrics])) if metrics else 0.0,
         "adapter_finite": bool(all(item.get("adapter_info", {}).get("adapter_finite", True) for item in metrics)) if metrics else True,
         "dynamics_finite": bool(all(item.get("dynamics_info", {}).get("dynamics_finite", True) for item in metrics)) if metrics else True,
+        "uses_real_mpe_core": bool(all(item.get("dynamics_info", {}).get("uses_real_mpe_core", False) for item in metrics)) if metrics else False,
+        "mpe_world_step_calls": float(np.sum([item.get("dynamics_info", {}).get("mpe_world_step_calls", 0.0) for item in metrics])) if metrics else 0.0,
+        "mpe_source": str(next((item.get("dynamics_info", {}).get("mpe_source") for item in metrics if item.get("dynamics_info", {}).get("mpe_source")), "")),
     }
     return float(np.mean(returns)), summary, gif_paths
 
@@ -84,7 +87,7 @@ def main() -> None:
     parser.add_argument("--env-config", default="configs/env/waypoint_missions.yaml")
     parser.add_argument("--tasks", nargs="+", default=["area_coverage", "belief_search", "connectivity_expansion"])
     parser.add_argument("--policy-class", choices=["candidate_selection_waypoint", "direct_waypoint"], default="candidate_selection_waypoint")
-    parser.add_argument("--dynamics-backend", choices=["mpe_particle", "kinematic_point"], default="mpe_particle")
+    parser.add_argument("--dynamics-backend", default="mpe_core")
     parser.add_argument("--action-adapter", choices=["waypoint_velocity_tracker", "waypoint_pd_tracker"], default="waypoint_velocity_tracker")
     parser.add_argument("--num_agents", type=int, default=3)
     parser.add_argument("--total_updates", type=int, default=5)
@@ -94,6 +97,10 @@ def main() -> None:
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--run_timestamp", default=None)
     args = parser.parse_args()
+    if args.dynamics_backend != "mpe_core":
+        raise SystemExit(
+            f"{args.dynamics_backend} was removed because it was a self-written MPE-like backend. Use mpe_core."
+        )
 
     env_config = load_yaml(args.env_config)
     train_config = load_yaml(args.config)
@@ -104,7 +111,7 @@ def main() -> None:
     env_config["action_interface"] = "waypoint"
     env_config.setdefault("action_adapter", {})["name"] = str(args.action_adapter)
     env_config.setdefault("dynamics_backend", {})["name"] = str(args.dynamics_backend)
-    env_config["execution_model"] = str(args.dynamics_backend)
+    env_config["execution_model"] = "mpe_core"
     train_config["total_updates"] = int(args.total_updates)
     train_config["eval_interval"] = max(1, int(args.total_updates))
     train_config["policy_class"] = str(args.policy_class)
@@ -132,6 +139,8 @@ def main() -> None:
         record_fps=8,
         record_interval=1,
     )
+    backend_step_calls = float(sum(getattr(env.dynamics_backend, "mpe_world_step_calls", 0) for env in env_batch.envs))
+    backend_source = str(getattr(env_batch.envs[0].dynamics_backend, "source", "")) if env_batch.envs else ""
     env_batch.close()
     last = history[-1] if history else {}
     gif_paths = random_gifs + greedy_gifs
@@ -147,6 +156,18 @@ def main() -> None:
         "action_mode": str(env_config.get("action_mode", "waypoint")),
         "action_adapter": str(args.action_adapter),
         "dynamics_backend": str(args.dynamics_backend),
+        "mpe_source": str(last.get("eval_mpe_source", backend_source or random_summary["mpe_source"] or greedy_summary["mpe_source"])),
+        "uses_real_mpe_core": bool(
+            random_summary["uses_real_mpe_core"]
+            and greedy_summary["uses_real_mpe_core"]
+            and float(last.get("eval_uses_real_mpe_core", 0.0)) >= 1.0
+        ),
+        "mpe_world_step_calls": float(
+            backend_step_calls
+            + random_summary["mpe_world_step_calls"]
+            + greedy_summary["mpe_world_step_calls"]
+            + last.get("eval_mpe_world_step_calls", 0.0)
+        ),
         "env_action_shape": env_action_shape,
         "coverage_ratio": float(last.get("eval_area_coverage_coverage_ratio_mean", last.get("coverage_ratio", 0.0))),
         "searched_probability_mass": float(last.get("eval_belief_search_searched_probability_mass_mean", last.get("searched_probability_mass", 0.0))),
@@ -175,6 +196,8 @@ def main() -> None:
         and summary["max_speed_observed"] <= max_speed_limit + 1e-5
         and summary["adapter_finite"]
         and summary["dynamics_finite"]
+        and summary["uses_real_mpe_core"]
+        and summary["mpe_world_step_calls"] > 0.0
         and (summary["candidate_mask_empty_count"] == 0.0 if args.policy_class == "candidate_selection_waypoint" else True)
         and len(gif_paths) >= 1
     )

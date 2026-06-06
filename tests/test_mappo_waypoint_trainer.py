@@ -49,6 +49,8 @@ def _run_collect_update(env_config: dict, train_config: dict):
     assert np.isfinite(stats["mean_speed"])
     assert np.isfinite(stats["max_speed_observed"])
     assert np.isfinite(stats["mean_control_norm"])
+    assert stats["uses_real_mpe_core"] == 1.0
+    assert stats["mpe_world_step_calls"] > 0.0
     update_stats = trainer.update(batch)
     for key in ["policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac", "grad_norm"]:
         assert np.isfinite(update_stats[key])

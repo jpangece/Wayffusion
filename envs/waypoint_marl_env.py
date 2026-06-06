@@ -81,25 +81,21 @@ class WaypointMultiUAVEnv:
 
     def _dynamics_backend_config(self) -> dict[str, Any]:
         cfg = {
-            "name": "mpe_particle",
-            "decision_dt": float(self.config.get("dt_decision", 1.0)),
-            "physics_dt": 0.05,
-            "substeps": 20,
+            "name": "mpe_core",
+            "source": "mpe2",
+            "dt": 0.1,
+            "substeps": 10,
             "mass": 1.0,
-            "damping": 0.20,
+            "damping": 0.25,
             "max_speed": float(self.config.get("max_speed", 0.08)),
-            "radius": 0.02,
+            "agent_size": 0.02,
+            "agent_accel": 1.0,
+            "action_scale": 1.0,
             "contact_force": 100.0,
             "contact_margin": 0.01,
-            "enable_collision_force": True,
             "enable_boundary_projection": True,
             "enable_no_fly_projection": True,
-            "wind_std": 0.0,
-            "action_noise_std": 0.0,
-            "position_noise_std": 0.0,
         }
-        if self.config.get("execution_model") == "kinematic_point":
-            cfg["name"] = "kinematic_point"
         cfg.update(dict(self.config.get("dynamics_backend", {})))
         return cfg
 
@@ -428,7 +424,7 @@ class WaypointMultiUAVEnv:
             "action_interface": self.action_interface,
             "action_mode": self.action_mode,
             "action_adapter": str(self._action_adapter_config().get("name", "waypoint_velocity_tracker")),
-            "dynamics_backend": str(self._dynamics_backend_config().get("name", "mpe_particle")),
+            "dynamics_backend": str(self._dynamics_backend_config().get("name", "mpe_core")),
             "adapter_info": dict(self.last_transition_info.get("adapter_info", {})),
             "dynamics_info": dict(self.last_transition_info.get("dynamics_info", {})),
             "safety_info": dict(self.last_transition_info.get("safety_info", {})),

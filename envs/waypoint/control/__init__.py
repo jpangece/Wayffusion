@@ -10,8 +10,7 @@ from envs.waypoint.control.action_adapters import (
 )
 from envs.waypoint.control.dynamics_backends import (
     DynamicsInfo,
-    KinematicPointBackend,
-    MPEParticleBackend,
+    MPECoreBackend,
     build_dynamics_backend,
 )
 
@@ -19,8 +18,7 @@ __all__ = [
     "AdapterOutput",
     "DirectAccelerationAdapter",
     "DynamicsInfo",
-    "KinematicPointBackend",
-    "MPEParticleBackend",
+    "MPECoreBackend",
     "VelocityToForceAdapter",
     "WaypointPDTracker",
     "WaypointVelocityTracker",

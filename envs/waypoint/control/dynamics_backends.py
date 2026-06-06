@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib import import_module
 from typing import Any
 
 import numpy as np
@@ -9,11 +10,31 @@ from envs.waypoint.control.action_adapters import AdapterOutput
 from envs.waypoint.world import MissionWorld
 
 
-def _limit_norm(vectors: np.ndarray, max_norm: float) -> np.ndarray:
-    vectors = np.asarray(vectors, dtype=np.float32)
-    norms = np.linalg.norm(vectors, axis=-1, keepdims=True)
-    scale = np.minimum(1.0, float(max_norm) / np.maximum(norms, 1e-8))
-    return (vectors * scale).astype(np.float32)
+REMOVED_BACKENDS = {"mpe_particle", "mpe_like_particle", "kinematic_point"}
+
+
+def _load_mpe_core():
+    candidates = [
+        ("mpe2._mpe_utils.core", "mpe2"),
+        ("mpe2.core", "mpe2"),
+        ("mpe2.mpe.core", "mpe2"),
+        ("pettingzoo.mpe._mpe_utils.core", "pettingzoo_mpe"),
+        ("third_party.openai_mpe.core", "third_party_openai_mpe"),
+    ]
+    errors: list[str] = []
+    for module_name, source in candidates:
+        try:
+            module = import_module(module_name)
+            if hasattr(module, "World") and hasattr(module, "Agent"):
+                return module, source
+        except Exception as exc:  # pragma: no cover - diagnostic only
+            errors.append(f"{module_name}: {type(exc).__name__}: {exc}")
+    raise ImportError("Could not import a usable MPE core module. Tried: " + "; ".join(errors))
+
+
+MPE_CORE_MODULE, MPE_SOURCE = _load_mpe_core()
+MPEWorld = MPE_CORE_MODULE.World
+MPEAgent = MPE_CORE_MODULE.Agent
 
 
 @dataclass
@@ -58,253 +79,181 @@ class DynamicsBackend:
     def reset(self, world: MissionWorld) -> None:
         del world
 
-    def step(self, world: MissionWorld, controls: np.ndarray, adapter_output: AdapterOutput | None = None, safety_result=None) -> DynamicsInfo:
+    def step(
+        self,
+        world: MissionWorld,
+        controls: np.ndarray,
+        adapter_output: AdapterOutput | None = None,
+        safety_result=None,
+    ) -> DynamicsInfo:
         raise NotImplementedError
 
 
-class KinematicPointBackend(DynamicsBackend):
-    """Debug backend preserving the old bounded geometric waypoint step."""
+class MPECoreBackend(DynamicsBackend):
+    """Wrapper around real MPE core World.step() dynamics."""
 
-    name = "kinematic_point"
-
-    def __init__(self, config: dict[str, Any] | None = None):
-        cfg = dict(config or {})
-        self.decision_dt = float(cfg.get("decision_dt", cfg.get("dt_decision", 1.0)))
-        self.max_speed = float(cfg.get("max_speed", 0.08))
-
-    def step(self, world: MissionWorld, controls: np.ndarray, adapter_output: AdapterOutput | None = None, safety_result=None) -> DynamicsInfo:
-        del controls
-        old_positions = world.get_uav_positions()
-        selected = old_positions.copy() if adapter_output is None else np.asarray(adapter_output.clipped_waypoints, dtype=np.float32).copy()
-        n = len(world.uavs)
-        rejected = np.zeros(n, dtype=bool)
-        if safety_result is not None and hasattr(safety_result, "rejected_mask"):
-            rejected |= np.asarray(safety_result.rejected_mask, dtype=bool)
-        no_fly_rejected = ~world.check_no_fly(selected)
-        rejected |= no_fly_rejected
-        selected[no_fly_rejected] = old_positions[no_fly_rejected]
-
-        max_step = float(self.max_speed * self.decision_dt)
-        delta = selected - old_positions
-        distance = np.linalg.norm(delta, axis=-1)
-        clipped_distance = np.minimum(distance, max_step)
-        direction = np.divide(delta, distance[:, None], out=np.zeros_like(delta), where=distance[:, None] > 1e-8)
-        proposed = world.project_to_geofence(old_positions + direction * clipped_distance[:, None])
-
-        geofence_rejected = ~world.check_geofence(proposed)
-        no_fly_step_rejected = ~world.check_no_fly(proposed)
-        rejected |= geofence_rejected | no_fly_step_rejected
-        proposed[geofence_rejected | no_fly_step_rejected] = old_positions[geofence_rejected | no_fly_step_rejected]
-
-        collision_count = 0
-        pairwise = world.compute_pairwise_distances(proposed)
-        min_dist = float(world.map_size)
-        if n > 1:
-            upper = pairwise[np.triu_indices(n, k=1)]
-            min_dist = float(upper.min()) if upper.size else float(world.map_size)
-            conflict_pairs = np.argwhere((pairwise < world.min_uav_distance) & (pairwise > 0.0))
-            collision_count = int(len(conflict_pairs) // 2)
-            for i, j in conflict_pairs:
-                rejected[int(i)] = True
-                rejected[int(j)] = True
-            proposed[rejected] = old_positions[rejected]
-            pairwise = world.compute_pairwise_distances(proposed)
-            upper = pairwise[np.triu_indices(n, k=1)]
-            if upper.size:
-                min_dist = float(upper.min())
-
-        path_delta = np.linalg.norm(proposed - old_positions, axis=-1).astype(np.float32)
-        speeds = path_delta / max(self.decision_dt, 1e-8)
-        arrived = np.linalg.norm(proposed - selected, axis=-1) <= max(1e-4, max_step * 0.05)
-        for idx, uav in enumerate(world.uavs):
-            uav.velocity = ((proposed[idx] - old_positions[idx]) / max(self.decision_dt, 1e-6)).astype(np.float32)
-            uav.position = proposed[idx].astype(np.float32)
-            uav.current_waypoint = selected[idx].astype(np.float32)
-            uav.path_length += float(path_delta[idx])
-            uav.last_control = np.zeros(2, dtype=np.float32) if adapter_output is None else adapter_output.controls[idx].astype(np.float32)
-            uav.last_action_valid = not bool(rejected[idx])
-            uav.battery = max(0.0, float(uav.battery) - float(path_delta[idx]) * 0.01)
-            uav.trajectory.append(uav.position.copy())
-
-        world.step_count += 1
-        world.update_communication_graph()
-        footprint_info = world.accumulate_sensor_footprints()
-        control_norm = 0.0 if adapter_output is None else float(np.mean(adapter_output.control_norms))
-        return DynamicsInfo(
-            path_length_delta=path_delta,
-            arrived_mask=arrived.astype(bool),
-            rejected_mask=rejected.astype(bool),
-            safety_violation_count=int(rejected.sum()),
-            min_pairwise_distance=float(min_dist),
-            collision_count=int(collision_count),
-            no_fly_violation_count=int((no_fly_rejected | no_fly_step_rejected).sum()),
-            geofence_violation_count=int(geofence_rejected.sum()),
-            mean_speed=float(speeds.mean()) if len(speeds) else 0.0,
-            max_speed_observed=float(speeds.max()) if len(speeds) else 0.0,
-            mean_control_norm=control_norm,
-            disturbance_norm=0.0,
-            substeps=1,
-            info={"dynamics_backend": self.name, "dynamics_finite": True, **footprint_info},
-        )
-
-
-class MPEParticleBackend(DynamicsBackend):
-    """MPE-like particle dynamics backend for Wayffusion waypoint tasks."""
-
-    name = "mpe_particle"
+    name = "mpe_core"
 
     def __init__(self, config: dict[str, Any] | None = None):
         cfg = dict(config or {})
-        self.decision_dt = float(cfg.get("decision_dt", 1.0))
-        self.physics_dt = float(cfg.get("physics_dt", 0.05))
-        self.substeps = int(cfg.get("substeps", max(1, round(self.decision_dt / max(self.physics_dt, 1e-8)))))
-        self.mass = float(cfg.get("mass", 1.0))
-        self.damping = float(cfg.get("damping", 0.20))
-        self.max_speed = float(cfg.get("max_speed", 0.08))
-        self.radius = float(cfg.get("radius", 0.02))
+        self.requested_source = str(cfg.get("source", MPE_SOURCE))
+        self.source = str(MPE_SOURCE)
+        self.dt = float(cfg.get("dt", cfg.get("physics_dt", 0.1)))
+        self.substeps = int(cfg.get("substeps", 10))
+        self.damping = float(cfg.get("damping", 0.25))
         self.contact_force = float(cfg.get("contact_force", 100.0))
         self.contact_margin = float(cfg.get("contact_margin", 0.01))
-        self.enable_collision_force = bool(cfg.get("enable_collision_force", True))
+        self.agent_size = float(cfg.get("agent_size", cfg.get("radius", 0.02)))
+        self.agent_accel = float(cfg.get("agent_accel", 1.0))
+        self.max_speed = float(cfg.get("max_speed", 0.08))
+        self.mass = float(cfg.get("mass", 1.0))
+        self.action_scale = float(cfg.get("action_scale", 1.0))
         self.enable_boundary_projection = bool(cfg.get("enable_boundary_projection", True))
         self.enable_no_fly_projection = bool(cfg.get("enable_no_fly_projection", True))
-        self.wind_std = float(cfg.get("wind_std", 0.0))
-        self.action_noise_std = float(cfg.get("action_noise_std", 0.0))
-        self.position_noise_std = float(cfg.get("position_noise_std", 0.0))
+        self.mpe_world = None
+        self.mpe_agents: list[Any] = []
+        self.agent_name_to_mpe_agent: dict[str, Any] = {}
+        self.last_positions: np.ndarray | None = None
+        self.last_velocities: np.ndarray | None = None
+        self.mpe_world_step_calls = 0
 
     def reset(self, world: MissionWorld) -> None:
-        for uav in world.uavs:
-            uav.mass = float(getattr(uav, "mass", self.mass) or self.mass)
-            uav.radius = float(getattr(uav, "radius", self.radius) or self.radius)
-            uav.last_control = np.zeros(2, dtype=np.float32)
+        self.mpe_world = MPEWorld()
+        self.mpe_world.dim_p = 2
+        self.mpe_world.dim_c = 0
+        self.mpe_world.dt = float(self.dt)
+        self.mpe_world.damping = float(self.damping)
+        self.mpe_world.contact_force = float(self.contact_force)
+        self.mpe_world.contact_margin = float(self.contact_margin)
+        self.mpe_agents = []
+        self.agent_name_to_mpe_agent = {}
+        for idx, uav in enumerate(world.uavs):
+            agent = MPEAgent()
+            agent.name = f"uav_{idx}"
+            agent.movable = True
+            agent.collide = True
+            agent.silent = True
+            agent.blind = False
+            agent.size = float(getattr(uav, "radius", self.agent_size) or self.agent_size)
+            agent.accel = float(self.agent_accel)
+            agent.max_speed = float(self.max_speed)
+            agent.initial_mass = float(getattr(uav, "mass", self.mass) or self.mass)
+            agent.u_noise = None
+            agent.c_noise = None
+            agent.action.u = np.zeros(2, dtype=np.float32)
+            agent.action.c = np.zeros(0, dtype=np.float32)
+            agent.state.p_pos = np.asarray(uav.position, dtype=np.float32).copy()
+            agent.state.p_vel = np.asarray(uav.velocity, dtype=np.float32).copy()
+            self.mpe_agents.append(agent)
+            self.agent_name_to_mpe_agent[agent.name] = agent
+            uav.mass = float(agent.initial_mass)
+            uav.radius = float(agent.size)
+        self.mpe_world.agents = self.mpe_agents
+        self.last_positions = world.get_uav_positions().copy()
+        self.last_velocities = np.asarray([uav.velocity for uav in world.uavs], dtype=np.float32).copy()
+        self.mpe_world_step_calls = 0
 
-    def _collision_forces(self, world: MissionWorld, positions: np.ndarray) -> tuple[np.ndarray, int]:
-        forces = np.zeros_like(positions, dtype=np.float32)
-        collision_count = 0
-        n = len(positions)
-        threshold = max(float(world.min_uav_distance), 2.0 * self.radius) + self.contact_margin
-        for i in range(n):
-            for j in range(i + 1, n):
-                delta = positions[i] - positions[j]
-                distance = float(np.linalg.norm(delta))
-                if distance >= threshold:
-                    continue
-                collision_count += 1
-                if distance < 1e-8:
-                    direction = np.asarray([1.0, 0.0], dtype=np.float32)
-                else:
-                    direction = delta / distance
-                penetration = threshold - distance
-                force = self.contact_force * penetration * direction
-                forces[i] += force
-                forces[j] -= force
-        return forces.astype(np.float32), collision_count
+    def _ensure_world(self, world: MissionWorld) -> None:
+        if self.mpe_world is None or len(self.mpe_agents) != len(world.uavs):
+            self.reset(world)
 
-    def _project_no_fly(self, world: MissionWorld, proposed: np.ndarray, previous: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        valid = world.check_no_fly(proposed)
-        if valid.all() or not self.enable_no_fly_projection:
-            return proposed, ~valid
-        proposed = proposed.copy()
-        proposed[~valid] = previous[~valid]
-        return proposed, ~valid
+    def _sync_wayffusion_to_mpe(self, world: MissionWorld) -> None:
+        for agent, uav in zip(self.mpe_agents, world.uavs):
+            agent.state.p_pos = np.asarray(uav.position, dtype=np.float32).copy()
+            agent.state.p_vel = np.asarray(uav.velocity, dtype=np.float32).copy()
 
-    def _separate_min_distance(self, world: MissionWorld, positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        n = len(positions)
-        adjusted = positions.copy()
-        violated = np.zeros(n, dtype=bool)
-        min_dist = float(world.min_uav_distance)
-        for i in range(n):
-            for j in range(i + 1, n):
-                delta = adjusted[i] - adjusted[j]
-                distance = float(np.linalg.norm(delta))
-                if distance >= min_dist or distance < 1e-8:
-                    continue
-                direction = delta / max(distance, 1e-8)
-                correction = 0.5 * (min_dist - distance) * direction
-                adjusted[i] += correction
-                adjusted[j] -= correction
-                violated[i] = True
-                violated[j] = True
+    def _assign_mpe_actions(self, physical_actions: np.ndarray) -> None:
+        for idx, agent in enumerate(self.mpe_agents):
+            agent.action.u = physical_actions[idx].astype(np.float32)
+            agent.action.c = np.zeros(0, dtype=np.float32)
+
+    def _set_mpe_actions(self, controls: np.ndarray) -> np.ndarray:
+        physical_actions = np.asarray(controls, dtype=np.float32) * float(self.action_scale)
+        self._assign_mpe_actions(physical_actions)
+        return physical_actions
+
+    def _apply_wayffusion_safety_corrections(self, world: MissionWorld, previous: np.ndarray) -> tuple[np.ndarray, np.ndarray, int, int]:
+        positions = np.asarray([agent.state.p_pos for agent in self.mpe_agents], dtype=np.float32)
+        velocities = np.asarray([agent.state.p_vel for agent in self.mpe_agents], dtype=np.float32)
+        geofence_mask = np.zeros(len(positions), dtype=bool)
         if self.enable_boundary_projection:
-            adjusted = world.project_to_geofence(adjusted)
-        return adjusted.astype(np.float32), violated
+            projected = world.project_to_geofence(positions)
+            geofence_mask = np.linalg.norm(projected - positions, axis=-1) > 1e-8
+            positions = projected.astype(np.float32)
+            velocities[geofence_mask] = 0.0
+        no_fly_mask = np.zeros(len(positions), dtype=bool)
+        if self.enable_no_fly_projection:
+            no_fly_mask = ~world.check_no_fly(positions)
+            positions[no_fly_mask] = previous[no_fly_mask]
+            velocities[no_fly_mask] = 0.0
+        for idx, agent in enumerate(self.mpe_agents):
+            agent.state.p_pos = positions[idx].astype(np.float32)
+            agent.state.p_vel = velocities[idx].astype(np.float32)
+        return positions, velocities, int(geofence_mask.sum()), int(no_fly_mask.sum())
 
-    def step(self, world: MissionWorld, controls: np.ndarray, adapter_output: AdapterOutput | None = None, safety_result=None) -> DynamicsInfo:
+    def _count_overlaps(self, positions: np.ndarray) -> int:
+        count = 0
+        for i in range(len(positions)):
+            for j in range(i + 1, len(positions)):
+                min_dist = float(self.mpe_agents[i].size + self.mpe_agents[j].size)
+                if float(np.linalg.norm(positions[i] - positions[j])) < min_dist:
+                    count += 1
+        return int(count)
+
+    def step(
+        self,
+        world: MissionWorld,
+        controls: np.ndarray,
+        adapter_output: AdapterOutput | None = None,
+        safety_result=None,
+    ) -> DynamicsInfo:
+        self._ensure_world(world)
         controls = np.asarray(controls, dtype=np.float32)
-        positions = world.get_uav_positions().astype(np.float32)
-        velocities = np.asarray([uav.velocity for uav in world.uavs], dtype=np.float32)
-        old_positions = positions.copy()
-        n = len(world.uavs)
-        if controls.shape != positions.shape:
-            raise ValueError(f"controls must have shape {positions.shape}, got {controls.shape}")
+        old_positions = world.get_uav_positions().astype(np.float32)
+        if controls.shape != old_positions.shape:
+            raise ValueError(f"controls must have shape {old_positions.shape}, got {controls.shape}")
 
-        rejected = np.zeros(n, dtype=bool)
+        self._sync_wayffusion_to_mpe(world)
+        physical_actions = self._set_mpe_actions(controls)
+        rejected = np.zeros(len(world.uavs), dtype=bool)
         if safety_result is not None and hasattr(safety_result, "rejected_mask"):
             rejected |= np.asarray(safety_result.rejected_mask, dtype=bool)
-        no_fly_count = 0
+
+        path_delta = np.zeros(len(world.uavs), dtype=np.float32)
         geofence_count = 0
+        no_fly_count = 0
         collision_count = 0
-        disturbance_norms = []
-        path_delta = np.zeros(n, dtype=np.float32)
-        max_speed_observed = 0.0
+        step_calls_before = int(self.mpe_world_step_calls)
+        for _ in range(max(int(self.substeps), 1)):
+            previous = np.asarray([agent.state.p_pos for agent in self.mpe_agents], dtype=np.float32)
+            self._assign_mpe_actions(physical_actions)
+            self.mpe_world.step()
+            self.mpe_world_step_calls += 1
+            positions, _, geofence_hits, no_fly_hits = self._apply_wayffusion_safety_corrections(world, previous)
+            geofence_count += geofence_hits
+            no_fly_count += no_fly_hits
+            collision_count += self._count_overlaps(positions)
+            rejected |= geofence_hits > 0 and ~world.check_geofence(positions)
+            rejected |= no_fly_hits > 0 and ~world.check_no_fly(positions)
+            path_delta += np.linalg.norm(positions - previous, axis=-1).astype(np.float32)
+
+        positions = np.asarray([agent.state.p_pos for agent in self.mpe_agents], dtype=np.float32)
+        velocities = np.asarray([agent.state.p_vel for agent in self.mpe_agents], dtype=np.float32)
         target_waypoints = positions if adapter_output is None else np.asarray(adapter_output.clipped_waypoints, dtype=np.float32)
-        control_norm = float(np.mean(np.linalg.norm(controls, axis=-1))) if len(controls) else 0.0
-
-        for _ in range(self.substeps):
-            step_controls = controls.copy()
-            if self.action_noise_std > 0.0:
-                step_controls += world.rng.normal(0.0, self.action_noise_std, size=step_controls.shape).astype(np.float32)
-            env_force = np.zeros_like(step_controls, dtype=np.float32)
-            if self.enable_collision_force:
-                contact_force, contacts = self._collision_forces(world, positions)
-                env_force += contact_force
-                collision_count += int(contacts)
-            if self.wind_std > 0.0:
-                wind = world.rng.normal(0.0, self.wind_std, size=step_controls.shape).astype(np.float32)
-                env_force += wind
-                disturbance_norms.append(float(np.linalg.norm(wind, axis=-1).mean()))
-
-            mass = np.asarray([max(float(getattr(uav, "mass", self.mass)), 1e-6) for uav in world.uavs], dtype=np.float32)[:, None]
-            velocities = (1.0 - self.damping) * velocities + (step_controls + env_force) / mass * self.physics_dt
-            velocities = _limit_norm(velocities, self.max_speed)
-            max_speed_observed = max(max_speed_observed, float(np.linalg.norm(velocities, axis=-1).max()) if len(velocities) else 0.0)
-            proposed = positions + velocities * self.physics_dt
-            if self.position_noise_std > 0.0:
-                noise = world.rng.normal(0.0, self.position_noise_std, size=proposed.shape).astype(np.float32)
-                proposed += noise
-                disturbance_norms.append(float(np.linalg.norm(noise, axis=-1).mean()))
-            previous = positions.copy()
-            if self.enable_boundary_projection:
-                projected = world.project_to_geofence(proposed)
-                clipped = np.linalg.norm(projected - proposed, axis=-1) > 1e-8
-                geofence_count += int(clipped.sum())
-                velocities[clipped] = 0.0
-                proposed = projected
-            proposed, no_fly_mask = self._project_no_fly(world, proposed, previous)
-            if no_fly_mask.any():
-                velocities[no_fly_mask] = 0.0
-                no_fly_count += int(no_fly_mask.sum())
-                rejected |= no_fly_mask
-            proposed, min_distance_mask = self._separate_min_distance(world, proposed)
-            if min_distance_mask.any():
-                velocities[min_distance_mask] = 0.0
-                rejected |= min_distance_mask
-            path_delta += np.linalg.norm(proposed - positions, axis=-1).astype(np.float32)
-            positions = proposed.astype(np.float32)
-
+        arrived = np.linalg.norm(positions - target_waypoints, axis=-1) <= 0.025
         pairwise = world.compute_pairwise_distances(positions)
-        if n > 1:
-            upper = pairwise[np.triu_indices(n, k=1)]
+        if len(world.uavs) > 1:
+            upper = pairwise[np.triu_indices(len(world.uavs), k=1)]
             min_pairwise = float(upper.min()) if upper.size else float(world.map_size)
         else:
             min_pairwise = float(world.map_size)
-        arrived = np.linalg.norm(positions - target_waypoints, axis=-1) <= 0.025
 
         for idx, uav in enumerate(world.uavs):
-            uav.velocity = velocities[idx].astype(np.float32)
             uav.position = positions[idx].astype(np.float32)
+            uav.velocity = velocities[idx].astype(np.float32)
             uav.current_waypoint = target_waypoints[idx].astype(np.float32)
             uav.path_length += float(path_delta[idx])
-            uav.last_control = controls[idx].astype(np.float32)
+            uav.last_control = physical_actions[idx].astype(np.float32)
             uav.last_action_valid = not bool(rejected[idx])
             uav.battery = max(0.0, float(uav.battery) - float(path_delta[idx]) * 0.01)
             uav.trajectory.append(uav.position.copy())
@@ -313,8 +262,11 @@ class MPEParticleBackend(DynamicsBackend):
         world.update_communication_graph()
         footprint_info = world.accumulate_sensor_footprints()
         speeds = np.linalg.norm(velocities, axis=-1)
-        disturbance_norm = float(np.mean(disturbance_norms)) if disturbance_norms else 0.0
+        control_norm = np.linalg.norm(physical_actions, axis=-1)
         finite = bool(np.isfinite(positions).all() and np.isfinite(velocities).all() and np.isfinite(path_delta).all())
+        self.last_positions = positions.copy()
+        self.last_velocities = velocities.copy()
+        last_step_calls = int(self.mpe_world_step_calls - step_calls_before)
         return DynamicsInfo(
             path_length_delta=path_delta.astype(np.float32),
             arrived_mask=arrived.astype(bool),
@@ -325,19 +277,32 @@ class MPEParticleBackend(DynamicsBackend):
             no_fly_violation_count=int(no_fly_count),
             geofence_violation_count=int(geofence_count),
             mean_speed=float(speeds.mean()) if len(speeds) else 0.0,
-            max_speed_observed=float(max_speed_observed),
-            mean_control_norm=float(control_norm),
-            disturbance_norm=float(disturbance_norm),
-            substeps=int(self.substeps),
-            info={"dynamics_backend": self.name, "dynamics_finite": finite, **footprint_info},
+            max_speed_observed=float(speeds.max()) if len(speeds) else 0.0,
+            mean_control_norm=float(control_norm.mean()) if len(control_norm) else 0.0,
+            disturbance_norm=0.0,
+            substeps=last_step_calls,
+            info={
+                "dynamics_backend": self.name,
+                "dynamics_finite": finite,
+                "mpe_source": MPE_SOURCE,
+                "requested_mpe_source": self.requested_source,
+                "uses_real_mpe_core": True,
+                "mpe_world_step_calls": int(last_step_calls),
+                "mpe_world_step_calls_total": int(self.mpe_world_step_calls),
+                "mpe_world_class": f"{self.mpe_world.__class__.__module__}.{self.mpe_world.__class__.__name__}",
+                **footprint_info,
+            },
         )
 
 
 def build_dynamics_backend(config: dict[str, Any] | None):
     cfg = dict(config or {})
-    name = str(cfg.get("name", "mpe_particle"))
-    if name == "mpe_particle":
-        return MPEParticleBackend(cfg)
-    if name == "kinematic_point":
-        return KinematicPointBackend(cfg)
-    raise ValueError(f"Unsupported dynamics backend: {name}")
+    name = str(cfg.get("name", "mpe_core"))
+    if name == "mpe_core":
+        return MPECoreBackend(cfg)
+    if name in REMOVED_BACKENDS:
+        raise ValueError(
+            f"{name} was removed because it was a self-written or legacy waypoint dynamics backend. "
+            "Use mpe_core, which calls real MPE World.step()."
+        )
+    raise ValueError(f"Unsupported dynamics backend: {name}. Only mpe_core is supported.")

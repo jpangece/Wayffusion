@@ -890,44 +890,47 @@ After 2026-06-06 final-waypoint action refactor:
   - improve candidate-selection features with task-specific expected gain, but keep generation in policy/planner, not env;
   - consider per-agent or mixed advantage using stored `per_agent_rewards [T,B,N]`.
 
-After 2026-06-06 ActionAdapter + MPE-like dynamics refactor:
+Superseded note for 2026-06-06 ActionAdapter + handwritten particle backend:
 
-- Current default transition stack:
-  - external action interface: final waypoint `[2]`
-  - safety: `SafetyLayer.validate_waypoints`
-  - adapter: `WaypointVelocityTracker`
-  - dynamics backend: `MPEParticleBackend`
-  - reward: current waypoint scenarios
-- Current debug/ablation options:
-  - `--dynamics-backend kinematic_point`
-  - `--action-adapter waypoint_pd_tracker`
-  - config: `configs/env/waypoint_missions_kinematic_debug.yaml`
-  - config: `configs/env/waypoint_missions_pd_adapter_debug.yaml`
+- The notes from that intermediate refactor are historical only.
+- Do not run the old particle/kinematic backend commands.
+- The active backend contract is the real MPE core replacement below.
+
+After 2026-06-06 real MPE core backend replacement:
+
+- Treat the ActionAdapter + self-written particle backend notes above as superseded.
+- Only supported runnable dynamics backend:
+  - `dynamics_backend.name=mpe_core`
+  - `MPECoreBackend`
+- Removed/unsupported backend names:
+  - `mpe_particle`
+  - `mpe_like_particle`
+  - `kinematic_point`
+- Removed/unsupported classes:
+  - `MPEParticleBackend`
+  - `KinematicPointBackend`
+- Current actual local MPE source:
+  - `third_party_openai_mpe`
+  - reason: local `/opt/conda/bin/python` has neither `mpe2` nor `pettingzoo` installed.
+  - requirements now include `mpe2>=1.1.0`; if installed later, wrapper tries `mpe2._mpe_utils.core` first.
 - Current valid validation commands:
-  - candidate-selection + MPE:
-    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --policy-class candidate_selection_waypoint --dynamics-backend mpe_particle --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless`
-  - direct waypoint + MPE:
-    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search --policy-class direct_waypoint --dynamics-backend mpe_particle --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 2 --eval_episodes 1 --record_eval_episodes 1 --record_format gif --headless`
-  - direct waypoint + kinematic debug:
-    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage --policy-class direct_waypoint --dynamics-backend kinematic_point --num_agents 3 --total_updates 1 --eval_episodes 1 --headless`
-- Recent validated outputs:
-  - `outputs/debug/waypoint_mappo_validation/20260606_mpe_candidate_validate_final_v2/`
-  - `outputs/debug/waypoint_mappo_validation/20260606_mpe_direct_validate_final/`
-  - `outputs/debug/waypoint_mappo_validation/20260606_kinematic_direct_validate_final/`
+  - candidate-selection + real MPE core:
+    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --policy-class candidate_selection_waypoint --dynamics-backend mpe_core --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless`
+  - direct waypoint + real MPE core:
+    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search --policy-class direct_waypoint --dynamics-backend mpe_core --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 2 --eval_episodes 1 --record_eval_episodes 1 --record_format gif --headless`
+  - removed-backend negative test:
+    - `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage --policy-class direct_waypoint --dynamics-backend mpe_particle --num_agents 3 --total_updates 1 --eval_episodes 1 --headless`
+    - expected: failure with `mpe_particle was removed because it was a self-written MPE-like backend. Use mpe_core.`
 - Current pytest target:
-  - `/opt/conda/bin/python -m pytest -q tests/test_waypoint_env_api.py tests/test_action_adapters.py tests/test_mpe_particle_backend.py tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rewards.py tests/test_waypoint_rendering.py`
-- Metrics to inspect in long runs:
-  - `eval_success_rate`
-  - `eval_action_validity_rate`
-  - `eval_mean_speed`
-  - `eval_max_speed_observed`
-  - `eval_mean_control_norm`
-  - `eval_collision_count`
-  - `eval_no_fly_violation_count`
-  - `eval_geofence_violation_count`
-  - task-specific coverage/search/POI/connectivity metrics
-- Next engineering work after smoke:
-  - run long pure MAPPO with default MPE backend for candidate-selection and direct policies;
-  - ablate `mpe_particle` vs `kinematic_point`;
-  - ablate `waypoint_velocity_tracker` vs `waypoint_pd_tracker`;
-  - consider per-agent advantage mixing only after dynamics learning curves are collected.
+  - `/opt/conda/bin/python -m pytest -q tests/test_mpe_core_backend.py tests/test_action_adapters.py tests/test_waypoint_env_api.py tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rewards.py tests/test_waypoint_rendering.py`
+- Recent validated outputs:
+  - `outputs/debug/waypoint_mappo_validation/20260606_mpe_core_candidate_validate/`
+  - `outputs/debug/waypoint_mappo_validation/20260606_mpe_core_direct_validate/`
+- Metrics that prove real MPE backend use:
+  - `uses_real_mpe_core=true`
+  - `mpe_source=third_party_openai_mpe` in current local env
+  - `mpe_world_step_calls > 0`
+- Next engineering work:
+  - run longer pure MAPPO under `mpe_core` for candidate-selection and direct waypoint policies;
+  - compare learning curves before adding additional algorithm tricks;
+  - if dynamics behavior seems too conservative, tune ActionAdapter gains or MPE `dt/substeps/max_speed/action_scale`, not by reintroducing handwritten dynamics.

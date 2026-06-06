@@ -5,8 +5,7 @@ from envs.waypoint.world import MissionWorld
 from envs.waypoint.control import (
     AdapterOutput,
     DynamicsInfo,
-    KinematicPointBackend,
-    MPEParticleBackend,
+    MPECoreBackend,
     WaypointPDTracker,
     WaypointVelocityTracker,
 )
@@ -14,8 +13,7 @@ from envs.waypoint.control import (
 __all__ = [
     "AdapterOutput",
     "DynamicsInfo",
-    "KinematicPointBackend",
-    "MPEParticleBackend",
+    "MPECoreBackend",
     "MissionWorld",
     "SafetyLayer",
     "UAVState",

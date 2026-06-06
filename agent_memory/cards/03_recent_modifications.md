@@ -4006,3 +4006,105 @@ Interpretation:
 - The old kinematic model is preserved only as debug/ablation backend.
 - Candidate-selection and direct waypoint policies remain compatible because trainer still consumes `PolicyOutput.env_action` and `train_action/logprob` separately.
 - These are integration and smoke-validation results, not long-training performance conclusions.
+
+## Theme BZ: Replace handwritten particle backend with real MPE core backend
+
+Date: 2026-06-06
+
+User request:
+
+- Do not continue extending the self-written particle backend.
+- Delete or disable the handwritten `MPEParticleBackend` and `KinematicPointBackend`.
+- Use mature MPE bottom-layer dynamics only.
+- Keep Wayffusion tasks/reward/observation/coverage/connectivity/rendering.
+- Prove `MPECoreBackend` calls actual MPE `World.step()`.
+
+Core implementation:
+
+- Replaced `envs/waypoint/control/dynamics_backends.py` with a thin real-MPE wrapper:
+  - only runnable backend is `MPECoreBackend`;
+  - `build_dynamics_backend({"name": "mpe_core"})` returns `MPECoreBackend`;
+  - `mpe_particle`, `mpe_like_particle`, and `kinematic_point` now raise `ValueError`;
+  - removed importable `MPEParticleBackend` and `KinematicPointBackend` classes.
+- `MPECoreBackend` import priority:
+  - `mpe2._mpe_utils.core`;
+  - `mpe2.core`;
+  - `mpe2.mpe.core`;
+  - `pettingzoo.mpe._mpe_utils.core`;
+  - `third_party.openai_mpe.core`.
+- Current local source is `third_party_openai_mpe`, because `/opt/conda/bin/python` does not have `mpe2` or `pettingzoo` installed.
+- Vendored OpenAI MPE core:
+  - `third_party/openai_mpe/core.py` downloaded from upstream `openai/multiagent-particle-envs/multiagent/core.py`;
+  - `third_party/openai_mpe/UPSTREAM_README.md` downloaded from upstream README;
+  - `third_party/openai_mpe/README.md` documents source and wrapper boundary;
+  - `third_party/openai_mpe/LICENSE` records that upstream standalone `LICENSE/LICENSE.md/COPYING` raw URLs returned 404 at vendoring time.
+- `MPECoreBackend.reset(world)` creates a real MPE `World` and one MPE `Agent` per Wayffusion UAV.
+- `MPECoreBackend.step(...)`:
+  - syncs `UAVState.position/velocity` to `agent.state.p_pos/p_vel`;
+  - writes adapter output to `agent.action.u`;
+  - calls `mpe_world.step()` for each substep;
+  - syncs MPE agent position/velocity back to `UAVState`;
+  - records `uses_real_mpe_core`, `mpe_source`, and `mpe_world_step_calls`.
+- The wrapper no longer contains self-written velocity integration, contact force, or collision response.
+
+Config/documentation changes:
+
+- `configs/env/waypoint_missions.yaml`
+  - default `dynamics_backend.name=mpe_core`;
+  - requested `dynamics_backend.source=mpe2`;
+  - actual source is reported at runtime by `MPECoreBackend`.
+- Deleted `configs/env/waypoint_missions_kinematic_debug.yaml`.
+- `configs/env/waypoint_missions_pd_adapter_debug.yaml` now only changes adapter to `waypoint_pd_tracker`; backend remains `mpe_core`.
+- Added `mpe2>=1.1.0` to both requirements files.
+- Updated `README.md`, `docs/waypoint_environment_guide_zh.md`, and `docs/waypoint_marl_refactor_zh.md`.
+- Replaced `docs/waypoint_mpe_dynamics_refactor.md` with a deprecated note.
+- Added `docs/mpe_core_backend_zh.md` and `docs/third_party_mpe_source.md`.
+
+Test changes:
+
+- Deleted `tests/test_mpe_particle_backend.py`.
+- Added `tests/test_mpe_core_backend.py`.
+- Updated env/trainer tests to assert:
+  - `dynamics_backend == "mpe_core"`;
+  - `uses_real_mpe_core == True`;
+  - `mpe_world_step_calls > 0`.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile envs/waypoint/control/dynamics_backends.py envs/waypoint/control/action_adapters.py envs/waypoint_marl_env.py algorithms/mappo_waypoint.py utils/waypoint_evaluation.py scripts/check/validate_waypoint_mappo.py` -> passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_mpe_core_backend.py` -> `5 passed`.
+- `/opt/conda/bin/python -m pytest -q tests/test_action_adapters.py tests/test_waypoint_env_api.py tests/test_candidate_selection_policy.py tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_rewards.py tests/test_waypoint_rendering.py` -> `15 passed`.
+- `git diff --check` -> passed.
+
+Validation:
+
+- Candidate-selection + real MPE core:
+  - command: `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search connectivity_expansion --policy-class candidate_selection_waypoint --dynamics-backend mpe_core --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 5 --eval_episodes 2 --record_eval_episodes 1 --record_format gif --headless --run_timestamp 20260606_mpe_core_candidate_validate`
+  - output: `outputs/debug/waypoint_mappo_validation/20260606_mpe_core_candidate_validate/`
+  - `passed=true`;
+  - `uses_real_mpe_core=true`;
+  - `mpe_source=third_party_openai_mpe`;
+  - `mpe_world_step_calls=220.0`;
+  - `action_validity_rate=1.0`;
+  - `max_speed_observed=0.049249451607465744`;
+  - GIFs generated.
+- Direct waypoint + real MPE core:
+  - command: `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage belief_search --policy-class direct_waypoint --dynamics-backend mpe_core --action-adapter waypoint_velocity_tracker --num_agents 3 --total_updates 2 --eval_episodes 1 --record_eval_episodes 1 --record_format gif --headless --run_timestamp 20260606_mpe_core_direct_validate`
+  - output: `outputs/debug/waypoint_mappo_validation/20260606_mpe_core_direct_validate/`
+  - `passed=true`;
+  - `uses_real_mpe_core=true`;
+  - `mpe_source=third_party_openai_mpe`;
+  - `mpe_world_step_calls=210.0`;
+  - `action_validity_rate=1.0`;
+  - `max_speed_observed=0.049249451607465744`;
+  - GIFs generated.
+- Negative removed-backend test:
+  - command: `/opt/conda/bin/python scripts/check/validate_waypoint_mappo.py --tasks area_coverage --policy-class direct_waypoint --dynamics-backend mpe_particle --num_agents 3 --total_updates 1 --eval_episodes 1 --headless`
+  - result: expected failure, exit code `1`;
+  - message: `mpe_particle was removed because it was a self-written MPE-like backend. Use mpe_core.`
+
+Interpretation:
+
+- Wayffusion now keeps its own waypoint MARL task/reward/observation layer, but physical particle dynamics come from actual MPE core.
+- The runnable mainline no longer offers handwritten particle dynamics or kinematic waypoint stepping.
+- Smoke validation proves integration correctness and media/logging compatibility; it is not a long-training performance conclusion.

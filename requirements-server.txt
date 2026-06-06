@@ -4,6 +4,7 @@ scipy>=1.15
 matplotlib>=3.10
 PyYAML>=6.0
 imageio>=2.37
+mpe2>=1.1.0
 tensorboard>=2.15
 pytest>=8.0
 psutil>=6.0

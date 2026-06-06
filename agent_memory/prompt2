@@ -1,0 +1,656 @@
+你现在在 xiancaigua/Wayffusion 仓库的 MARL branch 上继续工作。
+
+假设上一轮已经完成：
+
+- WaypointMultiUAVEnv 主动作接口已经是 final waypoint。
+- action_adapter 层已经存在。
+- dynamics_backend 层已经存在。
+- 默认 dynamics_backend 是 MPE-like particle backend。
+- 默认 action_adapter 是 WaypointVelocityTracker。
+- WaypointPDTracker 作为 ablation adapter 已经存在。
+- candidate-selection policy 和 direct waypoint policy 都能通过 validate。
+- GIF/MP4 保存仍然工作。
+
+本轮任务不是继续重构环境主架构，而是做：
+
+底层 ActionAdapter 参数标定与自动选择。
+
+目标：
+为 WaypointVelocityTracker 找到一组更稳定、更通用、更适合作为默认环境动力学的参数，而不是继续使用手拍的基础参数。
+
+当前基础参数大概是：
+
+action_adapter:
+  name: waypoint_velocity_tracker
+  max_command_distance: 0.22
+  max_speed: 0.08
+  slowdown_radius: 0.12
+  velocity_gain: 4.0
+  max_accel: 0.25
+  control_smoothing: 0.35
+  acceptance_radius: 0.025
+  hover_when_arrived: true
+  command_latency_steps: 0
+  tracking_noise_std: 0.0
+
+这些参数不一定好用。请实现一个系统化的 controller calibration / parameter sweep pipeline，用数据选出默认参数。
+
+============================================================
+1. 设计原则
+============================================================
+
+ActionAdapter 是 environment transition dynamics 的组成部分，不是 policy 的一部分。
+
+本轮调参的目标不是让某个训练出来的 policy reward 最高，因为那会把 policy 学习能力和底层控制器混在一起。
+
+本轮要先做 controller-level calibration，即使用固定 waypoint command generators / heuristic waypoint policies 来测试底层控制器本身。
+
+需要回答：
+
+1. 给定一批典型 waypoint command，UAV 能否稳定追踪？
+2. 轨迹是否平滑？
+3. 是否过冲、振荡？
+4. 是否频繁加速度饱和？
+5. 是否违反 max_speed？
+6. 是否造成碰撞/断连/进禁飞区？
+7. 在 coverage / belief_search / inspection / connectivity 等任务中是否不引入明显异常？
+8. 参数是否对不同任务、不同随机种子、不同 agent 数量有鲁棒性？
+
+最终输出：
+
+- 一组推荐 default adapter 参数。
+- 一组 conservative 参数。
+- 一组 aggressive 参数。
+- 一份 calibration report。
+- 对应配置文件。
+- 自动测试和复现实验命令。
+
+============================================================
+2. 新增脚本：adapter 参数标定
+============================================================
+
+新增脚本：
+
+scripts/check/calibrate_waypoint_adapter.py
+
+该脚本用于自动扫描 WaypointVelocityTracker 的参数组合。
+
+命令示例：
+
+python scripts/check/calibrate_waypoint_adapter.py \
+  --env-config configs/env/waypoint_missions.yaml \
+  --tasks area_coverage belief_search priority_inspection connectivity_expansion \
+  --num-agents-list 3 4 6 \
+  --seeds 0 1 2 3 4 \
+  --episodes-per-setting 3 \
+  --output-dir outputs/debug/adapter_calibration/velocity_tracker_v1 \
+  --record-top-k 5 \
+  --record-format gif \
+  --headless
+
+脚本应支持：
+
+--adapter waypoint_velocity_tracker
+--backend mpe_particle
+--search-mode grid | random | staged
+--max-settings
+--record-top-k
+--num-agents-list
+--tasks
+--seeds
+--episodes-per-setting
+--headless
+--record-format gif|mp4
+
+默认 search-mode 用 staged，不要一开始就巨大网格爆炸。
+
+============================================================
+3. 参数搜索空间
+============================================================
+
+请实现合理的默认搜索空间。
+
+核心参数：
+
+max_command_distance:
+  [0.12, 0.16, 0.20, 0.22, 0.26]
+
+slowdown_radius:
+  [0.08, 0.10, 0.12, 0.16, 0.20]
+
+velocity_gain:
+  [2.0, 3.0, 4.0, 5.0, 6.0]
+
+max_accel:
+  [0.12, 0.18, 0.25, 0.35, 0.45]
+
+control_smoothing:
+  [0.20, 0.35, 0.50, 0.70, 1.00]
+
+acceptance_radius:
+  [0.015, 0.025, 0.035]
+
+先不要搜索 tracking_noise_std 和 command_latency_steps，默认：
+
+tracking_noise_std: 0.0
+command_latency_steps: 0
+
+第一阶段找 deterministic default。
+
+后续可以预留 robustness mode：
+
+tracking_noise_std:
+  [0.0, 0.001, 0.003]
+
+command_latency_steps:
+  [0, 1, 2]
+
+但是本轮默认不要把 noise/latency 放进主搜索空间。
+
+============================================================
+4. staged search 策略
+============================================================
+
+不要一上来全量笛卡尔积爆炸。
+
+实现 staged search：
+
+Stage 1: 粗筛动态稳定性
+
+固定任务为简单 waypoint tracking probes，不跑完整 MAPPO。
+
+使用 synthetic waypoint command patterns：
+
+1. single_step_far:
+   UAV 从随机初始点追一个远航点。
+
+2. single_step_near:
+   UAV 追一个近距离航点，检查是否过冲/振荡。
+
+3. square_path:
+   UAV 依次追踪正方形四个角点。
+
+4. zigzag_path:
+   UAV 追踪折线路径，检查转向平滑性。
+
+5. multi_agent_crossing:
+   多 UAV 互相穿越，检查碰撞和最小间距。
+
+6. connectivity_chain:
+   多 UAV 沿 base 向外扩展，检查是否容易断连。
+
+Stage 1 只计算 controller metrics，不计算复杂任务 reward。
+
+保留 top 20% 参数进入 Stage 2。
+
+Stage 2: 任务级 heuristic rollout
+
+在真实 tasks 上跑固定 heuristic waypoint generator：
+
+- area_coverage: frontier / coverage heuristic
+- belief_search: high-belief heuristic
+- priority_inspection: nearest weighted POI heuristic
+- connectivity_expansion: connected outward expansion heuristic
+
+使用这些 heuristic 输出 final waypoint，再经 adapter + MPE backend 执行。
+
+计算任务 metrics 和 controller metrics。
+
+保留 top 5~10 组参数进入 Stage 3。
+
+Stage 3: 短 MAPPO smoke validation
+
+对 top 参数运行短训练或短 rollout：
+
+- candidate_selection_waypoint policy
+- direct_waypoint policy
+
+每组参数不需要长训，做 smoke 级别：
+
+total_updates: 2 或 5
+eval_episodes: 1 或 2
+
+只检查：
+
+- 没有 NaN
+- action_validity_rate >= 0.99
+- reward finite
+- dynamics metrics finite
+- GIF 可生成
+
+最终输出推荐参数。
+
+============================================================
+5. Controller-level metrics
+============================================================
+
+每个 episode / probe 记录以下 metrics：
+
+tracking_error_mean:
+  mean(||p - current_waypoint||)
+
+tracking_error_final:
+  final ||p - current_waypoint||
+
+arrival_rate:
+  fraction of waypoint commands reached within acceptance_radius
+
+time_to_arrival_mean:
+  average steps to reach waypoint
+
+overshoot_count:
+  number of times distance to waypoint increases after having decreased near target
+
+oscillation_score:
+  based on sign changes of velocity projected along waypoint direction
+  or based on repeated distance increase/decrease around target
+
+path_efficiency:
+  straight_line_distance / actual_path_length
+  clipped to [0, 1]
+
+mean_speed:
+  average ||v||
+
+max_speed_observed:
+  max ||v||
+
+speed_violation_count:
+  count where ||v|| > max_speed + tolerance
+
+mean_accel_or_control_norm:
+  average ||control||
+
+control_saturation_rate:
+  fraction of substeps where ||control|| >= max_accel * 0.98
+
+control_smoothness:
+  mean ||u_t - u_{t-1}||
+
+jerk_proxy:
+  same as control_smoothness if explicit jerk not modeled
+
+collision_count:
+  number of inter-UAV collision/contact violations
+
+min_pairwise_distance_mean:
+  average minimum pairwise distance
+
+no_fly_violation_count
+
+geofence_violation_count
+
+connectivity_violation_rate:
+  fraction of steps disconnected from base
+
+episode_success:
+  probe-specific success
+
+finite:
+  all metrics finite and no NaN
+
+这些 metrics 应写入 CSV。
+
+============================================================
+6. 任务级 metrics
+============================================================
+
+Stage 2 真实任务 heuristic rollout 中记录：
+
+area_coverage:
+  coverage_ratio
+  new_coverage_ratio
+  overlap_ratio
+  path_length
+
+belief_search:
+  searched_probability_mass
+  detection_rate
+  remaining_belief_mass
+  repeated_search_mass
+
+priority_inspection:
+  weighted_poi_completion
+  visited_poi_ratio
+  repeat_visit_count
+  deadline_satisfaction
+
+connectivity_expansion:
+  connected_to_base_ratio
+  connectivity_violation_rate
+  effective_explored_radius
+  relay_utilization_ratio
+
+全局：
+
+team_reward
+per_agent_reward_mean
+success_rate
+action_validity_rate
+collision_rate
+path_length
+mean_speed
+max_speed_observed
+mean_control_norm
+control_saturation_rate
+
+============================================================
+7. 参数评分函数
+============================================================
+
+实现一个明确的 score function，用于排序 adapter 参数。
+
+不要只看 reward。
+
+建议总分：
+
+score =
+  + 2.0 * arrival_rate
+  + 1.5 * path_efficiency
+  + 1.0 * task_success_rate
+  + 1.0 * normalized_task_progress
+  - 2.0 * collision_rate
+  - 2.0 * connectivity_violation_rate
+  - 1.5 * no_fly_violation_rate
+  - 1.0 * speed_violation_rate
+  - 1.0 * control_saturation_rate
+  - 0.8 * oscillation_score
+  - 0.5 * tracking_error_mean
+  - 0.3 * control_smoothness
+
+注意：
+
+- 所有分项要归一化到可比范围。
+- 如果 finite=False，直接判为 invalid。
+- 如果 max_speed_observed > max_speed + tolerance，强惩罚。
+- 如果 collision_count 非常高，强惩罚。
+- 如果 action_validity_rate < 0.99，强惩罚。
+- 如果 connectivity_expansion 中 connectivity_violation_rate 太高，强惩罚。
+- 记录 score_components，不能只输出一个总分。
+
+输出：
+
+adapter_calibration_results.csv
+adapter_calibration_ranked.csv
+adapter_calibration_summary.json
+
+============================================================
+8. 推荐三组参数
+============================================================
+
+最终从搜索结果中选出三组：
+
+1. default
+   综合 score 最高，且所有 hard constraints 通过。
+
+2. conservative
+   更平滑、更低 collision、更低 speed/control saturation。
+   允许任务进展稍慢。
+
+3. aggressive
+   更快、更高 task progress。
+   但仍必须满足 hard constraints。
+
+输出到：
+
+configs/env/adapters/waypoint_velocity_tracker_default.yaml
+configs/env/adapters/waypoint_velocity_tracker_conservative.yaml
+configs/env/adapters/waypoint_velocity_tracker_aggressive.yaml
+
+也可以写入：
+
+configs/env/waypoint_missions.yaml
+
+但不要直接覆盖默认主配置，除非 calibration_summary.json 明确 passed=true。
+
+============================================================
+9. Hard constraints
+============================================================
+
+一组参数必须满足以下 hard constraints 才能被推荐：
+
+finite == true
+
+speed_violation_rate <= 0.01
+
+max_speed_observed <= max_speed + tolerance
+
+collision_rate <= 0.02
+
+no_fly_violation_rate <= 0.01
+
+geofence_violation_rate <= 0.01
+
+control_saturation_rate <= 0.40
+
+tracking_error_final_mean <= reasonable threshold
+
+arrival_rate >= 0.70 in synthetic probes
+
+action_validity_rate >= 0.99 in task rollouts
+
+connectivity_violation_rate <= 0.10 for connectivity task
+
+如果没有任何参数满足 hard constraints：
+- 不要强行推荐。
+- 输出 failure analysis。
+- 给出最接近的 top-k 参数和它们失败在哪里。
+- 建议扩大搜索范围或放宽哪一个参数。
+
+============================================================
+10. 输出目录结构
+============================================================
+
+脚本输出目录：
+
+outputs/debug/adapter_calibration/<run_name>/
+
+结构：
+
+calibration_config.yaml
+adapter_calibration_results.csv
+adapter_calibration_ranked.csv
+adapter_calibration_summary.json
+
+top_configs/
+  default.yaml
+  conservative.yaml
+  aggressive.yaml
+
+media/
+  top_001/
+    probe_square_path.gif
+    task_area_coverage.gif
+  top_002/
+  ...
+
+plots/
+  score_vs_params.png
+  tracking_error_boxplot.png
+  control_saturation_boxplot.png
+  speed_distribution.png
+  collision_rate_by_setting.png
+
+如果 matplotlib 可用，生成 plots。
+如果不可用，不要失败，只跳过 plots 并在 summary 说明。
+
+============================================================
+11. GIF / 可视化要求
+============================================================
+
+对 top-k 参数生成 GIF。
+
+至少包括：
+
+- square_path probe
+- multi_agent_crossing probe
+- area_coverage task
+- connectivity_expansion task
+
+GIF 中最好显示：
+
+- UAV trajectory
+- current waypoint
+- velocity vector
+- no-fly zone
+- communication links
+- collision/disconnection marker
+- adapter name
+- parameter summary
+- score
+
+已有 render 支持多少就用多少，不要为了 GIF 大改渲染主结构。
+
+============================================================
+12. 不要做长时间 MAPPO 调参
+============================================================
+
+本轮不是大规模 RL 超参数搜索。
+
+不要对每组 adapter 参数跑长时间 MAPPO 训练。
+
+原因：
+- 成本太高。
+- policy 学习噪声会掩盖 controller 本身好坏。
+- 本轮目标是标定环境动力学控制器，而不是训练最终策略。
+
+MAPPO 只作为 Stage 3 smoke validation。
+
+============================================================
+13. 文档
+============================================================
+
+新增或更新：
+
+docs/adapter_calibration_zh.md
+
+内容包括：
+
+1. 为什么底层 adapter 参数需要标定。
+2. 为什么不能只靠 RL reward 选参数。
+3. WaypointVelocityTracker 参数含义：
+   - max_command_distance
+   - max_speed
+   - slowdown_radius
+   - velocity_gain
+   - max_accel
+   - control_smoothing
+   - acceptance_radius
+4. staged calibration 流程：
+   - synthetic probes
+   - heuristic task rollout
+   - short MAPPO smoke validation
+5. score function。
+6. hard constraints。
+7. 如何复现实验。
+8. 如何把推荐参数写入 env config。
+9. default / conservative / aggressive 三组参数的解释。
+
+README 中补一小段链接到该文档即可，不要大篇幅重复。
+
+============================================================
+14. 测试
+============================================================
+
+新增：
+
+tests/test_adapter_calibration.py
+
+至少测试：
+
+1. 搜索空间生成正常。
+2. 单个 synthetic probe 能跑通。
+3. metrics 字段完整且 finite。
+4. score function 对明显坏参数给低分。
+5. calibration 脚本 tiny mode 能跑完并输出 summary。
+
+tiny mode 命令：
+
+python scripts/check/calibrate_waypoint_adapter.py \
+  --tasks area_coverage \
+  --num-agents-list 3 \
+  --seeds 0 \
+  --episodes-per-setting 1 \
+  --search-mode random \
+  --max-settings 3 \
+  --output-dir outputs/debug/adapter_calibration/tiny_test \
+  --headless
+
+该 tiny mode 必须适合 CI / pytest，不应耗时太久。
+
+============================================================
+15. 必须运行的命令
+============================================================
+
+完成后运行：
+
+python -m pytest tests/test_action_adapters.py
+python -m pytest tests/test_mpe_particle_backend.py
+python -m pytest tests/test_adapter_calibration.py
+python -m pytest tests/test_waypoint_env_api.py
+python -m pytest tests/test_mappo_waypoint_trainer.py
+python -m pytest tests/test_waypoint_rendering.py
+
+然后运行 tiny calibration：
+
+python scripts/check/calibrate_waypoint_adapter.py \
+  --tasks area_coverage \
+  --num-agents-list 3 \
+  --seeds 0 \
+  --episodes-per-setting 1 \
+  --search-mode random \
+  --max-settings 3 \
+  --output-dir outputs/debug/adapter_calibration/tiny_test \
+  --headless
+
+然后运行正式小规模 calibration：
+
+python scripts/check/calibrate_waypoint_adapter.py \
+  --tasks area_coverage belief_search priority_inspection connectivity_expansion \
+  --num-agents-list 3 4 \
+  --seeds 0 1 2 \
+  --episodes-per-setting 2 \
+  --search-mode staged \
+  --max-settings 60 \
+  --output-dir outputs/debug/adapter_calibration/velocity_tracker_staged_v1 \
+  --record-top-k 3 \
+  --record-format gif \
+  --headless
+
+如果正式小规模 calibration 因时间限制无法完成：
+- 至少 tiny calibration 必须完成。
+- 明确说明正式 calibration 运行到哪里。
+- 保存 partial results。
+- 不要假装完整完成。
+
+============================================================
+16. 最终回复要求
+============================================================
+
+完成后请结构化说明：
+
+1. 新增了哪个 calibration 脚本。
+2. 搜索了哪些 adapter 参数。
+3. synthetic probes 包括哪些。
+4. 任务级 heuristic rollout 包括哪些任务。
+5. score function 如何定义。
+6. hard constraints 是什么。
+7. tiny calibration 结果。
+8. staged calibration 结果。
+9. 推荐的 default 参数。
+10. 推荐的 conservative 参数。
+11. 推荐的 aggressive 参数。
+12. 每组参数的关键 metrics：
+    - arrival_rate
+    - tracking_error_mean
+    - path_efficiency
+    - control_saturation_rate
+    - collision_rate
+    - connectivity_violation_rate
+    - max_speed_observed
+    - task_success_rate
+    - score
+13. 输出文件路径。
+14. GIF 路径。
+15. pytest 结果。
+16. 如果没有找到满足 hard constraints 的参数，明确说明失败原因，不要强行推荐。
