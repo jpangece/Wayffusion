@@ -110,6 +110,37 @@ class WaypointRolloutBuffer:
         )
 
 
+def compute_gae_returns(
+    rewards: np.ndarray,
+    values: np.ndarray,
+    next_values: np.ndarray,
+    terminated: np.ndarray,
+    done_for_reset: np.ndarray,
+    gamma: float,
+    gae_lambda: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute team GAE without propagating advantages across reset episodes.
+
+    Time-limit truncations still bootstrap value targets, but they must not let
+    the recursive GAE state leak into the next auto-reset episode.
+    """
+
+    rewards = np.asarray(rewards, dtype=np.float32)
+    values = np.asarray(values, dtype=np.float32)
+    next_values = np.asarray(next_values, dtype=np.float32)
+    terminated = np.asarray(terminated, dtype=bool)
+    done_for_reset = np.asarray(done_for_reset, dtype=bool)
+    value_bootstrap_mask = 1.0 - terminated.astype(np.float32)
+    gae_continuation_mask = 1.0 - done_for_reset.astype(np.float32)
+    advantages = np.zeros_like(rewards, dtype=np.float32)
+    gae = np.zeros((rewards.shape[1],), dtype=np.float32)
+    for t in reversed(range(rewards.shape[0])):
+        delta = rewards[t] + float(gamma) * next_values[t] * value_bootstrap_mask[t] - values[t]
+        gae = delta + float(gamma) * float(gae_lambda) * gae_continuation_mask[t] * gae
+        advantages[t] = gae
+    return advantages, advantages + values
+
+
 class MAPPOWaypointTrainer:
     """MAPPO trainer for final waypoint env actions and per-agent PPO ratios."""
 
@@ -165,6 +196,8 @@ class MAPPOWaypointTrainer:
         mean_desired_speed_mps = []
         collision_counts = []
         no_fly_counts = []
+        no_fly_zone_counts = []
+        domain_randomization_flags = []
         geofence_counts = []
         real_mpe_flags = []
         mpe_step_calls = []
@@ -183,6 +216,12 @@ class MAPPOWaypointTrainer:
         log_std_means = []
         log_std_mins = []
         log_std_maxs = []
+        delta_raw_norm_means = []
+        delta_raw_norm_maxs = []
+        delta_mean_norm_means = []
+        clipped_delta_norm_means = []
+        clipped_delta_norm_maxs = []
+        delta_clip_fractions = []
         start = time.perf_counter()
         for _ in range(horizon):
             obs_tensor = _obs_to_tensor(self.current_obs, self.device)
@@ -210,6 +249,18 @@ class MAPPOWaypointTrainer:
                 log_std_mins.append(float(torch.as_tensor(aux["log_std_min"]).detach().cpu().item()))
             if "log_std_max" in aux:
                 log_std_maxs.append(float(torch.as_tensor(aux["log_std_max"]).detach().cpu().item()))
+            if "delta_raw_norm_mean" in aux:
+                delta_raw_norm_means.append(float(torch.as_tensor(aux["delta_raw_norm_mean"]).detach().cpu().item()))
+            if "delta_raw_norm_max" in aux:
+                delta_raw_norm_maxs.append(float(torch.as_tensor(aux["delta_raw_norm_max"]).detach().cpu().item()))
+            if "delta_mean_norm_mean" in aux:
+                delta_mean_norm_means.append(float(torch.as_tensor(aux["delta_mean_norm_mean"]).detach().cpu().item()))
+            if "clipped_delta_norm_mean" in aux:
+                clipped_delta_norm_means.append(float(torch.as_tensor(aux["clipped_delta_norm_mean"]).detach().cpu().item()))
+            if "clipped_delta_norm_max" in aux:
+                clipped_delta_norm_maxs.append(float(torch.as_tensor(aux["clipped_delta_norm_max"]).detach().cpu().item()))
+            if "delta_clip_fraction" in aux:
+                delta_clip_fractions.append(float(torch.as_tensor(aux["delta_clip_fraction"]).detach().cpu().item()))
             step = self.env_batch.step(env_actions)
             with torch.no_grad():
                 bootstrap_value = self.policy.get_action_and_value(_obs_to_tensor(step.bootstrap_observations, self.device)).value
@@ -255,6 +306,8 @@ class MAPPOWaypointTrainer:
                 mean_desired_speed_mps.append(float(info.get("mean_desired_speed_mps", 0.0)))
                 collision_counts.append(float(info.get("collision_count", 0.0)))
                 no_fly_counts.append(float(info.get("no_fly_violation_count", 0.0)))
+                no_fly_zone_counts.append(float(info.get("no_fly_zone_count", 0.0)))
+                domain_randomization_flags.append(float(bool(info.get("domain_randomization_enabled", False))))
                 geofence_counts.append(float(info.get("geofence_violation_count", 0.0)))
                 dyn = info.get("dynamics_info", {})
                 real_mpe_flags.append(float(bool(dyn.get("uses_real_mpe_core", False))))
@@ -269,16 +322,17 @@ class MAPPOWaypointTrainer:
         rewards = np.stack(buffer.team_rewards, axis=0).astype(np.float32)
         values = np.stack(buffer.values, axis=0).astype(np.float32)
         next_values_arr = np.stack(next_values, axis=0).astype(np.float32)
-        bootstrap_mask = np.stack(buffer.bootstrap_mask, axis=0).astype(np.float32)
+        terminated = np.stack(buffer.terminated, axis=0).astype(bool)
         done_for_reset = np.stack(buffer.done_for_reset, axis=0).astype(bool)
-        advantages = np.zeros_like(rewards, dtype=np.float32)
-        gae = np.zeros((rewards.shape[1],), dtype=np.float32)
-        for t in reversed(range(horizon)):
-            delta = rewards[t] + gamma * next_values_arr[t] * bootstrap_mask[t] - values[t]
-            continuation = bootstrap_mask[t]
-            gae = delta + gamma * gae_lambda * continuation * gae
-            advantages[t] = gae
-        returns = advantages + values
+        advantages, returns = compute_gae_returns(
+            rewards,
+            values,
+            next_values_arr,
+            terminated,
+            done_for_reset,
+            gamma,
+            gae_lambda,
+        )
         elapsed = time.perf_counter() - start
         return buffer.build(advantages, returns), {
             "mean_team_reward": float(np.mean(rollout_rewards)) if rollout_rewards else 0.0,
@@ -303,6 +357,8 @@ class MAPPOWaypointTrainer:
             "mean_desired_speed_mps": float(np.mean(mean_desired_speed_mps)) if mean_desired_speed_mps else 0.0,
             "collision_count": float(np.sum(collision_counts)) if collision_counts else 0.0,
             "no_fly_violation_count": float(np.sum(no_fly_counts)) if no_fly_counts else 0.0,
+            "mean_no_fly_zone_count": float(np.mean(no_fly_zone_counts)) if no_fly_zone_counts else 0.0,
+            "domain_randomization_enabled": float(np.mean(domain_randomization_flags)) if domain_randomization_flags else 0.0,
             "geofence_violation_count": float(np.sum(geofence_counts)) if geofence_counts else 0.0,
             "uses_real_mpe_core": float(np.mean(real_mpe_flags)) if real_mpe_flags else 0.0,
             "mpe_world_step_calls": float(np.mean(mpe_step_calls)) if mpe_step_calls else 0.0,
@@ -321,6 +377,12 @@ class MAPPOWaypointTrainer:
             "log_std_mean": float(np.mean(log_std_means)) if log_std_means else 0.0,
             "log_std_min": float(np.min(log_std_mins)) if log_std_mins else 0.0,
             "log_std_max": float(np.max(log_std_maxs)) if log_std_maxs else 0.0,
+            "delta_raw_norm_mean": float(np.mean(delta_raw_norm_means)) if delta_raw_norm_means else 0.0,
+            "delta_raw_norm_max": float(np.max(delta_raw_norm_maxs)) if delta_raw_norm_maxs else 0.0,
+            "delta_mean_norm_mean": float(np.mean(delta_mean_norm_means)) if delta_mean_norm_means else 0.0,
+            "clipped_delta_norm_mean": float(np.mean(clipped_delta_norm_means)) if clipped_delta_norm_means else 0.0,
+            "clipped_delta_norm_max": float(np.max(clipped_delta_norm_maxs)) if clipped_delta_norm_maxs else 0.0,
+            "delta_clip_fraction": float(np.mean(delta_clip_fractions)) if delta_clip_fractions else 0.0,
             "episodes_completed": int(np.count_nonzero(np.stack(buffer.done_for_reset))),
             "cumulative_episodes": int(self.completed_episodes),
             "rollout_steps_per_sec": float(horizon * self.env_batch.num_envs / max(elapsed, 1e-6)),

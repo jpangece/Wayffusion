@@ -8,6 +8,7 @@ import numpy as np
 from gymnasium import spaces
 
 from envs.waypoint.control import build_action_adapter, build_dynamics_backend
+from envs.waypoint.randomization import build_episode_config
 from envs.waypoint.rendering import render_world
 from envs.waypoint.safety import SafetyLayer
 from envs.waypoint.world import MissionWorld
@@ -57,6 +58,8 @@ class WaypointMultiUAVEnv:
         self.last_raw_waypoints: np.ndarray | None = None
         self.last_reward_result: dict[str, Any] = {}
         self.last_transition_info: dict[str, Any] = {}
+        self.episode_config = deepcopy(self.config)
+        self.episode_randomization_info: dict[str, Any] = {"enabled": False}
         self._build_spaces()
 
     def _action_adapter_config(self) -> dict[str, Any]:
@@ -187,14 +190,15 @@ class WaypointMultiUAVEnv:
             self.seed_value = int(seed)
             self.rng = np.random.default_rng(self.seed_value)
         options = options or {}
-        self.world = MissionWorld.from_config(self.config, rng=self.rng)
-        self.world.sensor_radius = float(self.config.get("sensor_radius", 0.12))
-        self.world.comm_radius = float(self.config.get("comm_radius", 0.35))
+        self.episode_config, self.episode_randomization_info = build_episode_config(self.config, self.rng)
+        self.world = MissionWorld.from_config(self.episode_config, rng=self.rng)
+        self.world.sensor_radius = float(self.episode_config.get("sensor_radius", 0.12))
+        self.world.comm_radius = float(self.episode_config.get("comm_radius", 0.35))
         self.world.reset_common(self.num_agents, rng=self.rng, initial_positions=options.get("initial_positions"))
         self.action_adapter.reset(self.world)
         self.dynamics_backend.reset(self.world)
         task_name = str(options.get("task_name") or self.rng.choice(self.task_names, p=self.task_sampling_probs))
-        self.current_scenario = build_waypoint_scenario(task_name, self.config.get("tasks", self.config))
+        self.current_scenario = build_waypoint_scenario(task_name, self.episode_config.get("tasks", self.episode_config))
         self.task_state = self.current_scenario.reset(self.rng, self.world)
         self.agents = self.possible_agents.copy()
         self.last_selected_waypoints = None
@@ -449,6 +453,10 @@ class WaypointMultiUAVEnv:
             "collision_rate": float(self.last_transition_info.get("safety_violation_count", 0) / max(self.world.step_count * self.num_agents, 1)),
             "invalid_action_count": int(self.last_transition_info.get("invalid_action_count", 0)),
             "candidate_mask_empty_count": int(np.count_nonzero(~self.last_candidate_mask.any(axis=1))) if self._exposes_candidates() else 0,
+            "episode_seed": self.seed_value,
+            "domain_randomization": deepcopy(self.episode_randomization_info),
+            "domain_randomization_enabled": bool(self.episode_randomization_info.get("enabled", False)),
+            "no_fly_zone_count": len(self.world.no_fly_zones),
         }
         if self._exposes_candidates():
             info["candidate_mask"] = self.last_candidate_mask[agent_idx].copy()

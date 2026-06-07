@@ -40,6 +40,16 @@ class WaypointScenario:
                 centers = np.stack([(xx + 0.5) / world.grid_size, (yy + 0.5) / world.grid_size], axis=-1) * world.map_size
                 dist = np.linalg.norm(centers - np.asarray(zone["center"], dtype=np.float32), axis=-1)
                 risk = np.maximum(risk, (dist <= float(zone["radius"])).astype(np.float32))
+            elif {"x_min", "x_max", "y_min", "y_max"}.issubset(zone):
+                yy, xx = np.mgrid[0 : world.grid_size, 0 : world.grid_size]
+                centers = np.stack([(xx + 0.5) / world.grid_size, (yy + 0.5) / world.grid_size], axis=-1) * world.map_size
+                inside = (
+                    (centers[..., 0] >= float(zone["x_min"]))
+                    & (centers[..., 0] <= float(zone["x_max"]))
+                    & (centers[..., 1] >= float(zone["y_min"]))
+                    & (centers[..., 1] <= float(zone["y_max"]))
+                )
+                risk = np.maximum(risk, inside.astype(np.float32))
         target = np.zeros_like(coverage, dtype=np.float32)
         if "target_position" in task_state:
             idx = world.world_to_grid(np.asarray(task_state["target_position"], dtype=np.float32)[None, :])[0]
@@ -83,10 +93,12 @@ class WaypointScenario:
 
 def per_agent_new_coverage(prev_world: MissionWorld, world: MissionWorld) -> np.ndarray:
     before = prev_world.coverage_grid > 0.0
+    navigable = world.navigable_grid_mask()
+    denominator = max(float(navigable.sum()), 1.0)
     rewards = []
     for uav in world.uavs:
-        mask = world.sensor_mask_for_position(uav.position, uav.sensor_radius)
-        rewards.append(float(np.logical_and(mask, ~before).mean()))
+        mask = world.sensor_mask_for_position(uav.position, uav.sensor_radius) & navigable
+        rewards.append(float(np.logical_and(mask, ~before).sum() / denominator))
     return np.asarray(rewards, dtype=np.float32)
 
 

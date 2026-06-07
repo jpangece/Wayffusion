@@ -121,6 +121,8 @@ def evaluate_waypoint_policy_episodes(
             "mean_desired_speed_mps": float(adapter_info.get("mean_desired_speed_mps", info.get("mean_desired_speed_mps", 0.0))),
             "collision_count": float(info.get("collision_count", 0.0)),
             "no_fly_violation_count": float(info.get("no_fly_violation_count", 0.0)),
+            "no_fly_zone_count": float(info.get("no_fly_zone_count", 0.0)),
+            "domain_randomization_enabled": float(bool(info.get("domain_randomization_enabled", False))),
             "geofence_violation_count": float(info.get("geofence_violation_count", 0.0)),
             "adapter_finite": float(bool(info.get("adapter_info", {}).get("adapter_finite", True))),
             "dynamics_finite": float(bool(info.get("dynamics_info", {}).get("dynamics_finite", True))),

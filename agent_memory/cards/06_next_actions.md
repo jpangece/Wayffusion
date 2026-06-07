@@ -1137,3 +1137,137 @@ After Direct MAPPO specialist tuner and debug sweeps:
 - Do not claim Direct MAPPO specialists are complete yet.
 - Do not launch formal `outputs/training/mappo_direct_specialists/` for `area_coverage`, `priority_inspection`, or `connectivity_expansion` yet.
 - For `belief_search`, a formal long run is allowed only as robustness validation, not as proof that all Direct specialists are solved.
+
+After GAE/action-scale repair and full-flow launch:
+
+- Full Direct MAPPO flow is running in tmux:
+  - session: `wayffusion_direct_full_20260606`;
+  - timestamp: `20260606_direct_full_run02`;
+  - stdout log: `outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/tmux_stdout.log`.
+- Check status with:
+  - `tmux list-sessions | rg wayffusion_direct_full_20260606 || true`;
+  - `tail -n 120 outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/tmux_stdout.log`.
+- When the run finishes, inspect:
+  - `outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/summary.json`;
+  - `outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/report.md`.
+- Action-scale smoke outputs are under:
+  - `outputs/debug/mappo_direct_specialists/action_scale_smoke/20260606_direct_full_run02/`.
+- Formal long-training outputs, if any task passes smoke, are under:
+  - `outputs/training/mappo_direct_specialists/formal/20260606_direct_full_run02/`.
+- Note:
+  - `20260606_direct_full_run01` is a partial historical run that was intentionally stopped after discovering that formal training was launched before all task smoke checks.
+  - The script has been corrected so run02 performs all smoke checks first, then formal training.
+- First smoke observed:
+  - task/trial: `area_coverage` / `md020_std18`;
+  - initial metrics around update 14:
+    - `action_validity_rate=0.9736`;
+    - `delta_clip_fraction=0.4502`;
+    - `approx_kl=8.4e-05`;
+    - `clip_frac=0.0`.
+- This is not a convergence result yet; it only confirms action diagnostics are being logged and clipping is not saturated.
+- If the full flow finishes with `NEED_MORE_TUNING`:
+  - For `delta_clip_fraction > 0.5`, lower `log_std_init/log_std_max` or `max_delta`.
+  - If `approx_kl` returns to `~1e-7` while task metrics are flat, inspect `advantage_std`, `reward_norm`, and reward scale before raising LR.
+  - If `area_coverage` stalls near `0.45-0.50`, next round should modify coverage reward weights, not adapter.
+  - If `priority_inspection` stalls near `0.50-0.60`, next round should use POI curriculum and repeat/first-visit reward shaping.
+  - If `connectivity_expansion` only succeeds on easy comm, run curriculum `comm_radius 0.42 -> 0.39 -> 0.36`; do not count easy as target convergence.
+- TensorBoard for current run:
+  - CSV metrics have been exported into `tensorboard_csv/` subdirectories.
+  - A background exporter is running:
+    - `tmux attach -t wayffusion_direct_tb_export_20260606`;
+    - log: `outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/csv_to_tensorboard.log`.
+  - TensorBoard is running on port `6007`:
+    - `tmux attach -t wayffusion_tensorboard_6007`.
+  - Correct manual start command:
+    - `/opt/conda/bin/tensorboard --logdir_spec smoke:outputs/debug/mappo_direct_specialists/action_scale_smoke/20260606_direct_full_run02,formal:outputs/training/mappo_direct_specialists/formal/20260606_direct_full_run02 --bind_all --port 6007`.
+  - Do not use a bare comma-separated `--logdir`; this TensorBoard version treats it as one invalid path.
+
+Future output-layout rule:
+
+- Do not create new debug outputs under nested roots like:
+  - `outputs/debug/mappo_direct_specialists/action_scale_smoke/<timestamp>/...`.
+- Use phase roots directly under `outputs/debug`:
+  - `outputs/debug/<YYYYMMDD_HHMM_phase_change_on_xxx>/<task>/<short_run>/`.
+- Future formal/training roots should mirror this:
+  - `outputs/training/<YYYYMMDD_HHMM_phase_change_on_xxx>/<task>/<short_run>/`.
+- Use minute-level timestamps, not second-level timestamps, unless explicitly needed.
+- Keep run names short:
+  - `smoke__md0p20__s0__tag`;
+  - `formal__u1500__md0p20__s0__tag`.
+- Reports and summaries should live at the phase root:
+  - `report.md`;
+  - `summary.json`.
+- CSV can remain complete, but TensorBoard should default to core metrics only:
+  - use `tensorboard_metric_mode: core`;
+  - use `--metric-mode all` only when explicitly debugging raw metrics.
+
+Direct MAPPO v2 monitoring and next actions:
+
+- Active old run remains untouched:
+  - `tmux attach -t wayffusion_direct_full_20260606`;
+  - stdout: `outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/tmux_stdout.log`.
+- Active new v2 run:
+  - `tmux attach -t wayffusion_direct_v2_20260606_1611`;
+  - stdout: `outputs/debug/20260606_1611_phase_change_on_direct_obs_reward_v2/tmux_stdout.log`.
+- New v2 TensorBoard:
+  - URL: `http://<server>:6008`;
+  - tmux: `wayffusion_tensorboard_v2_6008`;
+  - log: `outputs/debug/20260606_1611_phase_change_on_direct_obs_reward_v2/tensorboard_6008.log`.
+- New v2 output roots:
+  - debug/smoke/report: `outputs/debug/20260606_1611_phase_change_on_direct_obs_reward_v2`;
+  - formal training: `outputs/training/20260606_1611_phase_change_on_direct_obs_reward_v2`.
+- V2 config files:
+  - env: `configs/env/waypoint_missions_direct_tune_v2.yaml`;
+  - policies: `configs/policy/direct_specialists_v2/*.yaml`.
+
+What to watch in v2:
+
+- For all tasks:
+  - `eval_success_rate`;
+  - task metric (`coverage_ratio`, `searched_probability_mass`, `weighted_poi_completion`, `effective_explored_radius`);
+  - `action_validity_rate`;
+  - `delta_clip_fraction`;
+  - `approx_kl`;
+  - `clip_frac`;
+  - `value_loss`;
+  - `advantage_std`;
+  - `policy_std_mean` / `log_std_mean`.
+- If `delta_clip_fraction > 0.50` again:
+  - lower `log_std_init/log_std_max`, or lower `max_delta`;
+  - do not raise learning rate first.
+- If `delta_clip_fraction` is healthy but `approx_kl ~ 1e-7` and task metric is flat:
+  - increase PPO update strength next round:
+    - `learning_rate=3e-4`;
+    - `epochs=6`;
+    - or lower reward normalization constraints only after checking reward scale.
+- If `area_coverage` remains around `0.43-0.48`:
+  - reward shaping still insufficient;
+  - try stronger anti-overlap/revisit penalty and local frontier/progress signal, but do not modify base MPE dynamics.
+- If `belief_search` regresses after target-channel masking:
+  - inspect whether target masking removed an accidental leakage shortcut;
+  - compare searched probability mass, not only detection success.
+- If `priority_inspection` remains near `0.5-0.6`:
+  - increase approach shaping or use POI curriculum;
+  - do not call it converged unless target weighted completion threshold is met.
+- If `connectivity_expansion` only works with easy comm:
+  - keep it marked `NEED_MORE_TUNING`;
+  - use curriculum `comm_radius 0.42 -> 0.39 -> 0.36`, with final target eval at base target comm settings.
+
+Important caveat:
+
+- The first v2 area smoke has healthier action clipping (`delta_clip_fraction≈0.398`) and coverage progress (`coverage_ratio≈0.435`) but `success_rate=0.0`.
+- This is a positive debug signal, not convergence.
+- Do not report any Direct specialist as complete until the full v2 report shows target-task multi-seed formal success.
+
+## Domain-randomized specialist follow-up
+
+- Keep active pre-randomization runs as baselines; do not stop or relabel them.
+- New runs using the base or v2 env config now randomize spawns, 1-3 no-fly zones, belief targets, and POIs.
+- Next robustness phase should:
+  1. use a new minute-level phase directory;
+  2. train seeds `0,1,2`;
+  3. evaluate on fixed held-out seeds;
+  4. group results by `no_fly_zone_count`;
+  5. report success/task metric and safety violations, not reward alone.
+- If early learning collapses, use a no-fly curriculum from one zone to 1-3 zones, but retain full randomization for target evaluation.
+- Post-change coverage is normalized over navigable cells, so state this before comparing against historical full-grid coverage.

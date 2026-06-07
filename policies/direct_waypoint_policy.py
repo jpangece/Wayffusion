@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.distributions import Normal
 
@@ -25,6 +26,10 @@ class DirectWaypointPolicy(nn.Module):
         log_std_init: float = -1.0,
         log_std_min: float = -2.0,
         log_std_max: float = 0.5,
+        task_field_channel_mode: str = "all",
+        task_field_channel_masks: dict | None = None,
+        use_spatial_field_context: bool = False,
+        spatial_context_radii: list[float] | None = None,
     ):
         super().__init__()
         del action_space
@@ -32,10 +37,17 @@ class DirectWaypointPolicy(nn.Module):
         self.max_delta = float(max_delta)
         self.log_std_min = float(log_std_min)
         self.log_std_max = float(log_std_max)
+        self.task_field_channel_mode = str(task_field_channel_mode)
+        self.use_spatial_field_context = bool(use_spatial_field_context)
 
         cnn_channels = cnn_channels or [16, 32, 64]
         task_field_space = observation_space["task_field"] if "task_field" in observation_space else observation_space["global_task_field"]
         in_channels = int(task_field_space.shape[0])
+        self.in_channels = in_channels
+        self.register_buffer("task_field_masks", self._build_task_field_masks(in_channels, task_field_channel_masks), persistent=False)
+        offsets = self._build_spatial_offsets(spatial_context_radii or [0.06, 0.12])
+        self.register_buffer("spatial_offsets", offsets, persistent=False)
+        self.spatial_context_dim = int(offsets.shape[0] * in_channels) if self.use_spatial_field_context else 0
         conv_layers = []
         last_channels = in_channels
         for out_channels in cnn_channels:
@@ -67,7 +79,7 @@ class DirectWaypointPolicy(nn.Module):
 
         task_dim = int(observation_space["task_id"].shape[0])
         global_dim = int(observation_space["global_info"].shape[0])
-        actor_dim = agent_hidden_dim + self.field_dim + task_dim + global_dim
+        actor_dim = agent_hidden_dim + self.field_dim + task_dim + global_dim + self.spatial_context_dim
         self.actor = nn.Sequential(
             nn.Linear(actor_dim, agent_hidden_dim),
             nn.ReLU(),
@@ -85,8 +97,61 @@ class DirectWaypointPolicy(nn.Module):
             nn.Linear(joint_hidden_dim, 1),
         )
 
+    def _build_task_field_masks(self, channels: int, masks: dict | None) -> torch.Tensor:
+        defaults = {
+            "area_coverage": [1.0, 1.0, 0.0, 1.0, 0.0],
+            "belief_search": [1.0, 1.0, 1.0, 1.0, 0.0],
+            "priority_inspection": [0.0, 1.0, 0.0, 1.0, 1.0],
+            "connectivity_expansion": [1.0, 1.0, 0.0, 1.0, 0.0],
+            "dynamic_target_escort": [0.0, 0.0, 0.0, 1.0, 1.0],
+            "target_interception": [0.0, 0.0, 1.0, 1.0, 1.0],
+        }
+        names = [
+            "area_coverage",
+            "belief_search",
+            "priority_inspection",
+            "connectivity_expansion",
+            "dynamic_target_escort",
+            "target_interception",
+        ]
+        source = masks or defaults
+        out = []
+        for idx, name in enumerate(names):
+            values = source.get(name, source.get(str(idx), [1.0] * channels)) if isinstance(source, dict) else [1.0] * channels
+            vector = list(values)[:channels]
+            if len(vector) < channels:
+                vector.extend([0.0] * (channels - len(vector)))
+            out.append(vector)
+        return torch.as_tensor(out, dtype=torch.float32)
+
+    def _build_spatial_offsets(self, radii: list[float]) -> torch.Tensor:
+        offsets = [[0.0, 0.0]]
+        directions = [
+            (1.0, 0.0),
+            (-1.0, 0.0),
+            (0.0, 1.0),
+            (0.0, -1.0),
+            (0.70710678, 0.70710678),
+            (0.70710678, -0.70710678),
+            (-0.70710678, 0.70710678),
+            (-0.70710678, -0.70710678),
+        ]
+        for radius in radii:
+            for dx, dy in directions:
+                offsets.append([float(radius) * dx, float(radius) * dy])
+        return torch.as_tensor(offsets, dtype=torch.float32)
+
     def _task_field(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         return obs["task_field"] if "task_field" in obs else obs["global_task_field"]
+
+    def _masked_task_field(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+        field = self._task_field(obs)
+        if self.task_field_channel_mode == "all":
+            mask = torch.ones((field.shape[0], field.shape[1]), dtype=field.dtype, device=field.device)
+            return field, mask
+        task_idx = torch.argmax(obs["task_id"], dim=-1).long().clamp(min=0, max=self.task_field_masks.shape[0] - 1)
+        mask = self.task_field_masks.to(device=field.device, dtype=field.dtype)[task_idx, : field.shape[1]]
+        return field * mask[:, :, None, None], mask
 
     def _agent_mask(self, obs: dict[str, torch.Tensor], batch_size: int, num_agents: int) -> torch.Tensor:
         if "agent_mask" in obs:
@@ -94,7 +159,7 @@ class DirectWaypointPolicy(nn.Module):
         return torch.ones((batch_size, num_agents), dtype=torch.bool, device=self._task_field(obs).device)
 
     def forward(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        field = self._task_field(obs)
+        field, _ = self._masked_task_field(obs)
         field_feat = self.field_pool(self.field_encoder(field))
         agents = obs["all_uav_states"]
         batch_size, num_agents, _ = agents.shape
@@ -106,18 +171,35 @@ class DirectWaypointPolicy(nn.Module):
         field_per_agent = field_feat.unsqueeze(1).expand(batch_size, num_agents, -1)
         task_per_agent = obs["task_id"].unsqueeze(1).expand(batch_size, num_agents, -1)
         global_per_agent = obs["global_info"].unsqueeze(1).expand(batch_size, num_agents, -1)
-        actor_input = torch.cat([agent_tokens, field_per_agent, task_per_agent, global_per_agent], dim=-1)
+        pieces = [agent_tokens, field_per_agent, task_per_agent, global_per_agent]
+        if self.use_spatial_field_context:
+            pieces.append(self._spatial_field_context(field, agents[..., :2]))
+        actor_input = torch.cat(pieces, dim=-1)
         delta_mean = torch.tanh(self.actor(actor_input)) * self.max_delta
         pooled_agents = _masked_mean(agent_tokens, agent_mask, dim=1)
         critic_input = torch.cat([field_feat, pooled_agents, obs["task_id"], obs["global_info"]], dim=-1)
         value = self.critic(critic_input).squeeze(-1)
         return delta_mean, value, agent_mask
 
-    def _delta_to_waypoint(self, obs: dict[str, torch.Tensor], delta: torch.Tensor) -> torch.Tensor:
-        positions = obs["all_uav_states"][..., :2] * self.map_size
+    def _spatial_field_context(self, field: torch.Tensor, normalized_positions: torch.Tensor) -> torch.Tensor:
+        batch_size, num_agents, _ = normalized_positions.shape
+        offsets = self.spatial_offsets.to(device=field.device, dtype=field.dtype)
+        sample_points = torch.clamp(normalized_positions.unsqueeze(2) + offsets.view(1, 1, -1, 2), 0.0, 1.0)
+        grid = sample_points.mul(2.0).sub(1.0).reshape(batch_size, num_agents * offsets.shape[0], 1, 2)
+        sampled = F.grid_sample(field, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
+        sampled = sampled.squeeze(-1).permute(0, 2, 1).reshape(batch_size, num_agents, offsets.shape[0] * field.shape[1])
+        return sampled
+
+    def _clip_delta(self, delta: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         norm = torch.linalg.norm(delta, dim=-1, keepdim=True)
         scale = torch.clamp(self.max_delta / torch.clamp(norm, min=1e-8), max=1.0)
         clipped_delta = delta * scale
+        clip_mask = norm.squeeze(-1) > self.max_delta + 1e-6
+        return clipped_delta, clip_mask
+
+    def _delta_to_waypoint(self, obs: dict[str, torch.Tensor], delta: torch.Tensor) -> torch.Tensor:
+        positions = obs["all_uav_states"][..., :2] * self.map_size
+        clipped_delta, _ = self._clip_delta(delta)
         return torch.clamp(positions + clipped_delta, 0.0, self.map_size)
 
     def get_action_and_value(
@@ -135,7 +217,13 @@ class DirectWaypointPolicy(nn.Module):
             delta = train_action.float()
         logprob = dist.log_prob(delta).sum(dim=-1) * agent_mask.float()
         entropy = dist.entropy().sum(dim=-1) * agent_mask.float()
+        clipped_delta, clip_mask = self._clip_delta(delta)
         env_action = self._delta_to_waypoint(obs, delta)
+        valid_weights = agent_mask.float()
+        valid_count = torch.clamp(valid_weights.sum(), min=1.0)
+        delta_raw_norm = torch.linalg.norm(delta, dim=-1)
+        delta_mean_norm = torch.linalg.norm(delta_mean, dim=-1)
+        clipped_delta_norm = torch.linalg.norm(clipped_delta, dim=-1)
         return PolicyOutput(
             env_action=env_action.float(),
             train_action=delta.float(),
@@ -148,6 +236,12 @@ class DirectWaypointPolicy(nn.Module):
                 "log_std_mean": log_std.mean(),
                 "log_std_min": log_std.min(),
                 "log_std_max": log_std.max(),
+                "delta_raw_norm_mean": (delta_raw_norm * valid_weights).sum() / valid_count,
+                "delta_raw_norm_max": torch.where(agent_mask, delta_raw_norm, torch.zeros_like(delta_raw_norm)).max(),
+                "delta_mean_norm_mean": (delta_mean_norm * valid_weights).sum() / valid_count,
+                "clipped_delta_norm_mean": (clipped_delta_norm * valid_weights).sum() / valid_count,
+                "clipped_delta_norm_max": torch.where(agent_mask, clipped_delta_norm, torch.zeros_like(clipped_delta_norm)).max(),
+                "delta_clip_fraction": (clip_mask.float() * valid_weights).sum() / valid_count,
                 "agent_mask": agent_mask,
             },
         )

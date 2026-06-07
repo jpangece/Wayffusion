@@ -23,8 +23,8 @@ class ConnectivityExpansionScenario(WaypointScenario):
         prev_radius = self._effective_radius(prev_world)
         radius = self._effective_radius(world)
         radius_gain = max(radius - prev_radius, 0.0)
-        prev_cov = float(prev_world.coverage_grid.mean())
-        coverage_gain = max(float(world.coverage_grid.mean()) - prev_cov, 0.0)
+        prev_cov = prev_world.coverage_ratio()
+        coverage_gain = max(world.coverage_ratio() - prev_cov, 0.0)
         connected = world.connected_to_base_mask()
         violation = 1.0 - float(np.mean(connected)) if len(connected) else 0.0
         if violation > 1e-6:
@@ -53,7 +53,7 @@ class ConnectivityExpansionScenario(WaypointScenario):
                 "longest_disconnected_duration": float(task_state["max_disconnect_run"]),
                 "relay_utilization_ratio": float(relay_credit / max(len(world.uavs), 1)),
                 "effective_explored_radius": float(radius),
-                "coverage_ratio": float(world.coverage_grid.mean()),
+                "coverage_ratio": world.coverage_ratio(),
             }
         )
         return {
@@ -95,7 +95,7 @@ class ConnectivityExpansionScenario(WaypointScenario):
 
     def get_metrics(self, world: MissionWorld, task_state: dict) -> dict:
         connected_ratio = float(np.mean(world.connected_to_base_mask())) if world.uavs else 1.0
-        coverage = float(world.coverage_grid.mean())
+        coverage = world.coverage_ratio()
         radius = self._effective_radius(world)
         violation_rate = float(task_state.get("disconnect_steps", 0) / max(world.step_count, 1))
         return {

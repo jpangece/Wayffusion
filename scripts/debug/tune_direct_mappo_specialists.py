@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.debug import tune_mappo_specialists as common
+from utils.output_layout import minute_timestamp, resolve_output_root, short_run_name
 
 
 BASE_NEXT_SUGGESTION = common.next_suggestion
@@ -28,6 +29,12 @@ DIRECT_SPECIALIST_CONFIGS = {
     "belief_search": "configs/policy/direct_specialists/direct_belief_search.yaml",
     "priority_inspection": "configs/policy/direct_specialists/direct_priority_inspection.yaml",
     "connectivity_expansion": "configs/policy/direct_specialists/direct_connectivity_expansion.yaml",
+}
+CONFIG_DIR_CANDIDATES = {
+    "area_coverage": ("direct_area_coverage_v2.yaml", "direct_area_coverage.yaml"),
+    "belief_search": ("direct_belief_search_v2.yaml", "direct_belief_search.yaml"),
+    "priority_inspection": ("direct_priority_inspection_v2.yaml", "direct_priority_inspection.yaml"),
+    "connectivity_expansion": ("direct_connectivity_expansion_v2.yaml", "direct_connectivity_expansion.yaml"),
 }
 
 
@@ -81,16 +88,32 @@ def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
             train_config[key] = env_config[key]
 
 
+def use_specialist_config_dir(config_dir: str | None) -> None:
+    if not config_dir:
+        return
+    root = Path(config_dir)
+    mapping: dict[str, str] = {}
+    for task, candidates in CONFIG_DIR_CANDIDATES.items():
+        for filename in candidates:
+            path = root / filename
+            if path.exists():
+                mapping[task] = str(path)
+                break
+        if task not in mapping:
+            raise FileNotFoundError(f"No direct specialist config for task={task} under {root}; tried {candidates}")
+    DIRECT_SPECIALIST_CONFIGS.update(mapping)
+
+
 def direct_trial_specs(task: str, stage: str, debug_rollout_steps: int) -> list[DirectTrialSpec]:
     base_rollout = int(debug_rollout_steps) if stage == "debug" else 256
     common_trials = [
-        DirectTrialSpec("md020_std08", 2e-4, base_rollout, 4, 256, 0.01, 0.50, 0.03, True, 0.20, -0.8, -1.8, 0.1),
-        DirectTrialSpec("md015_std10", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.01, 0.50, 0.03, True, 0.15, -1.0, -2.0, 0.0),
-        DirectTrialSpec("md010_safe", 1e-4, 128 if stage == "debug" else 256, 4, 256, 0.003, 0.75, 0.02, True, 0.10, -1.5, -3.0, 0.0),
-        DirectTrialSpec("md025_explore", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.02, 0.50, 0.05, True, 0.25, -0.5, -2.0, 0.5),
-        DirectTrialSpec("lr3e-4", 3e-4, 128 if stage == "debug" else 256, 4, 256, 0.01, 0.50, 0.05, True, 0.20, -0.8, -1.8, 0.1),
-        DirectTrialSpec("vf075", 1e-4, 256, 6, 512, 0.01, 0.75, 0.02, True, 0.15, -1.0, -2.0, 0.0),
-        DirectTrialSpec("no_rnorm", 1e-4, 256, 4, 512, 0.01, 0.75, 0.02, False, 0.15, -1.0, -2.0, 0.0),
+        DirectTrialSpec("md018_std21", 2e-4, base_rollout, 4, 256, 0.002, 0.50, 0.03, True, 0.18, -2.1, -3.2, -0.8),
+        DirectTrialSpec("md015_std22", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.002, 0.75, 0.03, True, 0.15, -2.2, -3.2, -0.8),
+        DirectTrialSpec("md012_safe", 1e-4, 128 if stage == "debug" else 256, 4, 256, 0.002, 0.75, 0.02, True, 0.12, -2.3, -3.2, -0.9),
+        DirectTrialSpec("md020_std18", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.003, 0.50, 0.05, True, 0.20, -1.8, -3.0, -0.6),
+        DirectTrialSpec("lr3e-4_lowstd", 3e-4, 128 if stage == "debug" else 256, 4, 256, 0.002, 0.50, 0.05, True, 0.18, -2.1, -3.2, -0.8),
+        DirectTrialSpec("vf075_lowstd", 1e-4, 256, 6, 512, 0.002, 0.75, 0.02, True, 0.15, -2.2, -3.2, -0.8),
+        DirectTrialSpec("no_rnorm_lowstd", 1e-4, 256, 4, 512, 0.002, 0.75, 0.02, False, 0.15, -2.2, -3.2, -0.8),
     ]
     if task == "area_coverage":
         return [
@@ -104,8 +127,8 @@ def direct_trial_specs(task: str, stage: str, debug_rollout_steps: int) -> list[
         ]
     if task == "belief_search":
         return [
-            DirectTrialSpec("belief_md020_ent", 2e-4, base_rollout, 4, 256, 0.02, 0.50, 0.03, True, 0.20, -0.8, -1.8, 0.1),
-            DirectTrialSpec("belief_md025_explore", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.02, 0.50, 0.05, True, 0.25, -0.5, -2.0, 0.5),
+            DirectTrialSpec("belief_md018_std16", 2e-4, base_rollout, 4, 256, 0.006, 0.50, 0.03, True, 0.18, -1.6, -3.0, -0.5),
+            DirectTrialSpec("belief_md020_std14", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.006, 0.50, 0.05, True, 0.20, -1.4, -3.0, -0.5),
             common_trials[1],
             common_trials[4],
             common_trials[5],
@@ -113,9 +136,9 @@ def direct_trial_specs(task: str, stage: str, debug_rollout_steps: int) -> list[
         ]
     if task == "priority_inspection":
         return [
-            DirectTrialSpec("poi_md020_vf", 2e-4, base_rollout, 4, 256, 0.01, 0.75, 0.03, True, 0.20, -0.8, -1.8, 0.1),
+            DirectTrialSpec("poi_md016_std20", 2e-4, base_rollout, 4, 256, 0.002, 0.75, 0.03, True, 0.16, -2.0, -3.2, -0.8),
+            DirectTrialSpec("poi_md018_std21", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.002, 0.75, 0.03, True, 0.18, -2.1, -3.2, -0.8),
             common_trials[1],
-            common_trials[3],
             common_trials[4],
             common_trials[5],
             common_trials[6],
@@ -124,12 +147,12 @@ def direct_trial_specs(task: str, stage: str, debug_rollout_steps: int) -> list[
         safe_env = {"connectivity_action_filter": True}
         easy_comm = {"connectivity_action_filter": True, "comm_radius": 0.42, "base_comm_radius": 0.50}
         return [
-            DirectTrialSpec("conn_md010_safe", 1e-4, base_rollout, 4, 256, 0.01, 0.75, 0.02, True, 0.10, -1.5, -3.0, 0.0, safe_env),
-            DirectTrialSpec("conn_md015", 1e-4, 128 if stage == "debug" else 256, 4, 256, 0.02, 0.75, 0.02, True, 0.15, -1.0, -2.0, 0.0, safe_env),
-            DirectTrialSpec("conn_md020_ent", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.02, 0.75, 0.03, True, 0.20, -0.8, -1.8, 0.1, safe_env),
-            DirectTrialSpec("conn_easy_comm", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.02, 0.75, 0.03, True, 0.20, -0.8, -1.8, 0.1, easy_comm),
-            DirectTrialSpec("conn_lowent", 3e-4, 128 if stage == "debug" else 256, 6, 256, 0.003, 0.75, 0.05, True, 0.15, -1.0, -2.0, 0.0, safe_env),
-            DirectTrialSpec("conn_no_rnorm", 1e-4, 256, 4, 512, 0.01, 0.75, 0.02, False, 0.15, -1.0, -2.0, 0.0, safe_env),
+            DirectTrialSpec("conn_md012_std22", 1e-4, base_rollout, 4, 256, 0.002, 0.75, 0.02, True, 0.12, -2.2, -3.2, -0.9, safe_env),
+            DirectTrialSpec("conn_md015_std22", 1e-4, 128 if stage == "debug" else 256, 4, 256, 0.002, 0.75, 0.02, True, 0.15, -2.2, -3.2, -0.9, safe_env),
+            DirectTrialSpec("conn_md018_std21", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.002, 0.75, 0.03, True, 0.18, -2.1, -3.2, -0.8, safe_env),
+            DirectTrialSpec("conn_easy_comm", 2e-4, 128 if stage == "debug" else 256, 4, 256, 0.002, 0.75, 0.03, True, 0.18, -2.1, -3.2, -0.8, easy_comm),
+            DirectTrialSpec("conn_lr3e-4_lowstd", 3e-4, 128 if stage == "debug" else 256, 6, 256, 0.002, 0.75, 0.05, True, 0.15, -2.2, -3.2, -0.9, safe_env),
+            DirectTrialSpec("conn_no_rnorm", 1e-4, 256, 4, 512, 0.002, 0.75, 0.02, False, 0.15, -2.2, -3.2, -0.9, safe_env),
         ]
     return common_trials
 
@@ -164,13 +187,9 @@ def apply_direct_trial(train_config: dict, env_config: dict, task: str, spec: Di
 
 
 def direct_run_name(task: str, train_config: dict, env_config: dict, spec: DirectTrialSpec, stage: str) -> str:
-    return common.safe_name(
-        f"{task}__direct"
-        f"__N{env_config['num_agents']}__E{train_config['num_envs']}"
-        f"__rs{train_config['rollout_steps']}__lr{common.format_lr(train_config['learning_rate'])}"
-        f"__md{_fmt_delta(train_config['max_delta'])}"
-        f"__seed{env_config.get('seed', 0)}__{spec.tag if stage == 'debug' else 'train_' + spec.tag}"
-    )
+    kind = "smoke" if stage == "debug" else "formal"
+    updates = None if stage == "debug" else int(train_config["total_updates"])
+    return short_run_name(kind, float(train_config["max_delta"]), int(env_config.get("seed", 0)), updates=updates, tag=spec.tag)
 
 
 def next_suggestion(task: str, records: list[dict], status_reason: str) -> str:
@@ -205,8 +224,10 @@ def main() -> None:
     parser.add_argument("--tasks", nargs="+", default=TASKS)
     parser.add_argument("--config", default="configs/policy/mappo_waypoint.yaml")
     parser.add_argument("--env-config", default="configs/env/waypoint_missions.yaml")
-    parser.add_argument("--debug-output-root", default="outputs/debug/mappo_direct_specialists")
-    parser.add_argument("--training-output-root", default="outputs/training/mappo_direct_specialists")
+    parser.add_argument("--specialist-config-dir", default=None)
+    parser.add_argument("--debug-output-root", default="outputs/debug")
+    parser.add_argument("--training-output-root", default="outputs/training")
+    parser.add_argument("--phase-name", default="phase_change_on_direct_mappo_specialists")
     parser.add_argument("--timestamp", default=None)
     parser.add_argument("--num-agents", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
@@ -228,10 +249,12 @@ def main() -> None:
     parser.add_argument("--record-interval", type=int, default=1)
     parser.add_argument("--env-backend", choices=["sync", "thread"], default="sync")
     parser.add_argument("--env-workers", type=int, default=None)
+    parser.add_argument("--tensorboard", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trial-tags", nargs="*", default=None)
     args = parser.parse_args()
+    use_specialist_config_dir(args.specialist_config_dir)
 
     common.SPECIALIST_CONFIGS = DIRECT_SPECIALIST_CONFIGS
     common.apply_trial = apply_direct_trial
@@ -239,7 +262,10 @@ def main() -> None:
     common.trial_specs = direct_trial_specs
     common.next_suggestion = next_suggestion
 
-    timestamp = args.timestamp or datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    timestamp = args.timestamp or minute_timestamp()
+    args.debug_output_root = str(resolve_output_root(args.debug_output_root, args.phase_name, timestamp, ROOT))
+    args.training_output_root = str(resolve_output_root(args.training_output_root, args.phase_name, timestamp, ROOT))
+    args.flat_phase_layout = True
     stages = ["debug", "training"] if args.stage == "both" else [args.stage]
     global_summaries = []
     for task in [str(item) for item in args.tasks]:
@@ -267,13 +293,13 @@ def main() -> None:
         root = Path(args.debug_output_root if args.stage != "training" else args.training_output_root)
         if not root.is_absolute():
             root = ROOT / root
-        task_summary = common.write_task_report(root / timestamp / task, task, task_runs)
+        task_summary = common.write_task_report(root / task, task, task_runs)
         global_summaries.append(task_summary)
 
     global_root = Path(args.debug_output_root if args.stage != "training" else args.training_output_root)
     if not global_root.is_absolute():
         global_root = ROOT / global_root
-    global_root = global_root / timestamp
+    global_root = global_root
     global_root.mkdir(parents=True, exist_ok=True)
     (global_root / "tuning_summary.json").write_text(json.dumps(global_summaries, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     lines = ["# Direct MAPPO Specialist Tuning Summary", ""]

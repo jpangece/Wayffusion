@@ -17,6 +17,8 @@ from algorithms.mappo_waypoint import MAPPOWaypointTrainer, write_metrics_csv
 from envs.waypoint_marl_env import WaypointMultiUAVEnv
 from policies import build_policy
 from utils.waypoint_vector_env import SyncWaypointEnvBatch, ThreadWaypointEnvBatch, make_waypoint_env_batch
+from utils.output_layout import minute_timestamp, resolve_output_root, safe_slug
+from utils.tensorboard_metrics import should_log_tensorboard_metric
 
 
 def load_yaml(path: str | Path) -> dict:
@@ -35,7 +37,7 @@ def deep_update(base: dict, override: dict) -> dict:
 
 
 def safe_name(value: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value)).strip("_") or "run"
+    return safe_slug(value)
 
 
 def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
@@ -56,15 +58,15 @@ def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
         train_config["max_delta"] = env_config["max_waypoint_distance"]
 
 
-def make_output_dir(timestamp: str | None, run_name: str, output_dir: str | None = None) -> Path:
+def make_output_dir(timestamp: str | None, run_name: str, output_dir: str | None = None, phase_name: str = "phase_change_on_mappo_waypoint") -> Path:
     if output_dir is not None:
         output = Path(output_dir)
         if not output.is_absolute():
             output = ROOT / output
         output.mkdir(parents=True, exist_ok=True)
         return output
-    run_timestamp = timestamp or datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
-    output_dir = ROOT / "outputs" / "training" / "mappo_waypoint" / run_timestamp / safe_name(run_name)
+    run_timestamp = timestamp or minute_timestamp()
+    output_dir = resolve_output_root("outputs/training", phase_name, run_timestamp, ROOT) / safe_name(run_name)
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
@@ -99,12 +101,12 @@ def build_writer(output_dir: Path, enabled: bool):
         return None
 
 
-def log_tensorboard(writer, record: dict) -> None:
+def log_tensorboard(writer, record: dict, mode: str = "core") -> None:
     if writer is None:
         return
     step = int(record.get("update", 0))
     for key, value in record.items():
-        if isinstance(value, (int, float)) and key != "update":
+        if should_log_tensorboard_metric(key, value, mode=mode):
             writer.add_scalar(key, float(value), step)
     writer.flush()
 
@@ -129,6 +131,7 @@ def main() -> None:
     parser.add_argument("--record_interval", type=int, default=1)
     parser.add_argument("--run_name", default=None)
     parser.add_argument("--run_timestamp", default=None)
+    parser.add_argument("--phase-name", default="phase_change_on_mappo_waypoint")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--env_backend", choices=["sync", "thread"], default="sync")
@@ -159,7 +162,7 @@ def main() -> None:
     policy = build_policy(train_config, env_batch.envs[0].global_observation_space, env_batch.envs[0].action_space_n)
     trainer = MAPPOWaypointTrainer(env_batch, policy, train_config)
     run_name = args.run_name or f"{train_config.get('name', 'mappo_waypoint')}_{'_'.join(task_names)}_N{env_config['num_agents']}"
-    output_dir = make_output_dir(args.run_timestamp, run_name, args.output_dir)
+    output_dir = make_output_dir(args.run_timestamp, run_name, args.output_dir, args.phase_name)
     snapshot = output_dir / "snapshot"
     snapshot.mkdir(parents=True, exist_ok=True)
     (snapshot / "train_config.yaml").write_text(yaml.safe_dump(train_config, sort_keys=False), encoding="utf-8")
@@ -172,7 +175,7 @@ def main() -> None:
     def on_record(record: dict) -> None:
         history.append(dict(record))
         write_metrics_csv(history, output_dir / "training_metrics.csv")
-        log_tensorboard(writer, record)
+        log_tensorboard(writer, record, mode=str(train_config.get("tensorboard_metric_mode", "core")))
         update = int(record.get("update", 0))
         if update == 1 or update % max(int(train_config.get("eval_interval", 1)), 1) == 0:
             print(

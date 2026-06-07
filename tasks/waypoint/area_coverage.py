@@ -16,8 +16,8 @@ class AreaCoverageScenario(WaypointScenario):
         return coverage_candidates(world, int(self.cfg("candidate_count", 12)))
 
     def compute_rewards(self, prev_world: MissionWorld, world: MissionWorld, task_state: dict, transition_info: dict) -> dict:
-        prev_ratio = float(prev_world.coverage_grid.mean())
-        coverage_ratio = float(world.coverage_grid.mean())
+        prev_ratio = prev_world.coverage_ratio()
+        coverage_ratio = world.coverage_ratio()
         new_ratio = max(coverage_ratio - prev_ratio, 0.0)
         overlap_ratio = float((world.visit_count_grid > 1.0).mean())
         distance = path_length_delta(transition_info)
@@ -57,5 +57,5 @@ class AreaCoverageScenario(WaypointScenario):
 
     def get_metrics(self, world: MissionWorld, task_state: dict) -> dict:
         del task_state
-        ratio = float(world.coverage_grid.mean())
+        ratio = world.coverage_ratio()
         return {"coverage_ratio": ratio, "success": ratio >= float(self.cfg("success_ratio", 0.55))}

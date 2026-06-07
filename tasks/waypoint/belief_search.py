@@ -12,14 +12,15 @@ class BeliefSearchScenario(WaypointScenario):
         super().__init__("belief_search", 1, config)
 
     def reset(self, rng: np.random.Generator, world: MissionWorld) -> dict:
-        yy, xx = np.mgrid[0 : world.grid_size, 0 : world.grid_size]
-        centers = np.stack([(xx + 0.5) / world.grid_size, (yy + 0.5) / world.grid_size], axis=-1) * world.map_size
-        num_peaks = int(self.cfg("num_peaks", 3))
+        centers = world.grid_cell_centers()
+        num_peaks_range = self.cfg("num_peaks_range", None)
+        num_peaks = int(rng.integers(int(num_peaks_range[0]), int(num_peaks_range[1]) + 1)) if num_peaks_range else int(self.cfg("num_peaks", 3))
         grid = np.zeros((world.grid_size, world.grid_size), dtype=np.float32)
-        for _ in range(num_peaks):
-            center = rng.uniform(0.15, 0.85, size=2).astype(np.float32) * world.map_size
+        peak_centers = world.sample_safe_points(num_peaks, lower_fraction=0.12, upper_fraction=0.88, min_separation=0.08 * world.map_size)
+        for center in peak_centers:
             sigma = float(rng.uniform(0.08, 0.18)) * world.map_size
             grid += np.exp(-0.5 * (np.linalg.norm(centers - center, axis=-1) / max(sigma, 1e-6)) ** 2).astype(np.float32)
+        grid[~world.navigable_grid_mask()] = 0.0
         grid /= max(float(grid.sum()), 1e-8)
         world.probability_grid = grid.copy()
         world.belief_grid = grid.copy()
@@ -27,7 +28,7 @@ class BeliefSearchScenario(WaypointScenario):
         target_idx = int(rng.choice(np.arange(flat.size), p=flat / flat.sum()))
         target = np.asarray([(target_idx % world.grid_size + 0.5), (target_idx // world.grid_size + 0.5)], dtype=np.float32)
         target = target / float(world.grid_size) * world.map_size
-        return {"target_position": target, "detected": False, "time_to_detection": 0}
+        return {"target_position": target, "peak_centers": peak_centers, "detected": False, "time_to_detection": 0}
 
     def generate_candidate_waypoints(self, world: MissionWorld, task_state: dict) -> tuple[np.ndarray, np.ndarray]:
         del task_state

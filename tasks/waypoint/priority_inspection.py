@@ -12,8 +12,15 @@ class PriorityInspectionScenario(WaypointScenario):
         super().__init__("priority_inspection", 2, config)
 
     def reset(self, rng: np.random.Generator, world: MissionWorld) -> dict:
-        count = int(self.cfg("num_pois", 8))
-        pois = rng.uniform(0.12, 0.92, size=(count, 2)).astype(np.float32) * world.map_size
+        count_range = self.cfg("num_pois_range", None)
+        count = int(rng.integers(int(count_range[0]), int(count_range[1]) + 1)) if count_range else int(self.cfg("num_pois", 8))
+        pois = world.sample_safe_points(
+            count,
+            lower_fraction=0.10,
+            upper_fraction=0.92,
+            min_separation=float(self.cfg("poi_min_separation", 0.05)) * world.map_size,
+            avoid_points=world.get_uav_positions(),
+        )
         weights = rng.uniform(0.5, 2.0, size=count).astype(np.float32)
         deadlines = rng.integers(max(8, world.max_steps // 4), world.max_steps + 1, size=count)
         return {"pois": pois, "weights": weights, "deadlines": deadlines, "visited": np.zeros(count, dtype=bool), "repeat_visit_count": 0}
@@ -22,10 +29,10 @@ class PriorityInspectionScenario(WaypointScenario):
         return poi_candidates(world, np.asarray(task_state["pois"], dtype=np.float32), int(self.cfg("candidate_count", 12)))
 
     def compute_rewards(self, prev_world: MissionWorld, world: MissionWorld, task_state: dict, transition_info: dict) -> dict:
-        del prev_world
         pois = np.asarray(task_state["pois"], dtype=np.float32)
         weights = np.asarray(task_state["weights"], dtype=np.float32)
         visited = np.asarray(task_state["visited"], dtype=bool)
+        approach_gain = self._approach_gain(prev_world, world, pois, weights, visited)
         newly = np.zeros(len(pois), dtype=bool)
         repeats = 0
         per_agent = np.zeros(len(world.uavs), dtype=np.float32)
@@ -47,6 +54,7 @@ class PriorityInspectionScenario(WaypointScenario):
         safety = safety_penalty_count(transition_info)
         reward = (
             float(self.cfg("w_visit", 6.0)) * newly_weight
+            + float(self.cfg("w_approach", 0.0)) * approach_gain
             - float(self.cfg("w_repeat", 0.4)) * repeats
             - float(self.cfg("w_late", 1.0)) * late_penalty
             - float(self.cfg("w_distance", 0.15)) * distance
@@ -58,10 +66,27 @@ class PriorityInspectionScenario(WaypointScenario):
         return {
             "team_reward": float(reward),
             "per_agent_rewards": per_agent.astype(np.float32),
-            "components": {"visited_weight": newly_weight, "repeat": -float(repeats), "late": -late_penalty, "distance": -distance, "safety": -safety},
+            "components": {"visited_weight": newly_weight, "approach": approach_gain, "repeat": -float(repeats), "late": -late_penalty, "distance": -distance, "safety": -safety},
             "metrics": metrics,
             "success": bool(metrics["success"]),
         }
+
+    def _approach_gain(self, prev_world: MissionWorld, world: MissionWorld, pois: np.ndarray, weights: np.ndarray, visited: np.ndarray) -> float:
+        if not len(pois) or bool(np.all(visited)):
+            return 0.0
+        scale = float(self.cfg("approach_scale", 0.20))
+        remaining = ~visited
+        points = pois[remaining]
+        point_weights = weights[remaining]
+
+        def proximity(positions: np.ndarray) -> float:
+            dist = np.linalg.norm(positions[:, None, :] - points[None, :, :], axis=-1)
+            score = np.exp(-dist / max(scale, 1e-6)).max(axis=0)
+            return float(np.sum(score * point_weights) / max(float(point_weights.sum()), 1e-8))
+
+        before = proximity(prev_world.get_uav_positions())
+        after = proximity(world.get_uav_positions())
+        return max(after - before, 0.0)
 
     def get_metrics(self, world: MissionWorld, task_state: dict) -> dict:
         del world

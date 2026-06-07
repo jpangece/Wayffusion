@@ -11,12 +11,12 @@ max_altitude: null
 execution_model: mpe_core
 grid_size: 32
 num_agents: 4
-max_steps: 80
+max_steps: 90
 dt_decision: 2.0
 max_speed: 0.04
-max_waypoint_distance: 0.20
+max_waypoint_distance: 0.18
 min_uav_distance: 0.035
-sensor_radius: 0.12
+sensor_radius: 0.09
 comm_radius: 0.36
 base_comm_radius: 0.45
 base_position: [0.10, 0.10]
@@ -27,7 +27,7 @@ render_candidates: true
 action_adapter:
   name: waypoint_velocity_tracker
   meters_per_unit: 100.0
-  max_command_distance: 0.20
+  max_command_distance: 0.18
   max_speed: 0.04
   slowdown_radius: 0.08
   velocity_gain: 4.0
@@ -93,38 +93,40 @@ rendering:
 tasks:
   area_coverage:
     success_ratio: 0.55
-    w_new: 160.0
-    w_overlap: 0.25
-    w_distance: 0.2
+    w_new: 240.0
+    w_overlap: 0.75
+    w_distance: 0.08
     w_safety: 2.0
   belief_search:
     num_peaks: 3
     num_peaks_range: [2, 5]
     success_mass: 0.55
-    detection_bonus: 8.0
-    w_prob: 120.0
-    w_repeat: 1.0
-    w_distance: 0.15
+    detection_bonus: 12.0
+    w_prob: 180.0
+    w_repeat: 2.0
+    w_distance: 0.08
     w_safety: 2.0
   priority_inspection:
     num_pois: 8
     num_pois_range: [6, 10]
     poi_min_separation: 0.05
     success_weighted_completion: 0.70
-    w_visit: 6.0
-    w_repeat: 0.4
-    w_late: 1.0
-    w_distance: 0.15
+    w_visit: 10.0
+    w_approach: 2.0
+    approach_scale: 0.20
+    w_repeat: 1.0
+    w_late: 0.5
+    w_distance: 0.08
     w_safety: 2.0
   connectivity_expansion:
     success_coverage: 0.35
     success_radius: 0.45
     max_violation_rate: 0.10
-    w_expand: 5.0
-    w_coverage: 120.0
-    w_relay: 0.5
-    w_disconnect: 4.0
-    w_distance: 0.15
+    w_expand: 2.0
+    w_coverage: 260.0
+    w_relay: 0.8
+    w_disconnect: 8.0
+    w_distance: 0.08
     w_safety: 2.0
   dynamic_target_escort:
     target_speed: 0.035

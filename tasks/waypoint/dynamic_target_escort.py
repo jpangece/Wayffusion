@@ -12,7 +12,7 @@ class DynamicTargetEscortScenario(WaypointScenario):
         super().__init__("dynamic_target_escort", 4, config)
 
     def reset(self, rng: np.random.Generator, world: MissionWorld) -> dict:
-        target_position = rng.uniform(0.25, 0.75, size=2).astype(np.float32) * world.map_size
+        target_position = world.sample_safe_points(1, lower_fraction=0.20, upper_fraction=0.80)[0]
         angle = float(rng.uniform(0.0, 2.0 * np.pi))
         speed = float(self.cfg("target_speed", 0.035)) * world.map_size
         velocity = np.asarray([np.cos(angle), np.sin(angle)], dtype=np.float32) * speed

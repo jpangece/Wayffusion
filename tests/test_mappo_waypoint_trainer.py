@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import yaml
 
-from algorithms.mappo_waypoint import MAPPOWaypointTrainer
+from algorithms.mappo_waypoint import MAPPOWaypointTrainer, compute_gae_returns
 from policies import build_policy
 from utils.waypoint_vector_env import make_waypoint_env_batch
 
@@ -57,6 +57,9 @@ def _run_collect_update(env_config: dict, train_config: dict):
     assert np.isfinite(stats["mean_control_norm"])
     assert np.isfinite(stats["mean_distance_to_waypoint_m"])
     assert np.isfinite(stats["mean_desired_speed_mps"])
+    assert np.isfinite(stats["delta_clip_fraction"])
+    assert np.isfinite(stats["delta_raw_norm_mean"])
+    assert np.isfinite(stats["clipped_delta_norm_mean"])
     assert 0.0 <= stats["arrival_rate"] <= 1.0
     assert 0.0 <= stats["command_update_rate"] <= 1.0
     assert 0.0 <= stats["command_reject_rate"] <= 1.0
@@ -75,3 +78,44 @@ def test_mappo_waypoint_collect_update_and_truncated_bootstrap_candidate_selecti
 
 def test_mappo_waypoint_collect_update_direct_waypoint():
     _run_collect_update(_base_env_config(), _train_config("configs/policy/direct_waypoint_debug.yaml"))
+
+
+def test_gae_truncated_bootstraps_value_but_does_not_cross_episode():
+    rewards = np.array([[1.0], [2.0]], dtype=np.float32)
+    values = np.array([[0.5], [0.25]], dtype=np.float32)
+    next_values = np.array([[10.0], [4.0]], dtype=np.float32)
+    terminated = np.array([[False], [False]], dtype=bool)
+    done_for_reset = np.array([[True], [False]], dtype=bool)
+    advantages, returns = compute_gae_returns(
+        rewards,
+        values,
+        next_values,
+        terminated,
+        done_for_reset,
+        gamma=0.9,
+        gae_lambda=0.95,
+    )
+
+    expected_t1 = 2.0 + 0.9 * 4.0 - 0.25
+    expected_t0 = 1.0 + 0.9 * 10.0 - 0.5
+    assert np.allclose(advantages[1, 0], expected_t1)
+    assert np.allclose(advantages[0, 0], expected_t0)
+    assert np.allclose(returns, advantages + values)
+
+
+def test_gae_terminated_does_not_bootstrap_value():
+    rewards = np.array([[1.0]], dtype=np.float32)
+    values = np.array([[0.5]], dtype=np.float32)
+    next_values = np.array([[10.0]], dtype=np.float32)
+    terminated = np.array([[True]], dtype=bool)
+    done_for_reset = np.array([[True]], dtype=bool)
+    advantages, _ = compute_gae_returns(
+        rewards,
+        values,
+        next_values,
+        terminated,
+        done_for_reset,
+        gamma=0.9,
+        gae_lambda=0.95,
+    )
+    assert np.allclose(advantages[0, 0], 0.5)

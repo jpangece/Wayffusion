@@ -4933,3 +4933,440 @@ Verification after direct tuner work:
 
 - `/opt/conda/bin/python -m py_compile algorithms/mappo_waypoint.py policies/direct_waypoint_policy.py scripts/debug/tune_direct_mappo_specialists.py scripts/debug/tune_mappo_specialists.py` -> passed.
 - `/opt/conda/bin/python -m pytest tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_env_api.py tests/test_action_adapters.py` -> `8 passed`.
+
+## 2026-06-06 Direct MAPPO full-flow repair: GAE truncation, action clipping diagnostics, and smoke-to-formal launcher
+
+Prompt focus:
+
+- Continue pure Direct MAPPO specialist tuning.
+- Do not return to candidate-selection.
+- Do not add a new adapter or change the env API.
+- Fix MAPPO GAE truncation semantics before running longer specialist experiments.
+- Add Direct Gaussian action clipping diagnostics.
+- Start a full smoke-to-formal tuning flow with SMTP notification support.
+
+Code changes:
+
+- `algorithms/mappo_waypoint.py`
+  - Added `compute_gae_returns(...)`.
+  - Corrected GAE masks:
+    - `terminated` disables value bootstrap;
+    - `truncated` still value-bootstraps;
+    - `done_for_reset` disables recursive GAE propagation across auto-reset episodes.
+  - Added rollout metrics:
+    - `delta_raw_norm_mean`;
+    - `delta_raw_norm_max`;
+    - `delta_mean_norm_mean`;
+    - `clipped_delta_norm_mean`;
+    - `clipped_delta_norm_max`;
+    - `delta_clip_fraction`.
+- `policies/direct_waypoint_policy.py`
+  - Added `_clip_delta(delta)` helper.
+  - `_delta_to_waypoint(...)` now reuses clipping helper.
+  - Direct policy aux now records raw/clipped delta norm and clipping fraction.
+- `configs/policy/direct_specialists/*.yaml`
+  - Lowered Direct Gaussian exploration scale to reduce max-delta clipping:
+    - `area_coverage`: `log_std_init=-1.8`, `log_std_min=-3.0`, `log_std_max=-0.5`, `ent_coef=0.003`, `max_delta=0.20`.
+    - `belief_search`: `log_std_init=-1.0`, `log_std_min=-2.5`, `log_std_max=0.0`, `ent_coef=0.01`, `max_delta=0.20`.
+    - `priority_inspection`: `max_delta=0.18`, `log_std_init=-2.0`, `log_std_min=-3.0`, `log_std_max=-0.5`, `ent_coef=0.003`.
+    - `connectivity_expansion`: `max_delta=0.12`, `log_std_init=-2.0`, `log_std_min=-3.0`, `log_std_max=-0.7`, `ent_coef=0.003`.
+- `scripts/debug/tune_direct_mappo_specialists.py`
+  - Retuned Direct trial ordering so low-std action-scale checks run before higher-exploration trials.
+  - Connectivity easy-comm remains a diagnostic/curriculum trial, not target success.
+- Added `scripts/debug/tune_direct_mappo_specialists_full.py`
+  - Implements full flow:
+    - action-scale smoke under `outputs/debug/mappo_direct_specialists/action_scale_smoke/<timestamp>/...`;
+    - formal long training under `outputs/training/mappo_direct_specialists/formal/<timestamp>/...`;
+    - final report under `outputs/debug/mappo_direct_specialists/full_tuning/<timestamp>/`;
+    - optional `--send-email`.
+  - Smoke pass logic checks runtime health, `action_validity_rate`, `delta_clip_fraction`, action std, and task metric progress.
+  - Formal convergence logic computes per-task status only as:
+    - `CONVERGED`;
+    - `NEED_MORE_TUNING`;
+    - `FAILED_RUNTIME`.
+  - Easy connectivity curriculum is explicitly blocked from triggering target formal training.
+- Added `utils/email_notify.py`
+  - Uses environment variables:
+    - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TO`, optional `SMTP_USE_TLS`.
+  - Missing SMTP env does not fail training; it logs a warning and returns `sent=false`.
+- Tests:
+  - `tests/test_mappo_waypoint_trainer.py`
+    - Added GAE truncation regression tests.
+    - Added action-diagnostic finite checks.
+  - `tests/test_direct_waypoint_policy.py`
+    - Added Direct delta clipping aux checks and forced-clipping test.
+  - Added `tests/test_email_notify.py`.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile algorithms/mappo_waypoint.py policies/direct_waypoint_policy.py scripts/debug/tune_direct_mappo_specialists.py scripts/debug/tune_direct_mappo_specialists_full.py utils/email_notify.py` -> passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_env_api.py tests/test_action_adapters.py tests/test_email_notify.py` -> `13 passed`.
+- `git diff --check` -> passed.
+
+Started full Direct flow:
+
+- Initial run `20260606_direct_full_run01` was stopped intentionally after verifying the first smoke passed.
+  - Reason: script originally ran formal training immediately after each task's smoke, which would let `area_coverage` long training block smoke validation for the other three tasks.
+  - Partial outputs are retained and not overwritten.
+  - Partial formal output started:
+    - `outputs/training/mappo_direct_specialists/formal/20260606_direct_full_run01/area_coverage/area_coverage__direct__formal__upd1500__E8__rs256__md0p20__stdm1p80__seed0/`.
+- `scripts/debug/tune_direct_mappo_specialists_full.py` was fixed to run all task smoke trials first, then formal training for smoke-passing tasks.
+- Active tmux session:
+  - `wayffusion_direct_full_20260606`.
+- Active timestamp:
+  - `20260606_direct_full_run02`.
+- Active command:
+  - `/opt/conda/bin/python scripts/debug/tune_direct_mappo_specialists_full.py --tasks area_coverage belief_search priority_inspection connectivity_expansion --mode full --max-debug-trials 6 --max-formal-trials 3 --formal-updates-belief 1000 --formal-updates-area 1500 --formal-updates-priority 1500 --formal-updates-connectivity 2000 --seeds 0 1 2 --send-email --timestamp 20260606_direct_full_run02 --headless`
+- Active log file:
+  - `outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/tmux_stdout.log`.
+- First smoke from run01:
+  - `area_coverage__direct__smoke__md0p20__stdm1p80__seed0__md020_std18`.
+  - Initial diagnostics at update 14:
+    - `action_validity_rate=0.9736328125`;
+    - `delta_clip_fraction=0.4501953125`;
+    - `delta_raw_norm_mean=0.2052686915267259`;
+    - `clipped_delta_norm_mean=0.15903435996733606`;
+    - `policy_std_mean=0.16543826460838318`;
+    - `log_std_mean=-1.7991573810577393`;
+    - `approx_kl=8.407558198086917e-05`;
+    - `clip_frac=0.0`;
+    - `value_loss=4.991590976715088`.
+
+Interpretation:
+
+- The new low-std Direct action scale is healthier than previous high-std trials:
+  - clipping is significant but not saturated;
+  - PPO KL is no longer stuck at `~1e-7` in the first smoke.
+- Full task convergence is not yet known because the tmux flow is still running.
+- Do not mark any task complete from this run until `outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/summary.json` exists and has been reviewed.
+
+TensorBoard fix for Direct tuning runs:
+
+- Problem:
+  - `scripts/debug/tune_direct_mappo_specialists.py` and `scripts/debug/tune_direct_mappo_specialists_full.py` used the trainer directly and wrote `training_metrics.csv`, but did not create a TensorBoard writer.
+  - Only `scripts/train_mappo_waypoint.py` had built-in live TensorBoard logging before this fix.
+- Code fix:
+  - `scripts/debug/tune_mappo_specialists.py` now creates `run_dir/tensorboard/` by default for future tuning trials.
+  - Added `--tensorboard/--no-tensorboard` to:
+    - `scripts/debug/tune_mappo_specialists.py`;
+    - `scripts/debug/tune_direct_mappo_specialists.py`;
+    - `scripts/debug/tune_direct_mappo_specialists_full.py`.
+- Current-run repair:
+  - Added `scripts/debug/export_csv_to_tensorboard.py`.
+  - Exported existing run02 CSV metrics into `tensorboard_csv/` event files.
+  - Started tmux watcher:
+    - session: `wayffusion_direct_tb_export_20260606`;
+    - log: `outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/csv_to_tensorboard.log`;
+    - refresh interval: 60 seconds.
+- TensorBoard command for current Direct run02:
+  - The local TensorBoard version does not parse a bare comma-separated `--logdir`.
+  - Use `--logdir_spec` instead:
+    - `/opt/conda/bin/tensorboard --logdir_spec smoke:outputs/debug/mappo_direct_specialists/action_scale_smoke/20260606_direct_full_run02,formal:outputs/training/mappo_direct_specialists/formal/20260606_direct_full_run02 --bind_all --port 6007`
+  - Port `6006` was already occupied, so TensorBoard was started on `6007`.
+  - Active TensorBoard tmux session:
+    - `wayffusion_tensorboard_6007`.
+
+## 2026-06-06 Future output layout normalization
+
+User request:
+
+- Future debug outputs should be grouped by one change/phase folder directly under `outputs/debug/`.
+- Folder name should be minute-level timestamp plus a short phase description, e.g. `20260606_1445_phase_change_on_direct_mappo_specialists`.
+- Under the phase folder:
+  - if multiple tasks are run, use `<task>/<short_run_name>/`;
+  - reports/summaries live at the phase root;
+  - avoid deep nests like `mappo_direct_specialists/action_scale_smoke/<timestamp>/<task>/<run>`.
+- Run names should be short.
+- TensorBoard should not create hundreds of scalar cards.
+- Existing running programs are not migrated or interrupted.
+
+Code changes:
+
+- Added `utils/output_layout.py`
+  - `minute_timestamp()`;
+  - `phase_folder(...)`;
+  - `resolve_output_root(...)`;
+  - `short_run_name(...)`.
+- Added `utils/tensorboard_metrics.py`
+  - central `should_log_tensorboard_metric(...)`;
+  - default TensorBoard mode is `core`, while CSV still records full metrics.
+- Updated future output defaults:
+  - `scripts/debug/tune_direct_mappo_specialists_full.py`
+    - debug default: `outputs/debug/<YYYYMMDD_HHMM_phase_change_on_direct_mappo_specialists>/<task>/<short_run>/`;
+    - training default: `outputs/training/<YYYYMMDD_HHMM_phase_change_on_direct_mappo_specialists>/<task>/<short_run>/`;
+    - report/summary are written directly in the debug phase root.
+  - `scripts/debug/tune_direct_mappo_specialists.py`
+    - same phase-root convention for Direct specialist tuning.
+  - `scripts/debug/tune_mappo_specialists.py`
+    - same phase-root convention for generic specialist tuning.
+  - `scripts/train_mappo_waypoint.py`
+    - default training root now uses `outputs/training/<YYYYMMDD_HHMM_phase_change_on_mappo_waypoint>/<run>/` when `--output-dir` is not explicitly set.
+- Short run name examples:
+  - `smoke__md0p20__s0__md020_std18`;
+  - `formal__u1500__md0p20__s0__md020_std18`.
+- TensorBoard cleanup:
+  - `scripts/train_mappo_waypoint.py` now honors `tensorboard_metric_mode: core`.
+  - `scripts/debug/tune_mappo_specialists.py` now filters TensorBoard metrics by `core` by default.
+  - `scripts/debug/export_csv_to_tensorboard.py` now defaults to `--metric-mode core`; use `--metric-mode all` only for full raw scalar export.
+
+Verification:
+
+- Dry-run confirmed new layout:
+  - `outputs/debug/20260606_1445_phase_change_on_direct_mappo_specialists/area_coverage/smoke__md0p20__s0__md020_std18/`.
+  - The dry-run folder was deleted after verification to avoid clutter.
+- `/opt/conda/bin/python -m py_compile utils/output_layout.py utils/tensorboard_metrics.py scripts/train_mappo_waypoint.py scripts/debug/tune_mappo_specialists.py scripts/debug/tune_direct_mappo_specialists.py scripts/debug/tune_direct_mappo_specialists_full.py scripts/debug/export_csv_to_tensorboard.py` -> passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_email_notify.py` -> `8 passed`.
+- `git diff --check` -> passed.
+
+Compatibility note:
+
+- Active run `20260606_direct_full_run02` still uses the old layout because it was already running.
+- Do not move or rewrite that output while training is active.
+- Future runs should use the new phase-folder layout automatically.
+
+## 2026-06-06 Direct MAPPO v2 observation/reward tuning round
+
+User request:
+
+- Current long Direct MAPPO runs should not be stopped.
+- If the current learning curves still look weak, start a new tuning round in parallel.
+- Do not use BC, do not return to candidate-selection, do not add a new adapter, and do not change the MPE base dynamics.
+- Allowed changes:
+  - neural policy architecture;
+  - PPO hyperparameters;
+  - task reward design;
+  - task-specific observation filtering;
+  - UAV sensor radius.
+- User concern:
+  - the policy may receive too many task-field channels for each single-task specialist;
+  - large sensor radius may let UAVs succeed by chance without learning task structure.
+
+Current-run audit before v2:
+
+- Active old run remains running:
+  - tmux session: `wayffusion_direct_full_20260606`;
+  - stdout: `outputs/debug/mappo_direct_specialists/full_tuning/20260606_direct_full_run02/tmux_stdout.log`.
+- Old formal output currently observed only for `area_coverage` seed 0:
+  - `outputs/training/mappo_direct_specialists/formal/20260606_direct_full_run02/area_coverage/area_coverage__direct__formal__upd1500__E8__rs256__md0p20__stdm1p80__seed0/training_metrics.csv`.
+- Area seed 0 is improving but not enough to claim four-task convergence:
+  - best observed `eval_success_rate=1.0`;
+  - best observed `eval_reward=55.77`;
+  - coverage is around `0.56`;
+  - latest observed `delta_clip_fraction≈0.72`, meaning raw Gaussian deltas are still heavily clipped before execution.
+- Conclusion:
+  - old run is not stopped;
+  - four-task Direct MAPPO remains unresolved until all tasks finish multi-seed validation;
+  - v2 tuning is justified because action clipping and task-field over-observation remain likely blockers.
+
+Code/config changes for v2:
+
+- `policies/direct_waypoint_policy.py`
+  - Added optional task-field channel masking:
+    - `task_field_channel_mode`;
+    - `task_field_channel_masks`.
+  - Default task-relevant masks over the 5 field channels `[coverage, visits, belief, risk, target]`:
+    - `area_coverage`: coverage + visits + risk;
+    - `belief_search`: coverage + visits + belief + risk, target masked to avoid hidden-target leakage/interference;
+    - `priority_inspection`: visits + risk + target;
+    - `connectivity_expansion`: coverage + visits + risk;
+    - dynamic target/interception masks are also defined for later use.
+  - Added optional local spatial task-field sampling around each UAV:
+    - `use_spatial_field_context`;
+    - `spatial_context_radii`.
+  - Actor can now receive agent state + global CNN field + task id + global info + local sampled task-field context.
+- `policies/__init__.py`
+  - `build_policy(...)` now forwards the new Direct policy observation controls.
+- `tasks/waypoint/priority_inspection.py`
+  - Added optional dense approach reward:
+    - `w_approach`;
+    - `approach_scale`.
+  - Default `w_approach=0.0`, so the base config remains behavior-compatible.
+- `utils/tensorboard_metrics.py`
+  - Added `minimal` TensorBoard mode.
+  - CSV remains complete; v2 TensorBoard logs only key reward/success/PPO/action/task metrics.
+- `scripts/debug/tune_direct_mappo_specialists.py`
+  - Added `--specialist-config-dir`.
+  - Updated future Direct trial order toward lower `log_std` and smaller `max_delta` first.
+- `scripts/debug/tune_direct_mappo_specialists_full.py`
+  - Added `--specialist-config-dir`.
+  - Supports v2 specialist config directory without changing old running config paths.
+
+New files:
+
+- `configs/env/waypoint_missions_direct_tune_v2.yaml`
+  - Keeps `dynamics_backend.name=mpe_core` and `source=third_party_openai_mpe`.
+  - Keeps the existing waypoint velocity tracker adapter.
+  - Shrinks `sensor_radius` from `0.12` to `0.09`.
+  - Keeps `max_speed=0.04`.
+  - Adjusts reward weights only:
+    - stronger new-coverage / belief-mass / POI-visit / connectivity-coverage signal;
+    - lower distance penalties;
+    - denser priority-inspection approach shaping.
+- `configs/policy/direct_specialists_v2/direct_area_coverage_v2.yaml`
+- `configs/policy/direct_specialists_v2/direct_belief_search_v2.yaml`
+- `configs/policy/direct_specialists_v2/direct_priority_inspection_v2.yaml`
+- `configs/policy/direct_specialists_v2/direct_connectivity_expansion_v2.yaml`
+  - All are `policy_class: direct_waypoint`.
+  - All use `task_field_channel_mode: task_relevant`.
+  - All use `use_spatial_field_context: true`.
+  - All use `tensorboard_metric_mode: minimal`.
+- `docs/direct_mappo_specialist_v2_debug_zh.md`
+  - Human-readable explanation of the v2 debugging rationale and monitoring commands.
+
+Testing:
+
+- `/opt/conda/bin/python -m py_compile policies/direct_waypoint_policy.py policies/__init__.py scripts/debug/tune_direct_mappo_specialists.py scripts/debug/tune_direct_mappo_specialists_full.py tasks/waypoint/priority_inspection.py utils/tensorboard_metrics.py` -> passed.
+- YAML parse check for v2 env and v2 specialist configs -> passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_direct_waypoint_policy.py tests/test_mappo_waypoint_trainer.py tests/test_waypoint_env_api.py tests/test_action_adapters.py tests/test_email_notify.py` -> `14 passed`.
+- Tiny v2 script smoke:
+  - command used `--tasks belief_search`, `--max-debug-trials 1`, one update, no TensorBoard;
+  - report path: `outputs/debug/20260606_smoke_check_phase_change_on_direct_v2_smoke_check/report.md`;
+  - purpose was script/config/layout validation only, not a performance result.
+
+New v2 run launched:
+
+- tmux session:
+  - `wayffusion_direct_v2_20260606_1611`.
+- Debug phase:
+  - `outputs/debug/20260606_1611_phase_change_on_direct_obs_reward_v2`.
+- Formal/training phase:
+  - `outputs/training/20260606_1611_phase_change_on_direct_obs_reward_v2`.
+- Command highlights:
+  - env config: `configs/env/waypoint_missions_direct_tune_v2.yaml`;
+  - specialist config dir: `configs/policy/direct_specialists_v2`;
+  - tasks: area, belief, priority, connectivity;
+  - max debug trials per task: `4`;
+  - formal seeds: `0 1 2`;
+  - formal updates:
+    - belief: `1000`;
+    - area: `1200`;
+    - priority: `1200`;
+    - connectivity: `1600`;
+  - `--send-email` enabled through `.secrets/wayffusion_mail.env`.
+- TensorBoard for v2:
+  - tmux session: `wayffusion_tensorboard_v2_6008`;
+  - command uses `--logdir_spec debug:outputs/debug/20260606_1611_phase_change_on_direct_obs_reward_v2,formal:outputs/training/20260606_1611_phase_change_on_direct_obs_reward_v2`;
+  - port: `6008`.
+
+Early v2 observation:
+
+- First `area_coverage` smoke run:
+  - path: `outputs/debug/20260606_1611_phase_change_on_direct_obs_reward_v2/area_coverage/smoke__md0p18__s0__md018_std21/training_metrics.csv`;
+  - after 20 updates:
+    - `eval_success_rate=0.0`;
+    - `eval_area_coverage_coverage_ratio_mean≈0.435`;
+    - `eval_reward≈-47.1`;
+    - `action_validity_rate≈0.953`;
+    - `eval_action_validity_rate≈0.998`;
+    - `delta_clip_fraction≈0.398`;
+    - `approx_kl≈4.9e-7`;
+    - `clip_frac=0.0`.
+- Interpretation:
+  - action clipping is much healthier than old formal seed0 (`≈0.72`);
+  - task success is not solved yet;
+  - smoke has positive coverage progress and will be allowed into formal later by the script;
+  - PPO update strength still looks weak, so formal/next debug should watch `approx_kl`, `advantage_std`, `eval_task_metric`, and not only `success_rate`.
+
+Additional v2 smoke observations after launch:
+
+- `belief_search` first v2 smoke:
+  - path: `outputs/debug/20260606_1611_phase_change_on_direct_obs_reward_v2/belief_search/smoke__md0p18__s0__belief_md018_std16/training_metrics.csv`;
+  - after 20 updates:
+    - `eval_success_rate=1.0`;
+    - `eval_belief_search_searched_probability_mass_mean≈0.446`;
+    - `eval_reward≈14.69` on last eval, best observed return `≈61.77`;
+    - `action_validity_rate≈0.971`;
+    - `delta_clip_fraction≈0.680`;
+    - `approx_kl≈4.2e-7`;
+    - `clip_frac=0.0`.
+  - Interpretation:
+    - task signal is present;
+    - action clipping remains too high for belief, so next belief trial may need lower `log_std` if formal curves are unstable.
+- `priority_inspection` first v2 smoke, early at update 9:
+  - path: `outputs/debug/20260606_1611_phase_change_on_direct_obs_reward_v2/priority_inspection/smoke__md0p16__s0__poi_md016_std20/training_metrics.csv`;
+  - current observed:
+    - `eval_priority_inspection_weighted_poi_completion_mean≈0.414`;
+    - `eval_success_rate=0.0`;
+    - `action_validity_rate≈0.939`;
+    - `delta_clip_fraction≈0.509`;
+    - `approx_kl≈1.9e-5`;
+    - `clip_frac=0.0`.
+  - Interpretation:
+    - dense approach/visit reward is producing some progress;
+    - action validity/clipping still need watching before calling it formal-ready.
+
+## 2026-06-07: waypoint episode domain randomization
+
+User request:
+
+- Check whether the training environment is static.
+- Add variation in obstacles/no-fly zones, task targets, and UAV spawn positions.
+
+Audit:
+
+- The old environment already randomized UAV spawns, belief peaks/target, POIs/weights/deadlines, and escort target start/direction.
+- The no-fly layout and base were fixed, spawn variation was narrow, and task targets were not uniformly guaranteed to avoid no-fly regions.
+
+Changes:
+
+- Added `envs/waypoint/randomization.py`.
+  - Deterministic-per-seed episode layouts.
+  - Samples 1-3 circular/rectangular no-fly zones.
+  - Zones avoid the base and each other.
+- Updated `WaypointMultiUAVEnv.reset`.
+  - Builds an episode config on each reset.
+  - Keeps the final-waypoint API, MPE core, adapter, and MAPPO structure unchanged.
+  - Reports `episode_seed`, `domain_randomization`, `domain_randomization_enabled`, and `no_fly_zone_count`.
+- Updated `MissionWorld`.
+  - Configurable spawn radius/distribution.
+  - Safe-point sampling for task targets.
+  - Navigable-grid coverage ratio.
+- Updated tasks:
+  - belief peak count varies from 2-5; peaks, probability mass, and hidden target avoid no-fly cells;
+  - priority POI count varies from 6-10; POIs avoid no-fly cells and have minimum separation;
+  - escort target starts in safe space;
+  - area/connectivity coverage metrics use navigable cells as denominator;
+  - rectangular no-fly zones appear in the risk field.
+- Updated:
+  - `configs/env/waypoint_missions.yaml`;
+  - `configs/env/waypoint_missions_direct_tune_v2.yaml`.
+- Logging:
+  - training CSV: `mean_no_fly_zone_count`, `domain_randomization_enabled`;
+  - eval CSV: `no_fly_zone_count`, `domain_randomization_enabled`.
+- Added:
+  - `tests/test_waypoint_domain_randomization.py`;
+  - `docs/waypoint_domain_randomization_zh.md`.
+
+Verification:
+
+- Compile check passed.
+- Environment/randomization/scenario/reward tests: `14 passed`.
+- Direct policy/MAPPO/adapter regression tests: `11 passed`.
+- Manual seeds `101,102,103` produced distinct valid layouts, spawns, and belief targets.
+
+Running-process note:
+
+- Existing long-running old and v2 training processes were not stopped.
+- They loaded their configs/code before this change and remain pre-randomization baselines.
+- Newly launched runs use domain randomization by default.
+
+Smoke validation:
+
+- Output:
+  - `outputs/debug/20260607_0215_phase_change_on_domain_randomization/area_coverage/smoke__s0`.
+- One Direct MAPPO update, 2 envs, rollout 8, one eval episode completed.
+- Key fields:
+  - `mean_team_reward=1.0037`;
+  - `eval_reward=10.5292`;
+  - `mean_no_fly_zone_count=2.5`;
+  - `domain_randomization_enabled=1.0`;
+  - `action_validity_rate=0.9583`;
+  - `no_fly_violation_count=0`.
+- Eval CSV:
+  - `no_fly_zone_count=1`;
+  - `domain_randomization_enabled=1`;
+  - `coverage_ratio=0.1444`;
+  - `success_rate=0`, expected for a one-update smoke.
+- Full relevant regression suite after logging changes:
+  - `25 passed`.
+- `git diff --check` passed.

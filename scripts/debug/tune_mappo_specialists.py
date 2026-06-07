@@ -22,6 +22,8 @@ if str(ROOT) not in sys.path:
 from algorithms.mappo_waypoint import MAPPOWaypointTrainer, write_metrics_csv
 from policies import build_policy
 from utils.waypoint_vector_env import make_waypoint_env_batch
+from utils.output_layout import minute_timestamp, resolve_output_root, safe_slug
+from utils.tensorboard_metrics import should_log_tensorboard_metric
 
 
 TASKS = [
@@ -83,7 +85,7 @@ def deep_update(base: dict, override: dict) -> dict:
 
 
 def safe_name(value: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(value)).strip("_") or "run"
+    return safe_slug(value)
 
 
 def format_lr(value: float) -> str:
@@ -369,6 +371,29 @@ def write_trial_snapshot(output_dir: Path, train_config: dict, env_config: dict,
     )
 
 
+def build_tensorboard_writer(output_dir: Path, enabled: bool = True):
+    if not enabled:
+        return None
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+
+        return SummaryWriter(str(output_dir / "tensorboard"))
+    except Exception as exc:
+        print(f"[specialist-tune] TensorBoard disabled: {exc}", flush=True)
+        return None
+
+
+def log_tensorboard_record(writer, record: dict) -> None:
+    if writer is None:
+        return
+    step = int(finite_float(record.get("update", 0), 0.0))
+    mode = str(getattr(writer, "_wayffusion_metric_mode", "core"))
+    for key, value in record.items():
+        if should_log_tensorboard_metric(key, value, mode=mode):
+            writer.add_scalar(str(key), float(value), step)
+    writer.flush()
+
+
 def run_trial(task: str, stage: str, spec: TrialSpec, args: argparse.Namespace, timestamp: str) -> dict[str, Any]:
     base_env_config = load_yaml(args.env_config)
     config_path = SPECIALIST_CONFIGS.get(task, args.config)
@@ -378,7 +403,8 @@ def run_trial(task: str, stage: str, spec: TrialSpec, args: argparse.Namespace, 
     root = Path(args.debug_output_root if stage == "debug" else args.training_output_root)
     if not root.is_absolute():
         root = ROOT / root
-    output_dir = root / timestamp / task / name
+    base_dir = root if bool(getattr(args, "flat_phase_layout", False)) else root / timestamp
+    output_dir = base_dir / task / name
     output_dir.mkdir(parents=True, exist_ok=True)
     write_trial_snapshot(output_dir, train_config, env_config, spec, args)
     record_eval_episodes = int(args.debug_record_eval_episodes if stage == "debug" else args.training_record_eval_episodes)
@@ -396,11 +422,15 @@ def run_trial(task: str, stage: str, spec: TrialSpec, args: argparse.Namespace, 
         env_batch = make_waypoint_env_batch(env_config, int(train_config["num_envs"]), backend=args.env_backend, max_workers=args.env_workers)
         policy = build_policy(train_config, env_batch.envs[0].global_observation_space, env_batch.envs[0].action_space_n)
         trainer = MAPPOWaypointTrainer(env_batch, policy, train_config)
+        writer = build_tensorboard_writer(output_dir, enabled=bool(getattr(args, "tensorboard", True)))
+        if writer is not None:
+            writer._wayffusion_metric_mode = str(train_config.get("tensorboard_metric_mode", "core"))
         history: list[dict] = []
 
         def on_record(record: dict) -> None:
             history.append(dict(record))
             write_metrics_csv(history, output_dir / "training_metrics.csv")
+            log_tensorboard_record(writer, record)
 
         final_history = trainer.train(
             output_dir,
@@ -414,6 +444,8 @@ def run_trial(task: str, stage: str, spec: TrialSpec, args: argparse.Namespace, 
             record_interval=int(args.record_interval),
             log_callback=on_record,
         )
+        if writer is not None:
+            writer.close()
         env_batch.close()
         if not history:
             history = final_history
@@ -501,8 +533,9 @@ def main() -> None:
     parser.add_argument("--tasks", nargs="+", default=TASKS)
     parser.add_argument("--config", default="configs/policy/mappo_waypoint.yaml")
     parser.add_argument("--env-config", default="configs/env/waypoint_missions.yaml")
-    parser.add_argument("--debug-output-root", default="outputs/debug/mappo_specialists")
-    parser.add_argument("--training-output-root", default="outputs/training/mappo_specialists")
+    parser.add_argument("--debug-output-root", default="outputs/debug")
+    parser.add_argument("--training-output-root", default="outputs/training")
+    parser.add_argument("--phase-name", default="phase_change_on_mappo_specialists")
     parser.add_argument("--timestamp", default=None)
     parser.add_argument("--num-agents", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
@@ -524,12 +557,16 @@ def main() -> None:
     parser.add_argument("--record-interval", type=int, default=1)
     parser.add_argument("--env-backend", choices=["sync", "thread"], default="sync")
     parser.add_argument("--env-workers", type=int, default=None)
+    parser.add_argument("--tensorboard", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--trial-tags", nargs="*", default=None, help="Optional subset of trial tags to run after task-specific ordering.")
     args = parser.parse_args()
 
-    timestamp = args.timestamp or datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    timestamp = args.timestamp or minute_timestamp()
+    args.debug_output_root = str(resolve_output_root(args.debug_output_root, args.phase_name, timestamp, ROOT))
+    args.training_output_root = str(resolve_output_root(args.training_output_root, args.phase_name, timestamp, ROOT))
+    args.flat_phase_layout = True
     stages = ["debug", "training"] if args.stage == "both" else [args.stage]
     global_summaries = []
     for task in [str(item) for item in args.tasks]:
@@ -564,13 +601,13 @@ def main() -> None:
         root = Path(args.debug_output_root if args.stage != "training" else args.training_output_root)
         if not root.is_absolute():
             root = ROOT / root
-        task_summary = write_task_report(root / timestamp / task, task, task_runs)
+        task_summary = write_task_report(root / task, task, task_runs)
         global_summaries.append(task_summary)
 
     global_root = Path(args.debug_output_root if args.stage != "training" else args.training_output_root)
     if not global_root.is_absolute():
         global_root = ROOT / global_root
-    global_root = global_root / timestamp
+    global_root = global_root
     global_root.mkdir(parents=True, exist_ok=True)
     (global_root / "tuning_summary.json").write_text(json.dumps(global_summaries, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     lines = ["# MAPPO Specialist Tuning Summary", ""]

@@ -40,6 +40,7 @@ class MissionWorld:
     max_steps: int = 100
     no_fly_zones: list[dict[str, Any]] = field(default_factory=list)
     geofence: tuple[float, float, float, float] | None = None
+    spawn_randomization: dict[str, Any] = field(default_factory=dict)
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
 
     uavs: list[UAVState] = field(default_factory=list)
@@ -81,6 +82,7 @@ class MissionWorld:
             max_steps=int(config.get("max_steps", 100)),
             no_fly_zones=list(config.get("no_fly_zones", [])),
             geofence=tuple(config.get("geofence", [0.0, config.get("map_size", 1.0), 0.0, config.get("map_size", 1.0)])),
+            spawn_randomization=dict(config.get("spawn_randomization", {})),
             rng=rng or np.random.default_rng(int(config.get("seed", 0))),
         )
 
@@ -89,7 +91,9 @@ class MissionWorld:
         self.step_count = 0
         self.coverage_grid.fill(0.0)
         self.visit_count_grid.fill(0.0)
-        self.probability_grid.fill(1.0 / float(self.grid_size * self.grid_size))
+        safe_mask = self.navigable_grid_mask()
+        self.probability_grid.fill(0.0)
+        self.probability_grid[safe_mask] = 1.0 / max(float(safe_mask.sum()), 1.0)
         self.belief_grid = self.probability_grid.copy()
         self.uavs = []
         if initial_positions is None:
@@ -112,26 +116,47 @@ class MissionWorld:
         self.accumulate_sensor_footprints()
 
     def _sample_safe_initial_positions(self, num_agents: int) -> np.ndarray:
+        cfg = self.spawn_randomization
+        min_radius = float(cfg.get("min_radius", 0.02)) * self.map_size
+        max_radius = float(cfg.get("max_radius", 0.22)) * self.map_size
+        min_dist_scale = float(cfg.get("min_separation_scale", 1.8))
+        min_dist = max(float(self.min_uav_distance) * min_dist_scale, float(self.radius) * 2.5)
         positions: list[np.ndarray] = []
-        min_dist = max(float(self.min_uav_distance) * 1.8, float(self.radius) * 2.5)
         for idx in range(num_agents):
             accepted = None
-            for _ in range(200):
-                radius = self.rng.uniform(0.02 * self.map_size, 0.22 * self.map_size)
+            for _ in range(int(cfg.get("max_attempts", 300))):
+                radius = self.rng.uniform(min_radius, max_radius)
                 angle = self.rng.uniform(0.0, 2.0 * np.pi)
                 candidate = self.base_position + radius * np.asarray([np.cos(angle), np.sin(angle)], dtype=np.float32)
-                candidate = self.project_to_geofence(candidate[None, :])[0]
-                if not self.check_no_fly(candidate[None, :])[0]:
+                if not self.check_geofence(candidate[None, :])[0] or not self.check_no_fly(candidate[None, :])[0]:
                     continue
                 if all(np.linalg.norm(candidate - prev) >= min_dist for prev in positions):
                     accepted = candidate.astype(np.float32)
                     break
             if accepted is None:
-                angle = 2.0 * np.pi * idx / max(num_agents, 1)
-                radius = min_dist * (1.0 + idx // 8)
-                accepted = self.project_to_geofence((self.base_position + radius * np.asarray([np.cos(angle), np.sin(angle)], dtype=np.float32))[None, :])[0]
-            positions.append(accepted.astype(np.float32))
+                accepted = self._fallback_spawn_position(idx, num_agents, positions, min_dist)
+            positions.append(accepted)
         return np.asarray(positions, dtype=np.float32)
+
+    def _fallback_spawn_position(
+        self,
+        index: int,
+        num_agents: int,
+        positions: list[np.ndarray],
+        min_distance: float,
+    ) -> np.ndarray:
+        for ring in range(1, 12):
+            radius = min_distance * ring
+            for offset in range(max(num_agents, 8)):
+                angle = 2.0 * np.pi * (index + offset / max(num_agents, 1)) / max(num_agents, 1)
+                candidate = self.base_position + radius * np.asarray([np.cos(angle), np.sin(angle)], dtype=np.float32)
+                if not self.check_geofence(candidate[None, :])[0] or not self.check_no_fly(candidate[None, :])[0]:
+                    continue
+                if all(np.linalg.norm(candidate - prev) >= min_distance for prev in positions):
+                    return candidate.astype(np.float32)
+        if self.check_geofence(self.base_position[None, :])[0] and self.check_no_fly(self.base_position[None, :])[0]:
+            return self.base_position.copy()
+        return self.sample_safe_points(1)[0]
 
     def clone(self) -> "MissionWorld":
         new = MissionWorld(
@@ -153,6 +178,7 @@ class MissionWorld:
             max_steps=self.max_steps,
             no_fly_zones=[dict(zone) for zone in self.no_fly_zones],
             geofence=self.geofence,
+            spawn_randomization=dict(self.spawn_randomization),
             rng=self.rng,
         )
         new.uavs = [uav.snapshot() for uav in self.uavs]
@@ -207,6 +233,70 @@ class MissionWorld:
         indices = np.asarray(indices, dtype=np.float32)
         return (indices[..., ::-1] + 0.5) / float(self.grid_size) * self.map_size
 
+    def grid_cell_centers(self) -> np.ndarray:
+        yy, xx = np.mgrid[0 : self.grid_size, 0 : self.grid_size]
+        return np.stack(
+            [(xx + 0.5) / self.grid_size, (yy + 0.5) / self.grid_size],
+            axis=-1,
+        ).astype(np.float32) * self.map_size
+
+    def navigable_grid_mask(self) -> np.ndarray:
+        centers = self.grid_cell_centers()
+        return self.check_geofence(centers) & self.check_no_fly(centers)
+
+    def coverage_ratio(self) -> float:
+        navigable = self.navigable_grid_mask()
+        return float(np.count_nonzero((self.coverage_grid > 0.0) & navigable) / max(float(navigable.sum()), 1.0))
+
+    def sample_safe_points(
+        self,
+        count: int,
+        lower_fraction: float = 0.08,
+        upper_fraction: float = 0.92,
+        min_separation: float = 0.0,
+        avoid_points: np.ndarray | None = None,
+        max_attempts: int = 2000,
+    ) -> np.ndarray:
+        x_min, x_max, y_min, y_max = self.geofence or (0.0, self.map_size, 0.0, self.map_size)
+        low = np.asarray(
+            [
+                x_min + lower_fraction * (x_max - x_min),
+                y_min + lower_fraction * (y_max - y_min),
+            ],
+            dtype=np.float32,
+        )
+        high = np.asarray(
+            [
+                x_min + upper_fraction * (x_max - x_min),
+                y_min + upper_fraction * (y_max - y_min),
+            ],
+            dtype=np.float32,
+        )
+        accepted: list[np.ndarray] = []
+        avoid = [] if avoid_points is None else [point for point in np.asarray(avoid_points, dtype=np.float32)]
+        for _ in range(max_attempts):
+            if len(accepted) >= int(count):
+                break
+            candidate = self.rng.uniform(low, high).astype(np.float32)
+            if not self.check_no_fly(candidate[None, :])[0]:
+                continue
+            if any(np.linalg.norm(candidate - point) < min_separation for point in accepted + avoid):
+                continue
+            accepted.append(candidate)
+        if len(accepted) < int(count):
+            safe_indices = np.argwhere(self.navigable_grid_mask())
+            self.rng.shuffle(safe_indices)
+            for row, col in safe_indices:
+                candidate = self.grid_to_world(np.asarray([[row, col]], dtype=np.float32))[0]
+                if any(np.linalg.norm(candidate - point) < min_separation for point in accepted + avoid):
+                    continue
+                accepted.append(candidate.astype(np.float32))
+                if len(accepted) >= int(count):
+                    break
+        if len(accepted) < int(count):
+            raise RuntimeError(f"Unable to sample {count} safe points; sampled {len(accepted)}")
+        return np.asarray(accepted[:count], dtype=np.float32)
+
     def sensor_mask_for_position(self, position: np.ndarray, radius: float | None = None) -> np.ndarray:
         radius = float(radius if radius is not None else (self.uavs[0].sensor_radius if self.uavs else 0.12))
         yy, xx = np.mgrid[0 : self.grid_size, 0 : self.grid_size]
@@ -216,15 +306,16 @@ class MissionWorld:
 
     def accumulate_sensor_footprints(self) -> dict[str, float]:
         before = self.coverage_grid.copy()
+        navigable = self.navigable_grid_mask()
         for uav in self.uavs:
-            mask = self.sensor_mask_for_position(uav.position, uav.sensor_radius)
+            mask = self.sensor_mask_for_position(uav.position, uav.sensor_radius) & navigable
             self.coverage_grid[mask] = 1.0
             self.visit_count_grid[mask] += 1.0
         new_cells = np.logical_and(self.coverage_grid > 0.0, before <= 0.0)
         repeated_cells = self.visit_count_grid > 1.0
         return {
             "new_coverage_cells": float(new_cells.sum()),
-            "coverage_ratio": float(self.coverage_grid.mean()),
+            "coverage_ratio": self.coverage_ratio(),
             "overlap_ratio": float(repeated_cells.sum() / max(float((self.visit_count_grid > 0.0).sum()), 1.0)),
         }
 
@@ -283,7 +374,7 @@ class MissionWorld:
         return np.asarray(
             [
                 self.step_count / max(self.max_steps, 1),
-                float(self.coverage_grid.mean()),
+                self.coverage_ratio(),
                 float((self.visit_count_grid > 1.0).mean()),
                 float(np.mean(connected)) if len(connected) else 1.0,
                 min_dist / max(self.map_size, 1e-6),
