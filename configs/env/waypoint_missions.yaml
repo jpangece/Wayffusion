@@ -96,7 +96,7 @@ rendering:
   height: 600
 tasks:
   area_coverage:
-    success_ratio: 0.55
+    success_ratio: 0.85
     w_new: 160.0
     w_overlap: 0.25
     w_distance: 0.2
@@ -104,7 +104,7 @@ tasks:
   belief_search:
     num_peaks: 3
     num_peaks_range: [2, 5]
-    success_mass: 0.55
+    success_mass: 0.85
     detection_bonus: 8.0
     w_prob: 120.0
     w_repeat: 1.0
@@ -114,14 +114,14 @@ tasks:
     num_pois: 8
     num_pois_range: [6, 10]
     poi_min_separation: 0.05
-    success_weighted_completion: 0.70
+    success_weighted_completion: 0.80
     w_visit: 6.0
     w_repeat: 0.4
     w_late: 1.0
     w_distance: 0.15
     w_safety: 2.0
   connectivity_expansion:
-    success_coverage: 0.35
+    success_coverage: 0.55
     success_radius: 0.45
     max_violation_rate: 0.10
     w_expand: 5.0

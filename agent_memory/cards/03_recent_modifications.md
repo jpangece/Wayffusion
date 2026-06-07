@@ -5534,3 +5534,71 @@ Verification:
 - One-update no-media CLI smoke passed and produced fixed/random CSV rows plus resolved snapshots.
 - One-update media smoke passed and produced both fixed and random GIFs under `/tmp`.
 - `git diff --check` passed.
+
+## 2026-06-07: phase10 Direct MAPPO specialist protocol validation
+
+Code/config changes:
+
+- Raised formal task success thresholds in `configs/env/waypoint_missions.yaml`:
+  - area coverage ratio: `0.85`;
+  - belief searched mass: `0.85`;
+  - priority weighted completion: `0.80`;
+  - connectivity coverage: `0.55`;
+  - connectivity radius remains `0.45`;
+  - connectivity violation limit remains `0.10`.
+- Added `scripts/debug/phase10_mappo_specialist_protocol_check.py`.
+- Fixed the default `scripts/train_mappo_waypoint.py` run name by inserting the missing underscore between policy name and task names.
+
+Phase10 protocol:
+
+- Tasks:
+  - `belief_search`;
+  - `area_coverage`.
+- Seed `0`, 100 updates, 8 envs, rollout 64.
+- Eval every 20 updates, 6 episodes per fixed/random mode.
+- Training randomization is enabled; evaluation mode is `both`.
+- One fixed GIF and one random GIF are recorded at each evaluation.
+- Phase10 explicitly checks runtime completion, CSV presence, fixed/random fields, training randomization, action validity, action clipping, finite PPO diagnostics, and media output.
+- Short-run success is not a pass criterion.
+
+Executed run:
+
+- Runtime root:
+  `outputs/debug/mappo_direct_specialists/phase10_mappo_specialist_protocol_check/20260607_1117/`.
+- Final protocol status: `READY_FOR_TUNING`.
+- Summary:
+  `outputs/debug/mappo_direct_specialists/phase10_mappo_specialist_protocol_check/20260607_1117/summary.json`.
+- Report:
+  `outputs/debug/mappo_direct_specialists/phase10_mappo_specialist_protocol_check/20260607_1117/report.md`.
+
+Belief-search final protocol metrics:
+
+- fixed success: `0.6667`;
+- random success: `0.5000`;
+- generalization gap: `0.1667`;
+- random searched probability mass: `0.4274`;
+- action validity: `0.9604`;
+- recent mean delta clip fraction: `0.8701`;
+- policy std: `0.3724`;
+- approx KL: `8.17e-09`;
+- clip fraction: `0.0`;
+- 5 fixed and 5 random GIFs.
+
+Area-coverage final protocol metrics:
+
+- fixed/random success: `0.0/0.0`;
+- random/fixed coverage ratio: `0.2550/0.2441`;
+- random/fixed overlap ratio: `0.2440/0.2339`;
+- action validity: `0.9512`;
+- recent mean delta clip fraction: `0.4949`;
+- policy std: `0.1657`;
+- approx KL: `2.34e-08`;
+- clip fraction: `0.0`;
+- 5 fixed and 5 random GIFs.
+
+Interpretation:
+
+- The Direct MAPPO training, randomized rollout, fixed/random evaluation, metrics, checkpoints, TensorBoard, and GIF protocol is operational.
+- This does not establish specialist convergence.
+- Area coverage remains far below the new `0.85` success threshold.
+- Belief performance is better but remains below a robust multi-seed convergence standard.

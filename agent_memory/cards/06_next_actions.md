@@ -1301,3 +1301,18 @@ Direct MAPPO specialist next-run rule:
 - Use `--eval-randomization fixed` or `random` only for focused diagnostics; formal comparisons should retain `both`.
 - Interpret `eval_generalization_gap` as fixed success rate minus randomized success rate. A large positive gap indicates layout overfitting.
 - Existing unprefixed `eval_success_rate` and `eval_reward` refer to randomized evaluation in `both` mode and remain the checkpoint-selection metrics.
+
+## After phase10 protocol validation
+
+- Phase10 status is `READY_FOR_TUNING`, meaning the protocol works, not that either specialist converged.
+- Use the phase10 run as a diagnostic baseline:
+  `outputs/debug/mappo_direct_specialists/phase10_mappo_specialist_protocol_check/20260607_1117/`.
+- Belief search:
+  - investigate high action clipping (`recent mean about 0.87`);
+  - PPO updates remain extremely small (`approx_kl about 8e-09`, `clip_frac=0`);
+  - next tuning should reduce raw action clipping before increasing PPO update strength.
+- Area coverage:
+  - action clipping is healthier (`recent mean about 0.49`);
+  - coverage remains around `0.25` at final eval under the stricter threshold;
+  - next tuning should focus on learning signal/reward and ineffective coverage motion, not the evaluation protocol.
+- Continue to use random training plus `both` evaluation for specialist tuning.
