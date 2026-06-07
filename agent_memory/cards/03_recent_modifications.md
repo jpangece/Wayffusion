@@ -5431,6 +5431,62 @@ Validation:
 - Full-flow report dry-run verified the phase header and complete per-run parameter table.
 - Repository-local dry-run output directories created for validation were removed after inspection.
 
+## 2026-06-07: lightweight episode domain randomization tightened
+
+Scope:
+
+- Modified the existing `configs/env/waypoint_missions.yaml`; no new environment YAML was added.
+- Modified only the existing randomization/world/environment implementation plus tests.
+
+Episode randomization:
+
+- `base_position` is sampled per reset from:
+  - `x_range: [0.06, 0.16]`;
+  - `y_range: [0.06, 0.16]`.
+- UAV spawn positions are sampled around the randomized base:
+  - radius `0.03-0.25`;
+  - minimum separation scale `1.8`;
+  - up to `300` attempts.
+- No-fly layout is intentionally lightweight:
+  - static zones are retained;
+  - each episode adds `0-1` random zone;
+  - circle probability `0.8`;
+  - radius `0.04-0.07`;
+  - rectangle size `0.05-0.10`;
+  - random and static zones are checked against the randomized base.
+- `belief_search` continues to randomize safe belief peaks and a probability-weighted target.
+- `priority_inspection` continues to randomize safe POI positions, weights, and deadlines.
+
+Fixed parameters:
+
+- Domain randomization does not modify:
+  - `sensor_radius`;
+  - `comm_radius`;
+  - `base_comm_radius`;
+  - speed, adapter, dynamics, policy action scale, policy variance, or number of agents.
+- `WaypointMultiUAVEnv.reset()` now explicitly takes sensing and communication radii from the base config rather than the generated episode config.
+
+Safety and metadata:
+
+- World reset rejects a base outside the geofence or inside a no-fly zone.
+- Episode info records:
+  - randomized base;
+  - spawn positions;
+  - no-fly layout;
+  - fixed sensing/communication parameters;
+  - belief peaks/target or POI positions/weights/deadlines for the active task.
+
+Verification:
+
+- Randomization tests: `7 passed`.
+- Environment/scenario/reward tests: `10 passed`.
+- MAPPO/direct/candidate/adapter regression tests: `12 passed`.
+- Manual 20-episode check:
+  - `20` unique randomized bases;
+  - total no-fly count varied between `1` and `2`;
+  - fixed radii remained `(0.12, 0.36, 0.45)`.
+- Python compile and `git diff --check` passed.
+
 ## 2026-06-07: canonical debug/training output contract
 
 - Added a repository-wide mandatory output rule requested by the user.

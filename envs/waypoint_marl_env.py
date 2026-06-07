@@ -192,14 +192,17 @@ class WaypointMultiUAVEnv:
         options = options or {}
         self.episode_config, self.episode_randomization_info = build_episode_config(self.config, self.rng)
         self.world = MissionWorld.from_config(self.episode_config, rng=self.rng)
-        self.world.sensor_radius = float(self.episode_config.get("sensor_radius", 0.12))
-        self.world.comm_radius = float(self.episode_config.get("comm_radius", 0.35))
+        # Domain randomization must not alter sensing, communication, or dynamics scales.
+        self.world.sensor_radius = float(self.config.get("sensor_radius", 0.12))
+        self.world.comm_radius = float(self.config.get("comm_radius", 0.35))
+        self.world.base_comm_radius = float(self.config.get("base_comm_radius", 0.45))
         self.world.reset_common(self.num_agents, rng=self.rng, initial_positions=options.get("initial_positions"))
         self.action_adapter.reset(self.world)
         self.dynamics_backend.reset(self.world)
         task_name = str(options.get("task_name") or self.rng.choice(self.task_names, p=self.task_sampling_probs))
         self.current_scenario = build_waypoint_scenario(task_name, self.episode_config.get("tasks", self.episode_config))
         self.task_state = self.current_scenario.reset(self.rng, self.world)
+        self._record_episode_randomization(task_name)
         self.agents = self.possible_agents.copy()
         self.last_selected_waypoints = None
         self.last_raw_waypoints = None
@@ -210,6 +213,39 @@ class WaypointMultiUAVEnv:
         observations = self._build_agent_observations()
         infos = {agent: self._build_agent_info(agent_idx) for agent_idx, agent in enumerate(self.possible_agents)}
         return observations, infos
+
+    def _record_episode_randomization(self, task_name: str) -> None:
+        metadata = self.episode_randomization_info
+        metadata["task_name"] = task_name
+        metadata["base_position"] = self.world.base_position.astype(float).tolist()
+        metadata["spawn_positions"] = self.world.get_uav_positions().astype(float).tolist()
+        metadata["fixed_parameters"] = {
+            "sensor_radius": float(self.world.sensor_radius),
+            "comm_radius": float(self.world.comm_radius),
+            "base_comm_radius": float(self.world.base_comm_radius),
+        }
+        if task_name == "belief_search":
+            metadata["belief_peak_centers"] = np.asarray(
+                self.task_state.get("peak_centers", []),
+                dtype=np.float32,
+            ).astype(float).tolist()
+            metadata["belief_target_position"] = np.asarray(
+                self.task_state.get("target_position", []),
+                dtype=np.float32,
+            ).astype(float).tolist()
+        elif task_name == "priority_inspection":
+            metadata["poi_positions"] = np.asarray(
+                self.task_state.get("pois", []),
+                dtype=np.float32,
+            ).astype(float).tolist()
+            metadata["poi_weights"] = np.asarray(
+                self.task_state.get("weights", []),
+                dtype=np.float32,
+            ).astype(float).tolist()
+            metadata["poi_deadlines"] = np.asarray(
+                self.task_state.get("deadlines", []),
+                dtype=np.int64,
+            ).astype(int).tolist()
 
     def step(self, actions: dict[str, np.ndarray | int]):
         if self.current_scenario is None:
@@ -456,6 +492,7 @@ class WaypointMultiUAVEnv:
             "episode_seed": self.seed_value,
             "domain_randomization": deepcopy(self.episode_randomization_info),
             "domain_randomization_enabled": bool(self.episode_randomization_info.get("enabled", False)),
+            "episode_base_position": self.world.base_position.copy(),
             "no_fly_zone_count": len(self.world.no_fly_zones),
         }
         if self._exposes_candidates():

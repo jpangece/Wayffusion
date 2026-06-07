@@ -88,6 +88,10 @@ class MissionWorld:
 
     def reset_common(self, num_agents: int, rng: np.random.Generator | None = None, initial_positions=None) -> None:
         self.rng = rng or self.rng
+        if not bool(self.check_geofence(self.base_position[None, :])[0]):
+            raise ValueError(f"Base position {self.base_position.tolist()} lies outside the geofence")
+        if not bool(self.check_no_fly(self.base_position[None, :])[0]):
+            raise ValueError(f"Base position {self.base_position.tolist()} lies inside a no-fly zone")
         self.step_count = 0
         self.coverage_grid.fill(0.0)
         self.visit_count_grid.fill(0.0)

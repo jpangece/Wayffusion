@@ -16,15 +16,25 @@ def build_episode_config(
     enabled = bool(randomization.get("enabled", False))
     metadata: dict[str, Any] = {
         "enabled": enabled,
+        "base_position_randomized": False,
         "no_fly_zones_randomized": False,
     }
     if not enabled:
+        metadata["base_position"] = list(config.get("base_position", [0.1, 0.1]))
         metadata["no_fly_zone_count"] = len(config.get("no_fly_zones", []))
+        metadata["no_fly_zones"] = deepcopy(config.get("no_fly_zones", []))
         return config, metadata
 
     zone_cfg = dict(randomization.get("no_fly_zones", {}))
+    static_zones = list(config.get("no_fly_zones", [])) if bool(zone_cfg.get("include_static", False)) else []
+    base_cfg = dict(randomization.get("base_position", {}))
+    if bool(base_cfg.get("enabled", False)):
+        config["base_position"] = _sample_base_position(config, base_cfg, zone_cfg, rng, static_zones).tolist()
+        metadata["base_position_randomized"] = True
+    metadata["base_position"] = list(config.get("base_position", [0.1, 0.1]))
+
     if bool(zone_cfg.get("enabled", True)):
-        static_zones = list(config.get("no_fly_zones", [])) if bool(zone_cfg.get("include_static", False)) else []
+        _validate_base_clear_of_zones(config, static_zones)
         sampled_zones = _sample_no_fly_zones(config, zone_cfg, rng, static_zones)
         config["no_fly_zones"] = static_zones + sampled_zones
         metadata["no_fly_zones_randomized"] = True
@@ -37,6 +47,43 @@ def build_episode_config(
     metadata["no_fly_zone_count"] = len(config.get("no_fly_zones", []))
     metadata["no_fly_zones"] = deepcopy(config.get("no_fly_zones", []))
     return config, metadata
+
+
+def _sample_base_position(
+    config: dict[str, Any],
+    base_cfg: dict[str, Any],
+    zone_cfg: dict[str, Any],
+    rng: np.random.Generator,
+    static_zones: list[dict[str, Any]],
+) -> np.ndarray:
+    map_size = float(config.get("map_size", 1.0))
+    geofence = tuple(config.get("geofence", [0.0, map_size, 0.0, map_size]))
+    x_min, x_max, y_min, y_max = map(float, geofence)
+    x_range = _ordered_range(base_cfg.get("x_range", [0.06, 0.16]))
+    y_range = _ordered_range(base_cfg.get("y_range", [0.06, 0.16]))
+    x_low = max(x_min, x_range[0] * map_size)
+    x_high = min(x_max, x_range[1] * map_size)
+    y_low = max(y_min, y_range[0] * map_size)
+    y_high = min(y_max, y_range[1] * map_size)
+    if x_high < x_low or y_high < y_low:
+        raise ValueError("domain_randomization.base_position ranges do not intersect the geofence")
+
+    clearance = float(zone_cfg.get("base_clearance", 0.0)) * map_size
+    max_attempts = int(base_cfg.get("max_attempts", 300))
+    for _ in range(max_attempts):
+        candidate = np.asarray(
+            [rng.uniform(x_low, x_high), rng.uniform(y_low, y_high)],
+            dtype=np.float32,
+        )
+        if all(_point_clear_of_zone(candidate, zone, clearance) for zone in static_zones):
+            return candidate
+    raise RuntimeError("Unable to sample a base position clear of static no-fly zones")
+
+
+def _validate_base_clear_of_zones(config: dict[str, Any], zones: list[dict[str, Any]]) -> None:
+    base = np.asarray(config.get("base_position", [0.1, 0.1]), dtype=np.float32)
+    if any(not _point_clear_of_zone(base, zone, 0.0) for zone in zones):
+        raise ValueError("Configured static no-fly zone covers the episode base position")
 
 
 def _sample_no_fly_zones(

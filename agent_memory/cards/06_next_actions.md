@@ -1262,7 +1262,13 @@ Important caveat:
 ## Domain-randomized specialist follow-up
 
 - Keep active pre-randomization runs as baselines; do not stop or relabel them.
-- New runs using the base or v2 env config now randomize spawns, 1-3 no-fly zones, belief targets, and POIs.
+- New runs using `configs/env/waypoint_missions.yaml` now randomize:
+  - base position in the lower-left `0.06-0.16` ranges;
+  - spawns around the episode base;
+  - static plus `0-1` lightweight random no-fly zone;
+  - belief peaks/target;
+  - POI positions/weights/deadlines.
+- The base config intentionally keeps sensor/comm/base communication radii and all motion/policy scales fixed.
 - Next robustness phase should:
   1. use a new minute-level phase directory;
   2. train seeds `0,1,2`;
