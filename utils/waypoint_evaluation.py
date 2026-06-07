@@ -10,6 +10,31 @@ import torch
 from envs.waypoint_marl_env import WaypointMultiUAVEnv
 
 
+EVAL_RANDOMIZATION_MODES = {"inherit", "fixed", "random", "both"}
+TRAIN_RANDOMIZATION_MODES = {"inherit", "fixed", "random"}
+
+
+def resolve_eval_randomization_mode(eval_config: dict | None, cli_mode: str | None = None) -> str:
+    mode = cli_mode if cli_mode is not None else (eval_config or {}).get("randomization_mode", "both")
+    mode = str(mode).lower()
+    if mode not in EVAL_RANDOMIZATION_MODES:
+        raise ValueError(f"Unsupported eval randomization mode: {mode}")
+    return mode
+
+
+def env_config_for_randomization_mode(env_config: dict, mode: str) -> dict:
+    """Return an isolated env config with only the randomization switch overridden."""
+    mode = str(mode).lower()
+    if mode not in TRAIN_RANDOMIZATION_MODES:
+        raise ValueError(
+            f"Randomization mode must be one of {sorted(TRAIN_RANDOMIZATION_MODES)}, got {mode!r}"
+        )
+    config = deepcopy(env_config)
+    if mode != "inherit":
+        config.setdefault("domain_randomization", {})["enabled"] = mode == "random"
+    return config
+
+
 def _to_tensor(obs: dict[str, np.ndarray], device: torch.device) -> dict[str, torch.Tensor]:
     return {key: torch.as_tensor(value, dtype=torch.float32, device=device).unsqueeze(0) for key, value in obs.items()}
 

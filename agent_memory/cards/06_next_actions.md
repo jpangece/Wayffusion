@@ -1293,3 +1293,11 @@ Direct MAPPO specialist next-run rule:
 - never restore parameter-packed run names;
 - full formal single-config runs should be `<runtime>/<task>/sN`;
 - verify summary/report parameter fields before launching long jobs.
+
+## Fixed/random evaluation rule
+
+- New waypoint MAPPO runs should normally leave `configs/eval/waypoint_eval.yaml` at `randomization_mode: both`.
+- Use `--train-randomization random` for robustness training unless an ablation explicitly needs fixed training.
+- Use `--eval-randomization fixed` or `random` only for focused diagnostics; formal comparisons should retain `both`.
+- Interpret `eval_generalization_gap` as fixed success rate minus randomized success rate. A large positive gap indicates layout overfitting.
+- Existing unprefixed `eval_success_rate` and `eval_reward` refer to randomized evaluation in `both` mode and remain the checkpoint-selection metrics.

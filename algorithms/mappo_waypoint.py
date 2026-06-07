@@ -483,13 +483,74 @@ class MAPPOWaypointTrainer:
         record_episodes: int = 0,
         record_format: str = "gif",
         record_fps: int = 8,
+        randomization_mode: str = "inherit",
     ) -> dict:
-        from utils.waypoint_evaluation import evaluate_waypoint_policy_per_task
+        from utils.waypoint_evaluation import (
+            env_config_for_randomization_mode,
+            evaluate_waypoint_policy_per_task,
+            resolve_eval_randomization_mode,
+        )
 
+        mode = resolve_eval_randomization_mode({"randomization_mode": randomization_mode})
+        modes = ["fixed", "random"] if mode == "both" else [mode]
+        results: dict[str, dict] = {}
+        for current_mode in modes:
+            current_config = env_config_for_randomization_mode(env_config, current_mode)
+            results[current_mode] = self._evaluate_single_mode(
+                current_config,
+                task_names,
+                episodes,
+                output_dir=output_dir,
+                update_idx=update_idx,
+                headless=headless,
+                record_episodes=record_episodes,
+                record_format=record_format,
+                record_fps=record_fps,
+                randomization_mode=current_mode,
+                evaluate_fn=evaluate_waypoint_policy_per_task,
+            )
+
+        if mode == "inherit":
+            return results["inherit"]
+
+        combined: dict[str, float | str] = {"eval_randomization_mode": mode}
+        for current_mode, metrics in results.items():
+            for key, value in metrics.items():
+                if key.startswith("eval_"):
+                    combined[f"eval_{current_mode}_{key[5:]}"] = value
+
+        # Keep legacy eval_* fields usable by checkpoint selection and tuning scripts.
+        primary_mode = "random" if "random" in results else "fixed"
+        combined.update(results[primary_mode])
+        if mode == "both":
+            fixed = results["fixed"]
+            random = results["random"]
+            combined["eval_generalization_gap"] = float(
+                fixed.get("eval_success_rate", 0.0) - random.get("eval_success_rate", 0.0)
+            )
+            combined["eval_reward_generalization_gap"] = float(
+                fixed.get("eval_reward", 0.0) - random.get("eval_reward", 0.0)
+            )
+        return combined
+
+    def _evaluate_single_mode(
+        self,
+        env_config: dict,
+        task_names: list[str],
+        episodes: int,
+        output_dir: Path | None,
+        update_idx: int,
+        headless: bool,
+        record_episodes: int,
+        record_format: str,
+        record_fps: int,
+        randomization_mode: str,
+        evaluate_fn,
+    ) -> dict:
         record_dir = None
         if output_dir is not None and int(record_episodes) > 0:
-            record_dir = output_dir / "media" / f"eval_{update_idx:04d}"
-        records, task_summaries, overall = evaluate_waypoint_policy_per_task(
+            record_dir = output_dir / "media" / f"eval_{randomization_mode}" / f"eval_{update_idx:04d}"
+        records, task_summaries, overall = evaluate_fn(
             env_config,
             self.policy,
             task_names,
@@ -500,10 +561,13 @@ class MAPPOWaypointTrainer:
             record_episodes=record_episodes,
             record_format=record_format,
             record_fps=record_fps,
-            record_prefix=f"update_{update_idx:04d}",
+            record_prefix=f"update_{update_idx:04d}_{randomization_mode}",
         )
         if output_dir is not None and records:
-            eval_records = [dict(record, update=int(update_idx)) for record in records]
+            eval_records = [
+                dict(record, update=int(update_idx), eval_randomization_mode=randomization_mode)
+                for record in records
+            ]
             _append_metrics_csv(eval_records, Path(output_dir) / "eval_metrics.csv")
         result = {
             "eval_reward": float(overall.get("return_mean", 0.0)),
@@ -547,6 +611,7 @@ class MAPPOWaypointTrainer:
         record_format: str = "gif",
         record_fps: int = 8,
         record_interval: int = 1,
+        eval_randomization_mode: str = "inherit",
         log_callback: Callable[[dict], None] | None = None,
     ) -> list[dict]:
         output_dir = Path(output_dir)
@@ -575,6 +640,7 @@ class MAPPOWaypointTrainer:
                         record_episodes=media_episodes,
                         record_format=record_format,
                         record_fps=record_fps,
+                        randomization_mode=eval_randomization_mode,
                     )
                 )
                 ckpt = checkpoints / f"checkpoint_{update_idx:04d}.pt"

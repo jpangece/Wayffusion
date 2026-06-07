@@ -11,6 +11,8 @@ CORE_EXACT_KEYS = {
     "eval_reward",
     "eval_success_rate",
     "eval_action_validity_rate",
+    "eval_generalization_gap",
+    "eval_reward_generalization_gap",
     "action_validity_rate",
     "delta_clip_fraction",
     "delta_raw_norm_mean",
@@ -55,6 +57,8 @@ MINIMAL_EXACT_KEYS = {
     "eval_reward",
     "eval_success_rate",
     "eval_action_validity_rate",
+    "eval_generalization_gap",
+    "eval_reward_generalization_gap",
     "action_validity_rate",
     "delta_clip_fraction",
     "delta_raw_norm_mean",
@@ -103,16 +107,24 @@ def is_scalar(value: Any) -> bool:
     return isinstance(value, (int, float, np.integer, np.floating))
 
 
+def _normalize_eval_randomization_key(key: str) -> str:
+    for prefix in ("eval_fixed_", "eval_random_"):
+        if key.startswith(prefix):
+            return f"eval_{key[len(prefix):]}"
+    return key
+
+
 def should_log_tensorboard_metric(key: str, value: Any, mode: str = "core") -> bool:
     if key == "update" or not is_scalar(value):
         return False
     if mode == "all":
         return True
+    normalized = _normalize_eval_randomization_key(key)
     if mode == "minimal":
-        return key in MINIMAL_EXACT_KEYS or any(fragment in key for fragment in MINIMAL_SUBSTRINGS)
-    if key in CORE_EXACT_KEYS:
+        return normalized in MINIMAL_EXACT_KEYS or any(fragment in normalized for fragment in MINIMAL_SUBSTRINGS)
+    if normalized in CORE_EXACT_KEYS:
         return True
-    return any(fragment in key for fragment in CORE_SUBSTRINGS)
+    return any(fragment in normalized for fragment in CORE_SUBSTRINGS)
 
 
 __all__ = ["should_log_tensorboard_metric"]

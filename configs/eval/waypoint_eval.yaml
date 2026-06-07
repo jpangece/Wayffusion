@@ -1,3 +1,4 @@
+randomization_mode: both
 eval_episodes: 10
 record_eval_episodes: 2
 record_format: gif

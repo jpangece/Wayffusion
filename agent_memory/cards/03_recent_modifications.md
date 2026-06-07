@@ -5499,3 +5499,38 @@ Verification:
 - Required registry fields: run id, purpose, kind, task(s), config, env config, seed, output path, status, created/updated time.
 - Existing historical outputs are not moved; old layouts are historical-only and must not be copied for new runs.
 - Added human-facing specification: `docs/output_run_layout_zh.md`.
+
+## 2026-06-07: fixed/random evaluation split for waypoint MAPPO
+
+- Updated the existing `configs/eval/waypoint_eval.yaml`:
+  - `randomization_mode: both`;
+  - `eval_episodes: 10`;
+  - `record_eval_episodes: 2`;
+  - GIF at 8 FPS.
+- Added CLI controls to `scripts/train_mappo_waypoint.py`:
+  - `--eval-config`;
+  - `--train-randomization inherit|fixed|random`;
+  - `--eval-randomization inherit|fixed|random|both`.
+- Resolution priority is CLI, then eval YAML, then `both`.
+- Training and evaluation configs are isolated deep copies. Fixed/random evaluation never mutates the training environment config.
+- `both` evaluation now records:
+  - `eval_fixed_*` metrics;
+  - `eval_random_*` metrics;
+  - `eval_generalization_gap = fixed_success_rate - random_success_rate`;
+  - `eval_reward_generalization_gap`.
+- Compatibility `eval_*` fields use randomized evaluation in `both` mode, so existing checkpoint selection and tuning readers continue to work.
+- Evaluation rows include `eval_randomization_mode` in `eval_metrics.csv`.
+- Media directories are separated:
+  - `media/eval_fixed/eval_XXXX/...`;
+  - `media/eval_random/eval_XXXX/...`.
+- Snapshots now include resolved `snapshot/eval_config.yaml` and the existing `snapshot/cli_args.yaml`.
+- TensorBoard core filtering recognizes fixed/random prefixed metrics without enabling all raw scalars.
+
+Verification:
+
+- New eval-randomization tests: `4 passed`.
+- MAPPO/env/rendering/domain-randomization regression: `13 passed`.
+- Direct/candidate/adapter regression: `8 passed`.
+- One-update no-media CLI smoke passed and produced fixed/random CSV rows plus resolved snapshots.
+- One-update media smoke passed and produced both fixed and random GIFs under `/tmp`.
+- `git diff --check` passed.

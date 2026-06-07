@@ -19,6 +19,7 @@ from policies import build_policy
 from utils.waypoint_vector_env import SyncWaypointEnvBatch, ThreadWaypointEnvBatch, make_waypoint_env_batch
 from utils.output_layout import minute_timestamp, resolve_output_root, safe_slug
 from utils.tensorboard_metrics import should_log_tensorboard_metric
+from utils.waypoint_evaluation import env_config_for_randomization_mode, resolve_eval_randomization_mode
 
 
 def load_yaml(path: str | Path) -> dict:
@@ -115,6 +116,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/policy/mappo_waypoint.yaml")
     parser.add_argument("--env-config", default="configs/env/waypoint_missions.yaml")
+    parser.add_argument("--eval-config", default="configs/eval/waypoint_eval.yaml")
+    parser.add_argument("--train-randomization", choices=["inherit", "fixed", "random"], default="inherit")
+    parser.add_argument("--eval-randomization", choices=["inherit", "fixed", "random", "both"], default=None)
     parser.add_argument("--tasks", nargs="+", default=["area_coverage", "belief_search", "priority_inspection", "connectivity_expansion"])
     parser.add_argument("--num_agents", type=int, default=None)
     parser.add_argument("--num_envs", type=int, default=None)
@@ -122,12 +126,12 @@ def main() -> None:
     parser.add_argument("--total_updates", type=int, default=None)
     parser.add_argument("--rollout_steps", type=int, default=None)
     parser.add_argument("--eval_interval", type=int, default=None)
-    parser.add_argument("--eval_episodes", type=int, default=5)
+    parser.add_argument("--eval_episodes", type=int, default=None)
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--tensorboard", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--record_eval_episodes", type=int, default=0)
-    parser.add_argument("--record_format", choices=["gif", "mp4"], default="gif")
-    parser.add_argument("--record_fps", type=int, default=8)
+    parser.add_argument("--record_eval_episodes", type=int, default=None)
+    parser.add_argument("--record_format", choices=["gif", "mp4"], default=None)
+    parser.add_argument("--record_fps", type=int, default=None)
     parser.add_argument("--record_interval", type=int, default=1)
     parser.add_argument("--run_name", default=None)
     parser.add_argument("--run_timestamp", default=None)
@@ -139,7 +143,17 @@ def main() -> None:
     args = parser.parse_args()
 
     train_config = load_yaml(args.config)
-    env_config = load_yaml(args.env_config)
+    eval_config = load_yaml(args.eval_config)
+    env_config = env_config_for_randomization_mode(load_yaml(args.env_config), args.train_randomization)
+    eval_randomization_mode = resolve_eval_randomization_mode(eval_config, args.eval_randomization)
+    eval_episodes = int(args.eval_episodes if args.eval_episodes is not None else eval_config.get("eval_episodes", 10))
+    record_eval_episodes = int(
+        args.record_eval_episodes
+        if args.record_eval_episodes is not None
+        else eval_config.get("record_eval_episodes", 2)
+    )
+    record_format = str(args.record_format or eval_config.get("record_format", "gif"))
+    record_fps = int(args.record_fps if args.record_fps is not None else eval_config.get("record_fps", 8))
     task_names = [str(task) for task in args.tasks]
     env_config["task_names"] = task_names
     env_config["task_name"] = task_names[0] if len(task_names) == 1 else None
@@ -167,6 +181,17 @@ def main() -> None:
     snapshot.mkdir(parents=True, exist_ok=True)
     (snapshot / "train_config.yaml").write_text(yaml.safe_dump(train_config, sort_keys=False), encoding="utf-8")
     (snapshot / "env_config.yaml").write_text(yaml.safe_dump(env_config, sort_keys=False), encoding="utf-8")
+    resolved_eval_config = deepcopy(eval_config)
+    resolved_eval_config.update(
+        {
+            "randomization_mode": eval_randomization_mode,
+            "eval_episodes": eval_episodes,
+            "record_eval_episodes": record_eval_episodes,
+            "record_format": record_format,
+            "record_fps": record_fps,
+        }
+    )
+    (snapshot / "eval_config.yaml").write_text(yaml.safe_dump(resolved_eval_config, sort_keys=False), encoding="utf-8")
     (snapshot / "cli_args.yaml").write_text(yaml.safe_dump(vars(args), sort_keys=False), encoding="utf-8")
     (snapshot / "metadata.json").write_text(json.dumps({"created_at": datetime.now().astimezone().isoformat(), "main_env": "WaypointMultiUAVEnv"}, indent=2) + "\n", encoding="utf-8")
     writer = build_writer(output_dir, args.tensorboard)
@@ -188,12 +213,13 @@ def main() -> None:
         output_dir,
         env_config=env_config,
         task_names=task_names,
-        eval_episodes=int(args.eval_episodes),
+        eval_episodes=eval_episodes,
         headless=bool(args.headless),
-        record_eval_episodes=int(args.record_eval_episodes),
-        record_format=args.record_format,
-        record_fps=int(args.record_fps),
+        record_eval_episodes=record_eval_episodes,
+        record_format=record_format,
+        record_fps=record_fps,
         record_interval=int(args.record_interval),
+        eval_randomization_mode=eval_randomization_mode,
         log_callback=on_record,
     )
     if not history:
