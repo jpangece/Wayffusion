@@ -16,7 +16,12 @@ if str(ROOT) not in sys.path:
 from algorithms.mappo_waypoint import MAPPOWaypointTrainer, write_metrics_csv
 from envs.waypoint_marl_env import WaypointMultiUAVEnv
 from policies import build_policy
-from utils.waypoint_vector_env import SyncWaypointEnvBatch, ThreadWaypointEnvBatch, make_waypoint_env_batch
+from utils.waypoint_vector_env import (
+    ProcessWaypointEnvBatch,
+    SyncWaypointEnvBatch,
+    ThreadWaypointEnvBatch,
+    make_waypoint_env_batch,
+)
 from utils.output_layout import minute_timestamp, resolve_output_root, safe_slug
 from utils.tensorboard_metrics import should_log_tensorboard_metric
 from utils.waypoint_evaluation import env_config_for_randomization_mode, resolve_eval_randomization_mode
@@ -75,14 +80,17 @@ def make_output_dir(timestamp: str | None, run_name: str, output_dir: str | None
 def build_env_batch(env_config: dict, train_config: dict, tasks: list[str], envs_per_task: int | None, backend: str, workers: int | None):
     if envs_per_task is None:
         return make_waypoint_env_batch(env_config, int(train_config.get("num_envs", 1)), backend=backend, max_workers=workers)
-    envs = []
+    env_configs = []
     for task_idx, task_name in enumerate(tasks):
         for local_idx in range(int(envs_per_task)):
             cfg = deepcopy(env_config)
             cfg["task_name"] = task_name
             cfg["task_names"] = [task_name]
             cfg["seed"] = int(env_config.get("seed", 0)) + task_idx * int(envs_per_task) + local_idx
-            envs.append(WaypointMultiUAVEnv(cfg))
+            env_configs.append(cfg)
+    if backend == "process":
+        return ProcessWaypointEnvBatch(env_configs)
+    envs = [WaypointMultiUAVEnv(cfg) for cfg in env_configs]
     if backend == "sync":
         return SyncWaypointEnvBatch(envs)
     if backend == "thread":
@@ -138,7 +146,7 @@ def main() -> None:
     parser.add_argument("--phase-name", default="phase_change_on_mappo_waypoint")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--env_backend", choices=["sync", "thread"], default="sync")
+    parser.add_argument("--env_backend", choices=["sync", "thread", "process"], default="sync")
     parser.add_argument("--env_workers", type=int, default=None)
     args = parser.parse_args()
 

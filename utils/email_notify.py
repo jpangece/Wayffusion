@@ -59,14 +59,16 @@ def send_tuning_email(subject: str, body: str, attachments: list[str] | None = N
     try:
         host = os.environ["SMTP_HOST"]
         port = int(os.environ["SMTP_PORT"])
-        use_tls = _truthy(os.environ.get("SMTP_USE_TLS", "true"))
-        if use_tls:
-            with smtplib.SMTP(host, port, timeout=30) as smtp:
-                smtp.starttls()
+        use_ssl = _truthy(os.environ.get("SMTP_USE_SSL", os.environ.get("SMTP_SSL"))) or port == 465
+        use_tls = _truthy(os.environ.get("SMTP_USE_TLS", os.environ.get("SMTP_STARTTLS", "true")))
+        if use_ssl:
+            with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
                 smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
                 smtp.send_message(msg)
         else:
             with smtplib.SMTP(host, port, timeout=30) as smtp:
+                if use_tls:
+                    smtp.starttls()
                 smtp.login(os.environ["SMTP_USER"], os.environ["SMTP_PASSWORD"])
                 smtp.send_message(msg)
     except Exception as exc:

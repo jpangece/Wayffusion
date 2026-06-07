@@ -5602,3 +5602,135 @@ Interpretation:
 - This does not establish specialist convergence.
 - Area coverage remains far below the new `0.85` success threshold.
 - Belief performance is better but remains below a robust multi-seed convergence standard.
+
+## 2026-06-07: formal randomized Direct MAPPO specialist launcher
+
+Added a dedicated formal-training launcher under:
+
+- `scripts/formal_mappo_specialists/run_formal_specialists.py`
+- `scripts/formal_mappo_specialists/launch_tmux.sh`
+- `scripts/formal_mappo_specialists/status.sh`
+- `scripts/formal_mappo_specialists/README.md`
+
+The launcher:
+
+- starts its own detached tmux session;
+- launches the four Direct MAPPO specialists concurrently;
+- assigns one physical GPU per task;
+- uses `16` environments and rollout length `256` per task;
+- forces both training and evaluation to use domain randomization;
+- writes formal outputs only to
+  `outputs/training/mappo_direct_specialists/<runtime>/<task>/s0/`;
+- keeps `outputs/training/run_registry.yaml` synchronized;
+- sends SMTP notifications for suite start, each task start, each task completion,
+  each task abnormal exit, suite completion, suite signal interruption, and suite exception.
+
+The formal budgets are:
+
+- `area_coverage`: 2000 updates on GPU 0;
+- `belief_search`: 2000 updates on GPU 1;
+- `priority_inspection`: 2000 updates on GPU 2;
+- `connectivity_expansion`: 2500 updates on GPU 3.
+
+Evaluation is randomized-only for this formal run, every 100 updates with 20
+episodes. Two GIFs are recorded every fifth evaluation to limit storage growth.
+TensorBoard remains enabled per task.
+
+SMTP changes:
+
+- `utils/email_notify.py` now supports implicit SSL through `SMTP_SSL` /
+  `SMTP_USE_SSL`, including port 465;
+- the launcher reads `.secrets/wayffusion_mail.env`;
+- `EMAIL_TO` is mapped to `SMTP_TO`, and the existing QQ SMTP SSL settings are
+  used without storing credentials in tracked files.
+
+Verification before launch:
+
+- Python compile checks passed;
+- shell syntax checks passed;
+- email/launcher/eval-randomization tests: `9 passed`;
+- MAPPO trainer tests: `4 passed`;
+- launcher and tmux dry-runs passed;
+- a real SMTP validation message was sent successfully;
+- `git diff --check` passed.
+
+Active formal run:
+
+- runtime: `20260607_1208`;
+- tmux session: `wayffusion_formal_20260607_1208`;
+- root:
+  `outputs/training/mappo_direct_specialists/20260607_1208/`;
+- all four task processes are running and bound to GPUs 0, 1, 2, and 3;
+- snapshots and TensorBoard event files exist for every task;
+- the suite-start email and all four task-start emails were sent successfully;
+- first finite training metric rows were produced for every task.
+
+This is a formal long run, not a convergence result. Completion and abnormal
+termination notifications are handled by the monitor process.
+
+## 2026-06-07: stopped formal run and added process vectorization
+
+The user stopped runtime `20260607_1208` before its first scheduled evaluation.
+
+Cleanup:
+
+- terminated the tmux monitor and all four task processes;
+- confirmed no Wayffusion training process remained;
+- removed
+  `outputs/training/mappo_direct_specialists/20260607_1208/`;
+- cleared the corresponding entries from `outputs/training/run_registry.yaml`;
+- no media was generated because evaluation was scheduled for update 100 and
+  the tasks stopped at updates 17-21, so there were no GIF/MP4 files to retain.
+
+Performance diagnosis:
+
+- each task process used approximately one CPU core;
+- `SyncWaypointEnvBatch` advanced all 16 environments serially;
+- each environment step called the real MPE `World.step()` 20 times;
+- GPU utilization remained low because policy inference waited for CPU
+  simulation;
+- increasing synchronous env count from 8 to 16 barely changed total
+  throughput.
+
+Measured environment-only throughput:
+
+| Backend | Envs | Env steps/s |
+|---|---:|---:|
+| sync | 4 | 72.0 |
+| sync | 8 | 84.2 |
+| sync | 16 | 90.8 |
+| thread | 4 | 24.1 |
+| thread | 8 | 11.9 |
+| thread | 16 | 9.6 |
+| process | 4 | 246.8 |
+| process | 8 | 382.3 |
+| process | 16 | 595.2 |
+
+The thread backend is slower because the environment path is dominated by
+Python work and GIL/coordination overhead. It must not be used as a speed fix.
+
+Added `ProcessWaypointEnvBatch` in `utils/waypoint_vector_env.py`:
+
+- one environment per worker process;
+- unchanged observation/action/reward/termination batch API;
+- preserves the real vendored MPE core, 20 physics substeps, randomization,
+  rewards, and task semantics;
+- auto-reset and truncation bootstrap state remain compatible with MAPPO.
+
+Training changes:
+
+- `scripts/train_mappo_waypoint.py` now accepts
+  `--env_backend process`;
+- the formal launcher defaults to `process`;
+- formal child processes default to one BLAS/OpenMP thread to avoid
+  oversubscription across environment workers.
+
+Verification:
+
+- process vector env / launcher / MAPPO tests: `7 passed`;
+- env/API/adapter/email regressions: `8 passed`;
+- a complete one-update Direct MAPPO process-backend CLI smoke passed;
+- formal Python and tmux dry-runs include `--env_backend process`;
+- `git diff --check` passed.
+
+No replacement formal training was started automatically.

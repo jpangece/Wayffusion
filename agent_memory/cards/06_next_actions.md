@@ -1316,3 +1316,36 @@ Direct MAPPO specialist next-run rule:
   - coverage remains around `0.25` at final eval under the stricter threshold;
   - next tuning should focus on learning signal/reward and ineffective coverage motion, not the evaluation protocol.
 - Continue to use random training plus `both` evaluation for specialist tuning.
+
+## Formal specialist run status after speed audit
+
+Runtime `20260607_1208` was explicitly stopped and deleted at the user's
+request. There is no active formal Wayffusion training process.
+
+The next formal run should use:
+
+- `--env_backend process`;
+- 16 environments per task if all four GPUs and approximately 64 CPU cores are
+  dedicated to the suite;
+- `OMP_NUM_THREADS=1` and `MKL_NUM_THREADS=1` for each task parent;
+- the existing randomized train/eval protocol;
+- the existing formal layout and SMTP monitor.
+
+The one-command launcher already defaults to this faster backend:
+
+```bash
+bash scripts/formal_mappo_specialists/launch_tmux.sh
+```
+
+Do not use `--env_backend thread`; measured throughput was substantially worse
+than sync. Process vectorization measured about `595 env-steps/s` at 16 envs,
+versus about `91 env-steps/s` for sync, while retaining the same MPE dynamics.
+
+Before the next full formal launch, a practical resource choice is:
+
+- four concurrent tasks × 16 process envs = 64 environment workers;
+- if the host is shared or latency becomes unstable, use `NUM_ENVS=12` to leave
+  CPU headroom.
+
+No convergence claim should be derived from the deleted run because it ended
+before its first evaluation.

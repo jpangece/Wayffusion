@@ -30,3 +30,42 @@ def test_build_tuning_email_with_env(monkeypatch, tmp_path):
     assert msg["Subject"] == "subject"
     assert msg["From"] == values["SMTP_FROM"]
     assert msg["To"] == values["SMTP_TO"]
+
+
+def test_send_tuning_email_uses_smtp_ssl_for_port_465(monkeypatch):
+    values = {
+        "SMTP_HOST": "smtp.example.test",
+        "SMTP_PORT": "465",
+        "SMTP_USER": "user",
+        "SMTP_PASSWORD": "password",
+        "SMTP_FROM": "from@example.test",
+        "SMTP_TO": "to@example.test",
+        "SMTP_USE_SSL": "1",
+        "SMTP_USE_TLS": "0",
+    }
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+    calls = []
+
+    class FakeSMTPSSL:
+        def __init__(self, host, port, timeout):
+            calls.append(("connect", host, port, timeout))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def login(self, user, password):
+            calls.append(("login", user, password))
+
+        def send_message(self, message):
+            calls.append(("send", message["Subject"]))
+
+    monkeypatch.setattr("utils.email_notify.smtplib.SMTP_SSL", FakeSMTPSSL)
+    result = send_tuning_email("formal started", "body")
+    assert result.sent is True
+    assert calls[0][:3] == ("connect", "smtp.example.test", 465)
+    assert calls[-1] == ("send", "formal started")
