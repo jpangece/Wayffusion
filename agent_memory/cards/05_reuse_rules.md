@@ -135,3 +135,32 @@ Minimum synchronization steps:
 3. confirm the checkpoint path lives under `checkpoints/`
 4. prefer the most recent timestamped run for reproduction
 5. do not cite smoke-level summaries as if they were final paper evidence
+
+## Current overriding output rule (2026-06-07)
+
+This section overrides every older output-layout example in this card. Older paths remain valid only as historical references.
+
+- Debug only: `outputs/debug/phaseNNN_debug_<requirement>/<YYYYMMDD_HHMM>__<short_run>/`.
+- Formal only: `outputs/training/<YYYYMMDD_HHMM>__<short_run>/`.
+- `phaseNNN` is monotonically increasing and must never be reused for a different requirement.
+- Run names stay short; task, seed, and one distinguishing tag are sufficient.
+- No new algorithm/category/phase nesting is allowed under `outputs/training`.
+- Before launching, write/update the shared registry with status `PLANNED` or `RUNNING`.
+- After exit, update the same record to `COMPLETED`, `FAILED_RUNTIME`, `STOPPED`, or `NEED_MORE_TUNING`.
+- Debug registry: one `run_registry.yaml` at the debug phase root.
+- Formal registry: one `outputs/training/run_registry.yaml` shared by all formal runs.
+- A run without a registry entry is operationally incomplete.
+- If an existing script still defaults to an old layout, pass explicit `--output-dir` rather than creating another legacy-shaped directory.
+
+### Direct MAPPO specialist exception and latest override
+
+For Direct MAPPO specialist launchers, use this more specific layout:
+
+- debug:
+  `outputs/debug/mappo_direct_specialists/phaseXX_<purpose>/<YYYYMMDD_HHMM>/<task>/trialXX/sN/`;
+- formal, one selected configuration:
+  `outputs/training/mappo_direct_specialists/<YYYYMMDD_HHMM>/<task>/sN/`;
+- formal, multiple compared trials:
+  `outputs/training/mappo_direct_specialists/<YYYYMMDD_HHMM>/<task>/trialXX/sN/`.
+
+Direct specialist run names must be only `sN` or `trialXX_sN`. Full parameters belong in snapshot and summary/report files. This subsection overrides the generic rule above for Direct MAPPO specialists.

@@ -58,7 +58,7 @@ def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
         train_config["max_delta"] = env_config["max_waypoint_distance"]
 
 
-def make_output_dir(timestamp: str | None, run_name: str, output_dir: str | None = None, phase_name: str = "phase_change_on_mappo_waypoint") -> Path:
+def make_output_dir(timestamp: str | None, run_name: str, output_dir: str | None = None, phase_name: str = "") -> Path:
     if output_dir is not None:
         output = Path(output_dir)
         if not output.is_absolute():
@@ -161,7 +161,7 @@ def main() -> None:
     env_batch = build_env_batch(env_config, train_config, task_names, args.envs_per_task, args.env_backend, args.env_workers)
     policy = build_policy(train_config, env_batch.envs[0].global_observation_space, env_batch.envs[0].action_space_n)
     trainer = MAPPOWaypointTrainer(env_batch, policy, train_config)
-    run_name = args.run_name or f"{train_config.get('name', 'mappo_waypoint')}_{'_'.join(task_names)}_N{env_config['num_agents']}"
+    run_name = args.run_name or f"{train_config.get('name', 'mappo_waypoint')}{'_'.join(task_names)}_N{env_config['num_agents']}"
     output_dir = make_output_dir(args.run_timestamp, run_name, args.output_dir, args.phase_name)
     snapshot = output_dir / "snapshot"
     snapshot.mkdir(parents=True, exist_ok=True)

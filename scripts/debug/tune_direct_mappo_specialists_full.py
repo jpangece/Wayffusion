@@ -18,7 +18,8 @@ if str(ROOT) not in sys.path:
 from scripts.debug import tune_direct_mappo_specialists as direct
 from scripts.debug import tune_mappo_specialists as common
 from utils.email_notify import send_tuning_email
-from utils.output_layout import minute_timestamp, resolve_output_root, short_run_name
+from utils.experiment_layout import debug_summary_dir, make_run_name, training_summary_dir, validate_phase_name
+from utils.output_layout import minute_timestamp
 
 
 TASKS = [
@@ -52,19 +53,13 @@ def _formal_updates(args: argparse.Namespace, task: str) -> int:
 
 
 def _smoke_run_name(task: str, train_config: dict, env_config: dict, spec: direct.DirectTrialSpec, stage: str) -> str:
-    del task, train_config, env_config, stage
-    return short_run_name("smoke", float(spec.max_delta), int(getattr(_ACTIVE_ARGS, "seed", 0)), tag=spec.tag)
+    del task, train_config, spec, stage
+    return make_run_name(int(env_config.get("seed", 0)), getattr(_ACTIVE_ARGS, "current_trial", None))
 
 
 def _formal_run_name(task: str, train_config: dict, env_config: dict, spec: direct.DirectTrialSpec, stage: str) -> str:
-    del task, stage
-    return short_run_name(
-        "formal",
-        float(train_config["max_delta"]),
-        int(env_config.get("seed", 0)),
-        updates=int(train_config["total_updates"]),
-        tag=spec.tag,
-    )
+    del task, train_config, spec, stage
+    return make_run_name(int(env_config.get("seed", 0)))
 
 
 _ACTIVE_ARGS: argparse.Namespace | None = None
@@ -302,7 +297,10 @@ def _base_args(args: argparse.Namespace, timestamp: str, stage: str, seed: int, 
         env_backend=args.env_backend,
         env_workers=args.env_workers,
         tensorboard=bool(args.tensorboard),
-        flat_phase_layout=True,
+        direct_specialist_layout=True,
+        phase_name=args.phase_name,
+        current_trial=None,
+        training_uses_trial_dir=False,
         headless=bool(args.headless),
         dry_run=bool(args.dry_run),
         trial_tags=None,
@@ -318,7 +316,8 @@ def _run_smoke_trials(task: str, args: argparse.Namespace, timestamp: str) -> tu
     runs: list[dict] = []
     passing_run: dict | None = None
     specs = direct.direct_trial_specs(task, "debug", int(args.debug_rollout_steps))[: int(args.max_debug_trials)]
-    for spec in specs:
+    for trial_number, spec in enumerate(specs, start=1):
+        smoke_args.current_trial = trial_number
         print(f"[direct-full] smoke task={task} trial={spec.tag}", flush=True)
         run = common.run_trial(task, "debug", spec, smoke_args, timestamp)
         run = _enrich_run(run, task)
@@ -346,25 +345,30 @@ def _run_formal(task: str, passing_run: dict, args: argparse.Namespace, timestam
     for spec in specs[: int(args.max_formal_trials)]:
         for seed in [int(item) for item in args.seeds]:
             formal_args = _base_args(args, timestamp, "training", seed, formal_root, total_updates)
+            formal_args.current_trial = None
             print(f"[direct-full] formal task={task} seed={seed} trial={spec.tag}", flush=True)
             run = common.run_trial(task, "training", spec, formal_args, timestamp)
             run = _enrich_run(run, task)
             best_summary = Path(run.get("output_dir", "")) / "best_eval_summary.json"
             if best_summary.exists():
                 try:
-                    run["best_checkpoint_path"] = json.loads(best_summary.read_text(encoding="utf-8")).get("checkpoint_path", "")
+                    checkpoint = json.loads(best_summary.read_text(encoding="utf-8")).get("checkpoint_path", "")
+                    run["best_checkpoint_path"] = checkpoint
+                    run["best_checkpoint"] = checkpoint
                 except Exception:
                     run["best_checkpoint_path"] = ""
             runs.append(run)
     return runs
 
 
-def _write_report(summary_dir: Path, results: list[dict], timestamp: str) -> tuple[Path, Path]:
+def _write_report(summary_dir: Path, results: list[dict], timestamp: str, phase_name: str) -> tuple[Path, Path]:
     summary_dir.mkdir(parents=True, exist_ok=True)
     summary_path = summary_dir / "summary.json"
     report_path = summary_dir / "report.md"
     summary = {
         "timestamp": timestamp,
+        "runtime": timestamp,
+        "phase_name": phase_name,
         "gae_truncation_fix": True,
         "direct_action_clipping_diagnostics": True,
         "tasks": results,
@@ -374,6 +378,8 @@ def _write_report(summary_dir: Path, results: list[dict], timestamp: str) -> tup
         "# Direct MAPPO Specialist Full Tuning Report",
         "",
         f"- Timestamp: `{timestamp}`",
+        f"- Runtime: `{timestamp}`",
+        f"- Phase: `{summary.get('phase_name', '')}`",
         "- GAE truncation fix: `true`",
         "- Direct action clipping diagnostics: `true`",
         "",
@@ -411,13 +417,42 @@ def _write_report(summary_dir: Path, results: list[dict], timestamp: str) -> tup
             lines.extend(
                 [
                     f"- Best run: `{best.get('run_name', '')}`",
-                    f"- Best checkpoint: `{best.get('best_checkpoint_path', '')}`",
+                    f"- Best checkpoint: `{best.get('best_checkpoint', best.get('best_checkpoint_path', ''))}`",
+                    f"- Phase name: `{best.get('phase_name', '')}`",
+                    f"- Runtime: `{best.get('runtime', '')}`",
+                    f"- Task name: `{best.get('task_name', item['task'])}`",
+                    f"- Trial: `{best.get('trial_number', '')}`",
+                    f"- Seed: `{best.get('seed', '')}`",
+                    f"- Total updates: `{best.get('total_updates', '')}`",
+                    f"- Num envs: `{best.get('num_envs', '')}`",
+                    f"- Rollout steps: `{best.get('rollout_steps', '')}`",
+                    f"- Max delta: `{best.get('max_delta', '')}`",
+                    f"- Log std init: `{best.get('log_std_init', '')}`",
+                    f"- Learning rate: `{best.get('learning_rate', '')}`",
                     f"- Best eval_success_rate: `{best.get('best_eval_success_rate', 0.0)}`",
                     f"- Best task metric: `{best.get('best_task_metric', best.get('best_task_progress', 0.0))}`",
                     f"- Output: `{best.get('output_dir', '')}`",
                     "",
                 ]
             )
+        all_runs = list(item.get("smoke_runs", [])) + list(item.get("formal_runs", []))
+        if all_runs:
+            lines.extend(
+                [
+                    "| run | stage | trial | seed | updates | envs | rollout | max_delta | log_std | lr | success | checkpoint | output |",
+                    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+                ]
+            )
+            for run in all_runs:
+                lines.append(
+                    f"| `{run.get('run_name', '')}` | `{run.get('stage', '')}` | "
+                    f"{run.get('trial_number', '') if run.get('trial_number') is not None else ''} | "
+                    f"{run.get('seed', '')} | {run.get('total_updates', '')} | {run.get('num_envs', '')} | "
+                    f"{run.get('rollout_steps', '')} | {run.get('max_delta', '')} | {run.get('log_std_init', '')} | "
+                    f"{run.get('learning_rate', '')} | {_finite(run.get('best_eval_success_rate', 0.0)):.3f} | "
+                    f"`{run.get('best_checkpoint', run.get('best_checkpoint_path', ''))}` | `{run.get('output_dir', '')}` |"
+                )
+            lines.append("")
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return summary_path, report_path
 
@@ -462,9 +497,9 @@ def main() -> None:
     parser.add_argument("--config", default="configs/policy/mappo_waypoint.yaml")
     parser.add_argument("--env-config", default="configs/env/waypoint_missions.yaml")
     parser.add_argument("--specialist-config-dir", default=None)
-    parser.add_argument("--debug-output-root", default="outputs/debug")
-    parser.add_argument("--training-output-root", default="outputs/training")
-    parser.add_argument("--phase-name", default="phase_change_on_direct_mappo_specialists")
+    parser.add_argument("--debug-output-root", default="outputs/debug/mappo_direct_specialists")
+    parser.add_argument("--training-output-root", default="outputs/training/mappo_direct_specialists")
+    parser.add_argument("--phase-name", default="phase01_action_scale")
     parser.add_argument("--timestamp", default=None)
     parser.add_argument("--num-agents", type=int, default=4)
     parser.add_argument("--max-debug-trials", type=int, default=6)
@@ -495,10 +530,9 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     _use_specialist_config_dir(args.specialist_config_dir)
+    validate_phase_name(args.phase_name)
 
     timestamp = args.timestamp or minute_timestamp()
-    args.debug_output_root = str(resolve_output_root(args.debug_output_root, args.phase_name, timestamp, ROOT))
-    args.training_output_root = str(resolve_output_root(args.training_output_root, args.phase_name, timestamp, ROOT))
     staged: list[dict] = []
     for task in [str(item) for item in args.tasks]:
         if task not in TASKS:
@@ -552,8 +586,10 @@ def main() -> None:
             }
         )
 
-    summary_dir = Path(args.debug_output_root)
-    summary_path, report_path = _write_report(summary_dir, results, timestamp)
+    summary_dir = debug_summary_dir(args.debug_output_root, args.phase_name, timestamp)
+    if not summary_dir.is_absolute():
+        summary_dir = ROOT / summary_dir
+    summary_path, report_path = _write_report(summary_dir, results, timestamp, args.phase_name)
     if args.send_email:
         result = send_tuning_email(
             _email_subject(results),

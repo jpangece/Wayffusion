@@ -59,3 +59,25 @@ The following are considered incomplete work:
 ## Trusted conclusion
 
 `agent_memory/` is part of the repository contract, not optional commentary. Future agents should treat memory synchronization as required maintenance, not as an afterthought.
+
+## Output registry maintenance rule (2026-06-07)
+
+For every newly launched run, maintenance is incomplete unless:
+
+1. the output path follows the current debug/formal layout;
+2. the appropriate `run_registry.yaml` contains the run before execution;
+3. the same record is updated after execution;
+4. purpose and status are human-readable;
+5. config snapshots and metrics remain inside the run directory.
+
+Historical layouts may be read but must not be used as templates for new work.
+
+## Direct MAPPO specialist layout override
+
+Direct specialist maintenance must verify:
+
+- debug path is `<debug-root>/phaseXX_<purpose>/<runtime>/<task>/trialXX/sN/`;
+- formal path is `<training-root>/<runtime>/<task>/sN/`, unless multiple formal trials require `trialXX/sN/`;
+- `phase_name` validation occurs before creating outputs;
+- run names are only `sN` or `trialXX_sN`;
+- summary/report records complete parameters and best checkpoint.

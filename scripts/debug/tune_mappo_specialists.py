@@ -24,6 +24,7 @@ from policies import build_policy
 from utils.waypoint_vector_env import make_waypoint_env_batch
 from utils.output_layout import minute_timestamp, resolve_output_root, safe_slug
 from utils.tensorboard_metrics import should_log_tensorboard_metric
+from utils.experiment_layout import make_debug_output_dir, make_run_name, make_training_output_dir
 
 
 TASKS = [
@@ -399,25 +400,39 @@ def run_trial(task: str, stage: str, spec: TrialSpec, args: argparse.Namespace, 
     config_path = SPECIALIST_CONFIGS.get(task, args.config)
     train_config = load_yaml(config_path)
     train_config, env_config = apply_trial(train_config, base_env_config, task, spec, args, stage)
-    name = run_name(task, train_config, env_config, spec, stage)
     root = Path(args.debug_output_root if stage == "debug" else args.training_output_root)
     if not root.is_absolute():
         root = ROOT / root
-    base_dir = root if bool(getattr(args, "flat_phase_layout", False)) else root / timestamp
-    output_dir = base_dir / task / name
+    direct_layout = bool(getattr(args, "direct_specialist_layout", False))
+    trial_number = getattr(args, "current_trial", None)
+    if direct_layout:
+        seed = int(env_config.get("seed", 0))
+        if stage == "debug":
+            if trial_number is None:
+                raise ValueError("Direct specialist debug layout requires current_trial")
+            output_dir = make_debug_output_dir(root, args.phase_name, timestamp, task, int(trial_number), seed)
+            name = make_run_name(seed, int(trial_number))
+        else:
+            training_trial = int(trial_number) if bool(getattr(args, "training_uses_trial_dir", False)) and trial_number is not None else None
+            output_dir = make_training_output_dir(root, timestamp, task, seed, trial=training_trial)
+            name = make_run_name(seed, training_trial)
+    else:
+        name = run_name(task, train_config, env_config, spec, stage)
+        base_dir = root if bool(getattr(args, "flat_phase_layout", False)) else root / timestamp
+        output_dir = base_dir / task / name
     output_dir.mkdir(parents=True, exist_ok=True)
     write_trial_snapshot(output_dir, train_config, env_config, spec, args)
     record_eval_episodes = int(args.debug_record_eval_episodes if stage == "debug" else args.training_record_eval_episodes)
     eval_episodes = int(args.debug_eval_episodes if stage == "debug" else args.training_eval_episodes)
     if args.dry_run:
-        return {
+        return _with_run_parameters({
             "task": task,
             "stage": stage,
             "run_name": name,
             "output_dir": str(output_dir),
             "status": "DRY_RUN",
             "config_path": config_path,
-        }
+        }, args, train_config, env_config, trial_number)
     try:
         env_batch = make_waypoint_env_batch(env_config, int(train_config["num_envs"]), backend=args.env_backend, max_workers=args.env_workers)
         policy = build_policy(train_config, env_batch.envs[0].global_observation_space, env_batch.envs[0].action_space_n)
@@ -453,7 +468,7 @@ def run_trial(task: str, stage: str, spec: TrialSpec, args: argparse.Namespace, 
         records = read_csv_records(output_dir / "training_metrics.csv")
         episode_eval_records = read_csv_records(output_dir / "eval_metrics.csv")
         status, best, reason = evaluate_status(task, records)
-        return {
+        result = {
             "task": task,
             "stage": stage,
             "run_name": name,
@@ -472,10 +487,17 @@ def run_trial(task: str, stage: str, spec: TrialSpec, args: argparse.Namespace, 
             "next_suggestion": next_suggestion(task, records, reason),
             "trial": spec.__dict__,
         }
+        best_summary_path = output_dir / "best_eval_summary.json"
+        if best_summary_path.exists():
+            try:
+                result["best_checkpoint"] = json.loads(best_summary_path.read_text(encoding="utf-8")).get("checkpoint_path", "")
+            except (OSError, ValueError, TypeError):
+                result["best_checkpoint"] = ""
+        return _with_run_parameters(result, args, train_config, env_config, trial_number)
     except Exception as exc:
         error_path = output_dir / "runtime_error.txt"
         error_path.write_text(traceback.format_exc(), encoding="utf-8")
-        return {
+        return _with_run_parameters({
             "task": task,
             "stage": stage,
             "run_name": name,
@@ -485,7 +507,33 @@ def run_trial(task: str, stage: str, spec: TrialSpec, args: argparse.Namespace, 
             "config_path": config_path,
             "runtime_error_path": str(error_path),
             "trial": spec.__dict__,
+        }, args, train_config, env_config, trial_number)
+
+
+def _with_run_parameters(
+    result: dict[str, Any],
+    args: argparse.Namespace,
+    train_config: dict,
+    env_config: dict,
+    trial_number: int | None,
+) -> dict[str, Any]:
+    result.update(
+        {
+            "phase_name": str(getattr(args, "phase_name", "")),
+            "runtime": str(getattr(args, "timestamp", "")),
+            "task_name": str(result.get("task", env_config.get("task_name", ""))),
+            "trial_number": None if trial_number is None else int(trial_number),
+            "seed": int(env_config.get("seed", 0)),
+            "total_updates": int(train_config.get("total_updates", 0)),
+            "num_envs": int(train_config.get("num_envs", 0)),
+            "rollout_steps": int(train_config.get("rollout_steps", 0)),
+            "max_delta": float(train_config.get("max_delta", 0.0)),
+            "log_std_init": float(train_config.get("log_std_init", 0.0)),
+            "learning_rate": float(train_config.get("learning_rate", 0.0)),
         }
+    )
+    result.setdefault("best_checkpoint", "")
+    return result
 
 
 def write_task_report(task_dir: Path, task: str, runs: list[dict]) -> dict:
@@ -513,12 +561,16 @@ def write_task_report(task_dir: Path, task: str, runs: list[dict]) -> dict:
         "",
         "## Runs",
         "",
-        "| run | stage | status | success | reward | progress | output |",
-        "| --- | --- | --- | ---: | ---: | ---: | --- |",
+        "| run | stage | trial | seed | updates | envs | rollout | max_delta | log_std | lr | status | success | reward | progress | output |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | --- |",
     ]
     for run in runs:
         lines.append(
-            f"| `{run.get('run_name', '')}` | `{run.get('stage', '')}` | `{run.get('status', '')}` | "
+            f"| `{run.get('run_name', '')}` | `{run.get('stage', '')}` | "
+            f"{run.get('trial_number', '') if run.get('trial_number') is not None else ''} | "
+            f"{run.get('seed', '')} | {run.get('total_updates', '')} | {run.get('num_envs', '')} | "
+            f"{run.get('rollout_steps', '')} | {run.get('max_delta', '')} | {run.get('log_std_init', '')} | "
+            f"{run.get('learning_rate', '')} | `{run.get('status', '')}` | "
             f"{finite_float(run.get('best_eval_success_rate', 0.0)):.3f} | "
             f"{finite_float(run.get('best_eval_reward', 0.0)):.3f} | "
             f"{finite_float(run.get('best_task_progress', 0.0)):.3f} | `{run.get('output_dir', '')}` |"

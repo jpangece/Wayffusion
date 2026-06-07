@@ -1271,3 +1271,19 @@ Important caveat:
   5. report success/task metric and safety violations, not reward alone.
 - If early learning collapses, use a no-fly curriculum from one zone to 1-3 zones, but retain full randomization for target evaluation.
 - Post-change coverage is normalized over navigable cells, so state this before comparing against historical full-grid coverage.
+
+## Mandatory output handling for next runs
+
+- Allocate the next unused `phaseNNN` before any debug run.
+- Put all runs for the same debugging requirement directly under that phase directory.
+- Put formal runs directly under `outputs/training`; do not mirror the debug phase hierarchy.
+- Keep `run_registry.yaml` current before, during, and after every run.
+- Do not migrate or rename active/historical runs unless the user explicitly requests archival.
+
+Direct MAPPO specialist next-run rule:
+
+- choose a validated phase such as `phase07_domain_randomization`;
+- use `utils/experiment_layout.py`;
+- never restore parameter-packed run names;
+- full formal single-config runs should be `<runtime>/<task>/sN`;
+- verify summary/report parameter fields before launching long jobs.

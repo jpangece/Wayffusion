@@ -5370,3 +5370,76 @@ Smoke validation:
 - Full relevant regression suite after logging changes:
   - `25 passed`.
 - `git diff --check` passed.
+
+## 2026-06-07: Direct MAPPO specialist compact output layout
+
+User-defined Direct specialist layout now overrides earlier long run names and generic phase folders.
+
+Added:
+
+- `utils/experiment_layout.py`
+  - validates `phaseXX_<purpose>`;
+  - creates debug paths:
+    `outputs/debug/mappo_direct_specialists/<phase>/<runtime>/<task>/trialXX/sN/`;
+  - creates formal paths:
+    `outputs/training/mappo_direct_specialists/<runtime>/<task>/sN/`;
+  - supports optional formal `trialXX/sN/`;
+  - creates short run names `sN` or `trialXX_sN`.
+- `tests/test_experiment_layout.py`.
+- `docs/direct_mappo_specialist_output_layout_zh.md`.
+
+Modified:
+
+- `scripts/debug/tune_mappo_specialists.py`
+  - shared `run_trial` has a Direct-only layout branch;
+  - Direct run summaries now include phase/runtime/task/trial/seed and full training parameters;
+  - best checkpoint is read from `best_eval_summary.json`.
+- `scripts/debug/tune_direct_mappo_specialists.py`
+  - defaults:
+    - debug root `outputs/debug/mappo_direct_specialists`;
+    - training root `outputs/training/mappo_direct_specialists`;
+    - phase `phase01_action_scale`;
+  - assigns explicit trial numbers;
+  - formal output omits trial directory when only one formal trial is configured.
+- `scripts/debug/tune_direct_mappo_specialists_full.py`
+  - smoke paths use `trialXX/sN`;
+  - selected single-config formal runs use only `sN`;
+  - report contains complete parameters for every smoke/formal run.
+
+Verified examples:
+
+- debug:
+  `outputs/debug/mappo_direct_specialists/phase03_area_reward_probe/20260607_1900/area_coverage/trial01/s0/`;
+- training:
+  `outputs/training/mappo_direct_specialists/20260607_2200/belief_search/s0/`;
+- run names:
+  - `trial01_s0`;
+  - `s0`.
+
+Validation:
+
+- layout/direct policy/trainer tests: `15 passed`;
+- invalid `phase_name=invalid_phase` failed before launch as expected.
+- Dry-run snapshots and summary JSON contained:
+  `phase_name`, `runtime`, `task_name`, `trial_number`, `seed`, `output_dir`,
+  `total_updates`, `num_envs`, `rollout_steps`, `max_delta`, `log_std_init`,
+  `learning_rate`, and `best_checkpoint`.
+- Final regression including env/adapter/email tests: `22 passed`.
+- Formal multi-trial dry-run verified:
+  - `<runtime>/area_coverage/trial01/s0`;
+  - `<runtime>/area_coverage/trial02/s0`.
+- Full-flow report dry-run verified the phase header and complete per-run parameter table.
+- Repository-local dry-run output directories created for validation were removed after inspection.
+
+## 2026-06-07: canonical debug/training output contract
+
+- Added a repository-wide mandatory output rule requested by the user.
+- New debug runs must use `outputs/debug/phaseNNN_debug_<requirement>/<YYYYMMDD_HHMM>__<short_run>/`.
+- New formal runs must be direct children of `outputs/training/`: `outputs/training/<YYYYMMDD_HHMM>__<short_run>/`.
+- Do not add algorithm/timestamp/phase/category nesting under `outputs/training` for new runs.
+- Each debug phase owns one append/update registry: `outputs/debug/phaseNNN_debug_<requirement>/run_registry.yaml`.
+- All formal runs share `outputs/training/run_registry.yaml`.
+- Every run must be registered before launch and updated after completion/failure.
+- Required registry fields: run id, purpose, kind, task(s), config, env config, seed, output path, status, created/updated time.
+- Existing historical outputs are not moved; old layouts are historical-only and must not be copied for new runs.
+- Added human-facing specification: `docs/output_run_layout_zh.md`.

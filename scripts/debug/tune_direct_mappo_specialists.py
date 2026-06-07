@@ -14,7 +14,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.debug import tune_mappo_specialists as common
-from utils.output_layout import minute_timestamp, resolve_output_root, short_run_name
+from utils.experiment_layout import debug_summary_dir, make_run_name, training_summary_dir, validate_phase_name
+from utils.output_layout import minute_timestamp
 
 
 BASE_NEXT_SUGGESTION = common.next_suggestion
@@ -187,9 +188,8 @@ def apply_direct_trial(train_config: dict, env_config: dict, task: str, spec: Di
 
 
 def direct_run_name(task: str, train_config: dict, env_config: dict, spec: DirectTrialSpec, stage: str) -> str:
-    kind = "smoke" if stage == "debug" else "formal"
-    updates = None if stage == "debug" else int(train_config["total_updates"])
-    return short_run_name(kind, float(train_config["max_delta"]), int(env_config.get("seed", 0)), updates=updates, tag=spec.tag)
+    del task, train_config, spec, stage
+    return make_run_name(int(env_config.get("seed", 0)))
 
 
 def next_suggestion(task: str, records: list[dict], status_reason: str) -> str:
@@ -225,9 +225,9 @@ def main() -> None:
     parser.add_argument("--config", default="configs/policy/mappo_waypoint.yaml")
     parser.add_argument("--env-config", default="configs/env/waypoint_missions.yaml")
     parser.add_argument("--specialist-config-dir", default=None)
-    parser.add_argument("--debug-output-root", default="outputs/debug")
-    parser.add_argument("--training-output-root", default="outputs/training")
-    parser.add_argument("--phase-name", default="phase_change_on_direct_mappo_specialists")
+    parser.add_argument("--debug-output-root", default="outputs/debug/mappo_direct_specialists")
+    parser.add_argument("--training-output-root", default="outputs/training/mappo_direct_specialists")
+    parser.add_argument("--phase-name", default="phase01_action_scale")
     parser.add_argument("--timestamp", default=None)
     parser.add_argument("--num-agents", type=int, default=4)
     parser.add_argument("--seed", type=int, default=0)
@@ -255,6 +255,7 @@ def main() -> None:
     parser.add_argument("--trial-tags", nargs="*", default=None)
     args = parser.parse_args()
     use_specialist_config_dir(args.specialist_config_dir)
+    validate_phase_name(args.phase_name)
 
     common.SPECIALIST_CONFIGS = DIRECT_SPECIALIST_CONFIGS
     common.apply_trial = apply_direct_trial
@@ -263,9 +264,9 @@ def main() -> None:
     common.next_suggestion = next_suggestion
 
     timestamp = args.timestamp or minute_timestamp()
-    args.debug_output_root = str(resolve_output_root(args.debug_output_root, args.phase_name, timestamp, ROOT))
-    args.training_output_root = str(resolve_output_root(args.training_output_root, args.phase_name, timestamp, ROOT))
-    args.flat_phase_layout = True
+    args.timestamp = timestamp
+    args.direct_specialist_layout = True
+    args.training_uses_trial_dir = int(args.training_max_trials_per_task) > 1
     stages = ["debug", "training"] if args.stage == "both" else [args.stage]
     global_summaries = []
     for task in [str(item) for item in args.tasks]:
@@ -282,7 +283,8 @@ def main() -> None:
             if args.trial_tags:
                 wanted = set(str(item) for item in args.trial_tags)
                 specs = [spec for spec in specs if spec.tag in wanted]
-            for spec in specs[:limit]:
+            for trial_number, spec in enumerate(specs[:limit], start=1):
+                args.current_trial = trial_number
                 print(f"[direct-specialist-tune] task={task} stage={stage} trial={spec.tag}", flush=True)
                 run = common.run_trial(task, stage, spec, args, timestamp)
                 task_runs.append(run)
@@ -290,13 +292,21 @@ def main() -> None:
                     debug_positive = True
                 if run.get("status") == "CONVERGED":
                     break
-        root = Path(args.debug_output_root if args.stage != "training" else args.training_output_root)
+        root = (
+            debug_summary_dir(args.debug_output_root, args.phase_name, timestamp)
+            if args.stage != "training"
+            else training_summary_dir(args.training_output_root, timestamp)
+        )
         if not root.is_absolute():
             root = ROOT / root
         task_summary = common.write_task_report(root / task, task, task_runs)
         global_summaries.append(task_summary)
 
-    global_root = Path(args.debug_output_root if args.stage != "training" else args.training_output_root)
+    global_root = (
+        debug_summary_dir(args.debug_output_root, args.phase_name, timestamp)
+        if args.stage != "training"
+        else training_summary_dir(args.training_output_root, timestamp)
+    )
     if not global_root.is_absolute():
         global_root = ROOT / global_root
     global_root = global_root
