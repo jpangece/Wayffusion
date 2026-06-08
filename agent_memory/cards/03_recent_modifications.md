@@ -5734,3 +5734,238 @@ Verification:
 - `git diff --check` passed.
 
 No replacement formal training was started automatically.
+
+## 2026-06-07: stopped weak formal Direct MAPPO run and completed phase11 action/obs scale probe
+
+The formal Direct MAPPO specialist run at
+`outputs/training/mappo_direct_specialists/20260607_1237/` was stopped for
+diagnosis because intermediate results were not converging well:
+
+- `area_coverage`: best success `0.0`, best coverage around `0.44` in the
+  formal summary, later evals only around `0.50`;
+- `belief_search`: best success `0.60`, but last `delta_clip_fraction` was
+  about `0.94`, meaning most Gaussian deltas were clipped before execution;
+- `priority_inspection`: best success `0.15`, weighted POI completion around
+  `0.56`;
+- `connectivity_expansion`: best success `0.0`, effective radius around
+  `0.44`, coverage still too low.
+
+Added and ran:
+
+- `scripts/debug/phase11_direct_expert_improvement.py`
+
+Output:
+
+- `outputs/debug/mappo_direct_specialists/phase11_action_obs_scale/20260607_1510/`
+- `summary.json`
+- Chinese `report.md`
+
+Phase11 change set:
+
+- no BC;
+- no candidate-selection fallback;
+- no MPE dynamics change;
+- per-task phase-local Direct MAPPO configs only;
+- enabled `task_field_channel_mode: task_mask`;
+- enabled `use_spatial_field_context`;
+- reduced `log_std_init`, `log_std_max`, and entropy pressure;
+- shortened eval/checkpoint interval for debug visibility.
+
+Phase11 result:
+
+| Task | Best success | Best task metric | Last delta clip | Interpretation |
+|---|---:|---:|---:|---|
+| `area_coverage` | `0.0` | coverage `0.5503` | `0.0916` | action clipping fixed, but overlap/repeat coverage and sparse new-coverage reward remain blockers |
+| `belief_search` | `0.8333` | searched mass `0.3706` | `0.2666` | clear improvement; action-scale/obs fix is useful |
+| `priority_inspection` | `0.0` | weighted completion up to about `0.51` in eval detail but unstable | `0.1182` | action clipping fixed, but approach/visit reward remains too sparse |
+| `connectivity_expansion` | `0.0` | effective radius `0.2860` | `0.2676` | action clipping lower, but policy became too conservative for expansion |
+
+Code changes after phase11:
+
+- `tasks/waypoint/area_coverage.py` gained optional reward terms:
+  - `w_uncovered_approach` dense potential toward still-uncovered navigable
+    cells;
+  - `w_repeat_footprint` penalty for current sensor footprint falling on
+    already visited cells.
+- `tasks/waypoint/connectivity_expansion.py` gained optional
+  `w_connected_radius_hold` shaping for maintaining connected expansion
+  radius.
+
+All new reward terms default to `0.0`, so existing configs and historical
+results remain comparable unless a phase-local debug env config explicitly
+enables them.
+
+## 2026-06-07: Direct MAPPO specialist debug phases 12-16
+
+All outputs for these phases were written under:
+
+`outputs/debug/mappo_direct_specialists/`
+
+No new experiment output was written to `outputs/training`.
+
+### Code changes
+
+Direct policy:
+
+- `policies/direct_waypoint_policy.py`
+  - added optional `use_field_moment_context`;
+  - added optional `field_moment_include_inverse`;
+  - field moment context computes per-channel mass and centroid deltas from
+    the masked task field and appends them to each UAV actor token;
+  - default is disabled, so existing configs are compatible.
+- `policies/__init__.py`
+  - wires the new DirectWaypointPolicy options through `build_policy`.
+- `tests/test_direct_waypoint_policy.py`
+  - added coverage for field moment context.
+
+Rewards / task fields:
+
+- `tasks/waypoint/area_coverage.py`
+  - optional `w_uncovered_approach`;
+  - optional `w_repeat_footprint`;
+  - both default to `0.0`.
+- `tasks/waypoint/priority_inspection.py`
+  - optional `poi_target_field: gaussian`;
+  - optional `poi_target_sigma`;
+  - used to turn sparse POI markers into a continuous weighted target field
+    for Direct MAPPO.
+- `tasks/waypoint/connectivity_expansion.py`
+  - optional `w_connected_radius_hold`;
+  - optional `w_connected_spread`;
+  - optional `w_uncovered_approach`;
+  - optional `w_repeat_footprint`;
+  - all default to `0.0`.
+- `utils/tensorboard_metrics.py`
+  - added the new shaping metrics to the core TensorBoard allowlist.
+
+Debug scripts added:
+
+- `scripts/debug/phase12_direct_reward_curriculum.py`
+- `scripts/debug/phase13_direct_moment_lr_probe.py`
+- `scripts/debug/phase14_priority_connectivity_refine.py`
+- `scripts/debug/phase15_connectivity_uncovered_curriculum.py`
+- `scripts/debug/phase16_connectivity_hard_filter.py`
+
+Verification:
+
+- Direct policy / MAPPO / env / adapter tests passed after the policy change:
+  `13 passed`.
+- Connectivity reward/script tests passed after the connectivity changes:
+  `5 passed` and `9 passed` in the later subsets.
+- `git diff --check` passed after the tested edits.
+
+### Phase12: reward/curriculum probe
+
+Output:
+
+`outputs/debug/mappo_direct_specialists/phase12_reward_curriculum/20260607_1600/`
+
+Purpose:
+
+- keep phase11 low-clipping Direct action scale;
+- add phase-local task reward/curriculum shaping;
+- determine whether reward shaping, not adapter/dynamics, is the next blocker.
+
+Result:
+
+| Task | Best success | Best metric | Interpretation |
+|---|---:|---:|---|
+| `area_coverage` | `0.0` | coverage `0.6482` | coverage improved, but no success yet |
+| `belief_search` | `0.8333` | searched mass `0.3750` | still usable |
+| `priority_inspection` | `0.0` | weighted completion `0.0265` | simple POI curriculum/reward failed |
+| `connectivity_expansion` | `0.0` | radius `0.5313`, coverage `0.2782` | radius improved, coverage still far below target |
+
+### Phase13: field moment context + constant LR
+
+Output:
+
+`outputs/debug/mappo_direct_specialists/phase13_moment_constant_lr/20260607_1618/`
+
+Purpose:
+
+- fix late-stage weak PPO updates by switching phase-local configs to
+  `lr_schedule: constant`;
+- add compact task-field moment features to the Direct actor;
+- test whether far-away POI/belief/uncovered targets need explicit coordinate
+  summaries.
+
+Result:
+
+| Task | Best success | Best metric | Interpretation |
+|---|---:|---:|---|
+| `area_coverage` | `1.0` | coverage `0.8548` | debug specialist reached current strict area threshold |
+| `belief_search` | `0.8333` | searched mass `0.5467` | robustly better than formal baseline |
+| `priority_inspection` | `0.3333` | weighted completion `0.7231` | moment context made POI learning possible but not enough |
+| `connectivity_expansion` | `0.0` | radius `0.5626`, coverage `0.2675` | radius target met, coverage target still failed |
+
+### Phase14: priority gaussian target field + connectivity spread probe
+
+Output:
+
+`outputs/debug/mappo_direct_specialists/phase14_priority_connectivity_refine/20260607_1637/`
+
+Purpose:
+
+- refine unresolved `priority_inspection` and `connectivity_expansion`;
+- for priority, replace sparse POI target channel with Gaussian weighted
+  target field;
+- for connectivity, try connected angular spread reward.
+
+Result:
+
+| Task | Best success | Best metric | Interpretation |
+|---|---:|---:|---|
+| `priority_inspection` | `1.0` | weighted completion `0.8746` | debug/easy POI specialist solved; needs target POI-count validation |
+| `connectivity_expansion` | `0.0` | radius `0.4210`, coverage `0.2229` | angular spread reward made connectivity worse |
+
+### Phase15: connectivity uncovered-approach
+
+Output:
+
+`outputs/debug/mappo_direct_specialists/phase15_connectivity_uncovered/20260607_1656/`
+
+Purpose:
+
+- remove angular spread;
+- push coverage with uncovered-approach shaping while keeping target thresholds.
+
+Result:
+
+- best coverage reached `0.5429`, close to `success_coverage=0.55`;
+- violation was high (`~0.77`) and radius low at the high-coverage checkpoints;
+- best radius checkpoint had radius `0.4888`, coverage `0.2957`,
+  violation `0.2333`;
+- conclusion: this learned disconnected coverage, not connected coverage.
+
+### Phase16: connectivity hard waypoint filter
+
+Output:
+
+`outputs/debug/mappo_direct_specialists/phase16_connectivity_hard_filter/20260607_1714/`
+
+Purpose:
+
+- enable existing Direct waypoint hard filter:
+  `connectivity_action_filter: true`;
+- test whether hard waypoint filtering fixes the disconnected-coverage failure.
+
+Result:
+
+- violation dropped to `0.0` in every eval;
+- radius stayed high (`0.49-0.63`);
+- coverage stayed low (`0.26-0.32`);
+- train action validity was low early (`~0.60`) and later around `0.89`;
+- conclusion: hard filter is necessary for connectivity safety, but it narrows
+  the valid action space and does not solve connected coverage by itself.
+
+### Current Direct MAPPO specialist status
+
+| Task | Current debug status | Best known debug checkpoint |
+|---|---|---|
+| `area_coverage` | `CONVERGED_DEBUG_SINGLE_SEED` | `outputs/debug/mappo_direct_specialists/phase13_moment_constant_lr/20260607_1618/area_coverage/trial01/s0/checkpoints/checkpoint_best_eval.pt` |
+| `belief_search` | `CONVERGED_DEBUG_SINGLE_SEED` | `outputs/debug/mappo_direct_specialists/phase13_moment_constant_lr/20260607_1618/belief_search/trial01/s0/checkpoints/checkpoint_best_eval.pt` |
+| `priority_inspection` | `CONVERGED_DEBUG_EASY_CURRICULUM_SINGLE_SEED` | `outputs/debug/mappo_direct_specialists/phase14_priority_connectivity_refine/20260607_1637/priority_inspection/trial01/s0/checkpoints/checkpoint_best_eval.pt` |
+| `connectivity_expansion` | `NEED_MORE_TUNING` | best partial diagnostics are phase13 for radius, phase15 for disconnected coverage, and phase16 for hard-filtered safety |
+
+Do not claim full four-task convergence yet. Connectivity still needs a
+curriculum or explicit connected-coverage structure.

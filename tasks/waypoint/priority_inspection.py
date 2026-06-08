@@ -28,6 +28,28 @@ class PriorityInspectionScenario(WaypointScenario):
     def generate_candidate_waypoints(self, world: MissionWorld, task_state: dict) -> tuple[np.ndarray, np.ndarray]:
         return poi_candidates(world, np.asarray(task_state["pois"], dtype=np.float32), int(self.cfg("candidate_count", 12)))
 
+    def build_task_field(self, world: MissionWorld, task_state: dict) -> np.ndarray:
+        field = super().build_task_field(world, task_state)
+        if str(self.cfg("poi_target_field", "binary")) != "gaussian":
+            return field
+        pois = np.asarray(task_state.get("pois", []), dtype=np.float32)
+        visited = np.asarray(task_state.get("visited", np.zeros(len(pois), dtype=bool)), dtype=bool)
+        weights = np.asarray(task_state.get("weights", np.ones(len(pois), dtype=np.float32)), dtype=np.float32)
+        target = np.zeros_like(field[4], dtype=np.float32)
+        if len(pois):
+            centers = world.grid_cell_centers()
+            sigma = max(float(self.cfg("poi_target_sigma", 0.08)) * world.map_size, 1e-6)
+            for point, weight, is_visited in zip(pois, weights, visited):
+                if is_visited:
+                    continue
+                distance = np.linalg.norm(centers - point[None, None, :], axis=-1)
+                target += float(weight) * np.exp(-0.5 * (distance / sigma) ** 2).astype(np.float32)
+        target[~world.navigable_grid_mask()] = 0.0
+        if target.max() > 1e-8:
+            target /= float(target.max())
+        field[4] = target
+        return field
+
     def compute_rewards(self, prev_world: MissionWorld, world: MissionWorld, task_state: dict, transition_info: dict) -> dict:
         pois = np.asarray(task_state["pois"], dtype=np.float32)
         weights = np.asarray(task_state["weights"], dtype=np.float32)

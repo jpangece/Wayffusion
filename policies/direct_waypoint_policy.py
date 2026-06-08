@@ -30,6 +30,8 @@ class DirectWaypointPolicy(nn.Module):
         task_field_channel_masks: dict | None = None,
         use_spatial_field_context: bool = False,
         spatial_context_radii: list[float] | None = None,
+        use_field_moment_context: bool = False,
+        field_moment_include_inverse: bool = False,
     ):
         super().__init__()
         del action_space
@@ -39,15 +41,27 @@ class DirectWaypointPolicy(nn.Module):
         self.log_std_max = float(log_std_max)
         self.task_field_channel_mode = str(task_field_channel_mode)
         self.use_spatial_field_context = bool(use_spatial_field_context)
+        self.use_field_moment_context = bool(use_field_moment_context)
+        self.field_moment_include_inverse = bool(field_moment_include_inverse)
 
         cnn_channels = cnn_channels or [16, 32, 64]
         task_field_space = observation_space["task_field"] if "task_field" in observation_space else observation_space["global_task_field"]
         in_channels = int(task_field_space.shape[0])
+        field_height = int(task_field_space.shape[-2])
+        field_width = int(task_field_space.shape[-1])
         self.in_channels = in_channels
         self.register_buffer("task_field_masks", self._build_task_field_masks(in_channels, task_field_channel_masks), persistent=False)
         offsets = self._build_spatial_offsets(spatial_context_radii or [0.06, 0.12])
         self.register_buffer("spatial_offsets", offsets, persistent=False)
         self.spatial_context_dim = int(offsets.shape[0] * in_channels) if self.use_spatial_field_context else 0
+        self.field_moment_dim = int(in_channels * (6 if self.field_moment_include_inverse else 3)) if self.use_field_moment_context else 0
+        yy, xx = torch.meshgrid(
+            torch.linspace(0.0, 1.0, field_height),
+            torch.linspace(0.0, 1.0, field_width),
+            indexing="ij",
+        )
+        self.register_buffer("field_moment_x", xx.view(1, 1, field_height, field_width), persistent=False)
+        self.register_buffer("field_moment_y", yy.view(1, 1, field_height, field_width), persistent=False)
         conv_layers = []
         last_channels = in_channels
         for out_channels in cnn_channels:
@@ -79,7 +93,7 @@ class DirectWaypointPolicy(nn.Module):
 
         task_dim = int(observation_space["task_id"].shape[0])
         global_dim = int(observation_space["global_info"].shape[0])
-        actor_dim = agent_hidden_dim + self.field_dim + task_dim + global_dim + self.spatial_context_dim
+        actor_dim = agent_hidden_dim + self.field_dim + task_dim + global_dim + self.spatial_context_dim + self.field_moment_dim
         self.actor = nn.Sequential(
             nn.Linear(actor_dim, agent_hidden_dim),
             nn.ReLU(),
@@ -159,7 +173,7 @@ class DirectWaypointPolicy(nn.Module):
         return torch.ones((batch_size, num_agents), dtype=torch.bool, device=self._task_field(obs).device)
 
     def forward(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        field, _ = self._masked_task_field(obs)
+        field, field_mask = self._masked_task_field(obs)
         field_feat = self.field_pool(self.field_encoder(field))
         agents = obs["all_uav_states"]
         batch_size, num_agents, _ = agents.shape
@@ -174,6 +188,8 @@ class DirectWaypointPolicy(nn.Module):
         pieces = [agent_tokens, field_per_agent, task_per_agent, global_per_agent]
         if self.use_spatial_field_context:
             pieces.append(self._spatial_field_context(field, agents[..., :2]))
+        if self.use_field_moment_context:
+            pieces.append(self._field_moment_context(field, field_mask, agents[..., :2]))
         actor_input = torch.cat(pieces, dim=-1)
         delta_mean = torch.tanh(self.actor(actor_input)) * self.max_delta
         pooled_agents = _masked_mean(agent_tokens, agent_mask, dim=1)
@@ -189,6 +205,41 @@ class DirectWaypointPolicy(nn.Module):
         sampled = F.grid_sample(field, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
         sampled = sampled.squeeze(-1).permute(0, 2, 1).reshape(batch_size, num_agents, offsets.shape[0] * field.shape[1])
         return sampled
+
+    def _field_moment_context(
+        self,
+        field: torch.Tensor,
+        field_mask: torch.Tensor,
+        normalized_positions: torch.Tensor,
+    ) -> torch.Tensor:
+        high = torch.clamp(field, min=0.0)
+        contexts = [self._field_centroid_delta(high, field_mask, normalized_positions)]
+        if self.field_moment_include_inverse:
+            inverse = torch.clamp(1.0 - field, min=0.0) * field_mask[:, :, None, None]
+            contexts.append(self._field_centroid_delta(inverse, field_mask, normalized_positions))
+        return torch.cat(contexts, dim=-1)
+
+    def _field_centroid_delta(
+        self,
+        weights: torch.Tensor,
+        field_mask: torch.Tensor,
+        normalized_positions: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, num_agents, _ = normalized_positions.shape
+        active = field_mask.to(device=weights.device, dtype=weights.dtype)[:, :, None, None]
+        weights = weights * active
+        mass = weights.sum(dim=(-2, -1))
+        safe_mass = torch.clamp(mass, min=1e-6)
+        center_x = (weights * self.field_moment_x.to(weights)).sum(dim=(-2, -1)) / safe_mass
+        center_y = (weights * self.field_moment_y.to(weights)).sum(dim=(-2, -1)) / safe_mass
+        active_channels = (mass > 1e-6).to(weights.dtype)
+        center_x = center_x * active_channels + 0.5 * (1.0 - active_channels)
+        center_y = center_y * active_channels + 0.5 * (1.0 - active_channels)
+        mass_mean = mass / max(float(weights.shape[-2] * weights.shape[-1]), 1.0)
+        dx = center_x[:, None, :] - normalized_positions[..., 0:1]
+        dy = center_y[:, None, :] - normalized_positions[..., 1:2]
+        mass_per_agent = mass_mean[:, None, :].expand(batch_size, num_agents, -1)
+        return torch.cat([dx, dy, mass_per_agent], dim=-1)
 
     def _clip_delta(self, delta: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         norm = torch.linalg.norm(delta, dim=-1, keepdim=True)

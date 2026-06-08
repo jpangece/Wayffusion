@@ -20,11 +20,15 @@ class AreaCoverageScenario(WaypointScenario):
         coverage_ratio = world.coverage_ratio()
         new_ratio = max(coverage_ratio - prev_ratio, 0.0)
         overlap_ratio = float((world.visit_count_grid > 1.0).mean())
+        uncovered_approach = self._uncovered_approach_gain(prev_world, world)
+        repeat_footprint_ratio = self._repeat_footprint_ratio(prev_world, world)
         distance = path_length_delta(transition_info)
         safety = safety_penalty_count(transition_info)
         reward = (
             float(self.cfg("w_new", 160.0)) * new_ratio
+            + float(self.cfg("w_uncovered_approach", 0.0)) * uncovered_approach
             - float(self.cfg("w_overlap", 0.25)) * overlap_ratio
+            - float(self.cfg("w_repeat_footprint", 0.0)) * repeat_footprint_ratio
             - float(self.cfg("w_distance", 0.2)) * distance
             - float(self.cfg("w_safety", 2.0)) * safety
         )
@@ -35,6 +39,8 @@ class AreaCoverageScenario(WaypointScenario):
             {
                 "new_coverage_ratio": new_ratio,
                 "overlap_ratio": overlap_ratio,
+                "uncovered_approach_gain": uncovered_approach,
+                "repeat_footprint_ratio": repeat_footprint_ratio,
                 "path_length": float(sum(uav.path_length for uav in world.uavs)),
                 "min_pairwise_distance": float(transition_info.get("min_pairwise_distance", world.map_size)),
                 "safety_violation_count": safety,
@@ -46,7 +52,14 @@ class AreaCoverageScenario(WaypointScenario):
         return {
             "team_reward": float(reward),
             "per_agent_rewards": per_agent.astype(np.float32),
-            "components": {"new_coverage": new_ratio, "overlap": -overlap_ratio, "distance": -distance, "safety": -safety},
+            "components": {
+                "new_coverage": new_ratio,
+                "uncovered_approach": uncovered_approach,
+                "overlap": -overlap_ratio,
+                "repeat_footprint": -repeat_footprint_ratio,
+                "distance": -distance,
+                "safety": -safety,
+            },
             "metrics": metrics,
             "success": bool(metrics["success"]),
         }
@@ -54,6 +67,36 @@ class AreaCoverageScenario(WaypointScenario):
     def reset(self, rng: np.random.Generator, world: MissionWorld) -> dict:
         del rng, world
         return {"time_to_80_coverage": None}
+
+    def _uncovered_approach_gain(self, prev_world: MissionWorld, world: MissionWorld) -> float:
+        """Dense potential: reward moving closer to still-uncovered navigable cells."""
+        navigable = world.navigable_grid_mask()
+        uncovered = (prev_world.coverage_grid <= 0.0) & navigable
+        if not bool(uncovered.any()) or not world.uavs:
+            return 0.0
+        points = world.grid_cell_centers()[uncovered]
+        scale = max(float(self.cfg("uncovered_approach_scale", 0.20)) * world.map_size, 1e-6)
+
+        def score(positions: np.ndarray) -> float:
+            distances = np.linalg.norm(positions[:, None, :] - points[None, :, :], axis=-1)
+            proximity = np.exp(-distances / scale).max(axis=0)
+            return float(proximity.mean())
+
+        before = score(prev_world.get_uav_positions())
+        after = score(world.get_uav_positions())
+        return max(after - before, 0.0)
+
+    def _repeat_footprint_ratio(self, prev_world: MissionWorld, world: MissionWorld) -> float:
+        if not world.uavs:
+            return 0.0
+        ratios = []
+        navigable = world.navigable_grid_mask()
+        previously_seen = prev_world.visit_count_grid > 0.0
+        for uav in world.uavs:
+            mask = world.sensor_mask_for_position(uav.position, uav.sensor_radius) & navigable
+            denom = max(float(mask.sum()), 1.0)
+            ratios.append(float((mask & previously_seen).sum() / denom))
+        return float(np.mean(ratios)) if ratios else 0.0
 
     def get_metrics(self, world: MissionWorld, task_state: dict) -> dict:
         del task_state

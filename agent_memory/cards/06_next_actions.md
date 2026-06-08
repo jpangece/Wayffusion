@@ -1349,3 +1349,112 @@ Before the next full formal launch, a practical resource choice is:
 
 No convergence claim should be derived from the deleted run because it ended
 before its first evaluation.
+
+## After phase11 action/obs scale probe
+
+Phase11 showed that Direct MAPPO's first blocker was action/logprob mismatch
+from heavy Gaussian delta clipping. Lower log-std plus task field masking and
+spatial context reduced clipping substantially. `belief_search` improved to a
+best debug success rate of `0.8333`, but the other tasks still need reward and
+curriculum work.
+
+Next phase should be:
+
+- phase name: `phase12_reward_curriculum`;
+- output root:
+  `outputs/debug/mappo_direct_specialists/phase12_reward_curriculum/<runtime>/`;
+- no output in `outputs/training`;
+- no BC;
+- no candidate-selection fallback;
+- no MPE dynamics/backend changes.
+
+Recommended phase12 plan:
+
+- `area_coverage`: enable optional `w_uncovered_approach` and
+  `w_repeat_footprint`, increase overlap/repeat penalties, reduce distance
+  penalty, and monitor `coverage_ratio`, `overlap_ratio`,
+  `repeat_footprint_ratio`, and `delta_clip_fraction`.
+- `belief_search`: keep the phase11 action/obs improvements and validate a
+  slightly longer run; do not over-tune unless clipping rises again.
+- `priority_inspection`: enable/raise `w_approach`, raise first-visit reward,
+  strengthen repeat penalty, and use a clearly labelled easy POI curriculum
+  (`num_pois_range` reduced) only as a learning-signal diagnostic, not target
+  success.
+- `connectivity_expansion`: loosen the too-conservative phase11 action scale
+  slightly, raise expansion/coverage rewards, add small
+  `w_connected_radius_hold`, and keep target connectivity constraints visible
+  in the report.
+
+Phase12 report must use the structure:
+
+1. phenomenon;
+2. cause analysis;
+3. improvement strategy;
+4. concrete operation;
+5. experiment;
+6. observed result;
+7. feedback/next action.
+
+If phase12 still leaves tasks below threshold, do not mark them as converged.
+Use `NEED_MORE_TUNING` and launch a follow-up phase with a narrower hypothesis.
+
+## After phases 12-16 Direct MAPPO debug
+
+Current best debug status:
+
+- `area_coverage`: phase13 reached `eval_success_rate=1.0` and
+  `coverage_ratio=0.8548` under randomized debug eval.
+- `belief_search`: phase13 reached `eval_success_rate=0.8333` and
+  `searched_probability_mass=0.5467`.
+- `priority_inspection`: phase14 reached `eval_success_rate=1.0` and
+  `weighted_poi_completion=0.8746` with the easy POI curriculum and Gaussian
+  POI target field.
+- `connectivity_expansion`: still `NEED_MORE_TUNING`.
+
+Validated useful changes:
+
+- DirectWaypointPolicy `use_field_moment_context` is useful and should be kept
+  for future Direct specialists.
+- Constant LR is better than linear LR for these short debug phases; linear LR
+  caused late-stage `approx_kl` collapse.
+- Priority needs Gaussian/continuous target field, not sparse one-cell POI
+  markers only.
+- Connectivity needs `connectivity_action_filter: true` for safety. Without it,
+  reward-only training can learn high disconnected coverage.
+
+Connectivity diagnosis:
+
+- Phase13: radius could exceed target (`0.56`) but coverage was low (`0.27`).
+- Phase15: coverage could approach target (`0.54`) but violation was high
+  (`~0.77`) and radius was low at high coverage.
+- Phase16: hard filter forced violation to `0.0` and radius stayed high
+  (`0.49-0.63`), but coverage stayed low (`0.26-0.32`).
+- Therefore connectivity is not solved by more scalar reward weight alone.
+
+Recommended next connectivity phase:
+
+- phase name: `phase17_connectivity_curriculum`;
+- output root:
+  `outputs/debug/mappo_direct_specialists/phase17_connectivity_curriculum/<runtime>/`;
+- keep Direct MAPPO, no BC, no candidate policy;
+- keep MPE dynamics and waypoint adapter unchanged;
+- train with `connectivity_action_filter: true`;
+- use a curriculum:
+  1. easier comm curriculum, for example `comm_radius=0.42`,
+     `base_comm_radius=0.52`;
+  2. target eval still on current `comm_radius=0.36`,
+     `base_comm_radius=0.45`;
+  3. if easy train succeeds but target eval fails, anneal
+     `0.42 -> 0.39 -> 0.36`;
+- lower `max_delta` if action validity remains below `0.90`;
+- consider explicit connected-coverage observation if curriculum fails:
+  per-agent distance to base, nearest relay gap, and connected uncovered
+  frontier summary.
+
+Before any formal training:
+
+- do not use phase14 priority as final target proof until it is validated on
+  target POI count (`num_pois_range=[6,10]`) and multiple seeds;
+- run at least seeds `0,1,2` for area/belief/priority debug winners;
+- connectivity remains blocked at debug stage and should not enter formal
+  training yet.

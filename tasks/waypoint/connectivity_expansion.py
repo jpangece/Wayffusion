@@ -27,6 +27,9 @@ class ConnectivityExpansionScenario(WaypointScenario):
         coverage_gain = max(world.coverage_ratio() - prev_cov, 0.0)
         connected = world.connected_to_base_mask()
         violation = 1.0 - float(np.mean(connected)) if len(connected) else 0.0
+        connected_radius_hold = radius * float(np.mean(connected)) if len(connected) else 0.0
+        uncovered_approach = self._uncovered_approach_gain(prev_world, world)
+        repeat_footprint_ratio = self._repeat_footprint_ratio(prev_world, world)
         if violation > 1e-6:
             task_state["disconnect_steps"] += 1
             task_state["current_disconnect_run"] += 1
@@ -34,13 +37,18 @@ class ConnectivityExpansionScenario(WaypointScenario):
             task_state["current_disconnect_run"] = 0
         task_state["max_disconnect_run"] = max(int(task_state["max_disconnect_run"]), int(task_state["current_disconnect_run"]))
         relay_credit = self._relay_credit(world)
+        connected_spread = self._connected_angular_spread(world)
         distance = path_length_delta(transition_info)
         safety = safety_penalty_count(transition_info)
         reward = (
             float(self.cfg("w_expand", 5.0)) * radius_gain
             + float(self.cfg("w_coverage", 120.0)) * coverage_gain
+            + float(self.cfg("w_connected_radius_hold", 0.0)) * connected_radius_hold
+            + float(self.cfg("w_connected_spread", 0.0)) * connected_spread
+            + float(self.cfg("w_uncovered_approach", 0.0)) * uncovered_approach
             + float(self.cfg("w_relay", 0.5)) * relay_credit
             - float(self.cfg("w_disconnect", 4.0)) * violation
+            - float(self.cfg("w_repeat_footprint", 0.0)) * repeat_footprint_ratio
             - float(self.cfg("w_distance", 0.15)) * distance
             - float(self.cfg("w_safety", 2.0)) * safety
         )
@@ -53,13 +61,28 @@ class ConnectivityExpansionScenario(WaypointScenario):
                 "longest_disconnected_duration": float(task_state["max_disconnect_run"]),
                 "relay_utilization_ratio": float(relay_credit / max(len(world.uavs), 1)),
                 "effective_explored_radius": float(radius),
+                "connected_radius_hold": float(connected_radius_hold),
+                "connected_angular_spread": float(connected_spread),
+                "uncovered_approach_gain": float(uncovered_approach),
+                "repeat_footprint_ratio": float(repeat_footprint_ratio),
                 "coverage_ratio": world.coverage_ratio(),
             }
         )
         return {
             "team_reward": float(reward),
             "per_agent_rewards": per_agent.astype(np.float32),
-            "components": {"expand": radius_gain, "coverage": coverage_gain, "relay": relay_credit, "disconnect": -violation, "distance": -distance, "safety": -safety},
+            "components": {
+                "expand": radius_gain,
+                "coverage": coverage_gain,
+                "connected_radius_hold": connected_radius_hold,
+                "connected_spread": connected_spread,
+                "uncovered_approach": uncovered_approach,
+                "relay": relay_credit,
+                "disconnect": -violation,
+                "repeat_footprint": -repeat_footprint_ratio,
+                "distance": -distance,
+                "safety": -safety,
+            },
             "metrics": metrics,
             "success": bool(metrics["success"]),
         }
@@ -92,6 +115,50 @@ class ConnectivityExpansionScenario(WaypointScenario):
             if np.count_nonzero(world.connected_to_base_mask()) > np.count_nonzero(visited[1:]):
                 credit += 1.0
         return credit
+
+    def _connected_angular_spread(self, world: MissionWorld) -> float:
+        connected = world.connected_to_base_mask()
+        positions = world.get_uav_positions()
+        if len(positions) < 2 or np.count_nonzero(connected) < 2:
+            return 0.0
+        rel = positions[connected] - world.base_position[None, :]
+        dist = np.linalg.norm(rel, axis=-1)
+        rel = rel[dist > 1e-6]
+        if len(rel) < 2:
+            return 0.0
+        angles = np.arctan2(rel[:, 1], rel[:, 0])
+        unit = np.stack([np.cos(angles), np.sin(angles)], axis=-1)
+        resultant = np.linalg.norm(unit.mean(axis=0))
+        return float(np.clip(1.0 - resultant, 0.0, 1.0))
+
+    def _uncovered_approach_gain(self, prev_world: MissionWorld, world: MissionWorld) -> float:
+        navigable = world.navigable_grid_mask()
+        uncovered = (prev_world.coverage_grid <= 0.0) & navigable
+        if not bool(uncovered.any()) or not world.uavs:
+            return 0.0
+        points = world.grid_cell_centers()[uncovered]
+        scale = max(float(self.cfg("uncovered_approach_scale", 0.24)) * world.map_size, 1e-6)
+
+        def score(positions: np.ndarray) -> float:
+            distances = np.linalg.norm(positions[:, None, :] - points[None, :, :], axis=-1)
+            proximity = np.exp(-distances / scale).max(axis=0)
+            return float(proximity.mean())
+
+        before = score(prev_world.get_uav_positions())
+        after = score(world.get_uav_positions())
+        return max(after - before, 0.0)
+
+    def _repeat_footprint_ratio(self, prev_world: MissionWorld, world: MissionWorld) -> float:
+        if not world.uavs:
+            return 0.0
+        ratios = []
+        navigable = world.navigable_grid_mask()
+        previously_seen = prev_world.visit_count_grid > 0.0
+        for uav in world.uavs:
+            mask = world.sensor_mask_for_position(uav.position, uav.sensor_radius) & navigable
+            denom = max(float(mask.sum()), 1.0)
+            ratios.append(float((mask & previously_seen).sum() / denom))
+        return float(np.mean(ratios)) if ratios else 0.0
 
     def get_metrics(self, world: MissionWorld, task_state: dict) -> dict:
         connected_ratio = float(np.mean(world.connected_to_base_mask())) if world.uavs else 1.0
