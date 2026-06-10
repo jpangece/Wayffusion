@@ -7189,3 +7189,64 @@ Verification:
 - All phase30 eval outputs include CSV, summary, report, and GIFs.
 - No active tmux sessions remain.
 - `git diff --check` passed.
+
+### Phase31 training-seed reproducibility protocol
+
+Date: 2026-06-10.
+
+Purpose:
+
+- Validate whether the full Phase24 -> Phase25 -> Phase26 curriculum is reproducible from independent training seeds.
+- This is not another reward, observation, graph, or hard-filter experiment.
+
+Code changes:
+
+- `scripts/train_mappo_waypoint.py`
+  - `--seed` now seeds Python `random`, NumPy, PyTorch CPU, and all visible CUDA devices before policy construction and environment creation.
+  - the resolved training seed is stored in `train_config.yaml` and `snapshot/metadata.json`.
+- Added `scripts/debug_connectivity_soft_phases/run_phase31_training_seed_reproducibility.py`.
+  - training seeds are fixed to `1, 2, 3`;
+  - each seed independently runs Phase24, Phase25, and Phase26 for exactly 2000 PPO updates per stage;
+  - Phase24 starts randomly;
+  - Phase25 uses only the same seed's Phase24 best checkpoint;
+  - Phase26 uses only the same seed's Phase25 best checkpoint;
+  - each stage must contain 2000 CSV rows, final update 2000, `checkpoint_2000.pt`, and `checkpoint_best_eval.pt`;
+  - any nonzero connectivity hard-filter or replacement metric invalidates the run;
+  - after Phase26, the same seed's best checkpoint receives a deterministic 100-episode randomized eval with media;
+  - per-seed reports and aggregate mean/std/worst/failure-taxonomy reports are generated after completion.
+- Added:
+  - `scripts/debug_connectivity_soft_phases/launch_phase31_tmux.sh`
+  - `scripts/debug_connectivity_soft_phases/status_phase31.sh`
+
+Static verification:
+
+- Python compile checks passed.
+- Shell syntax checks passed.
+- Phase24/25/26 generated YAML configs parsed successfully.
+- Generated configs enforce:
+  - `num_envs=8`
+  - `rollout_steps=128`
+  - `total_updates=2000`
+  - randomized train/eval
+  - `connectivity_action_filter=false`
+  - `connectivity_candidate_filter=false`
+- `git diff --check` passed before launch.
+
+Active run:
+
+- tmux: `wf_phase31_20260610_0954`
+- root:
+  `outputs/debug/mappo_direct_specialists/phase31_connectivity_training_seed_reproducibility/20260610_0954/`
+- GPU assignment:
+  - seed 1 -> GPU 0
+  - seed 2 -> GPU 1
+  - seed 3 -> GPU 2
+- Seeds run concurrently, but Phase24 -> Phase25 -> Phase26 remains strictly serial within each seed.
+- Initial check at update 6:
+  - all three seeds running;
+  - hard filter `0`;
+  - replacement count `0`;
+  - action validity approximately `0.95`;
+  - no startup/runtime failure.
+
+Do not claim Phase31 passed until all three seeds complete 6000 updates and their 100-episode evals.

@@ -2157,3 +2157,45 @@ If continuing:
   - train repeat seeds from phase26 recipe;
   - implement explicit connectivity cost multiplier schedule;
   - evaluate whether formal `max_violation_rate=0.10` should be relaxed slightly to `0.11-0.12` for randomized debug, while keeping the metric reported transparently.
+
+### Active Phase31 training-seed reproducibility
+
+Run root:
+
+`outputs/debug/mappo_direct_specialists/phase31_connectivity_training_seed_reproducibility/20260610_0954/`
+
+tmux:
+
+`wf_phase31_20260610_0954`
+
+Monitor:
+
+```bash
+scripts/debug_connectivity_soft_phases/status_phase31.sh 20260610_0954
+```
+
+TensorBoard:
+
+```bash
+/opt/conda/bin/tensorboard \
+  --logdir outputs/debug/mappo_direct_specialists/phase31_connectivity_training_seed_reproducibility/20260610_0954 \
+  --bind_all \
+  --port 6011
+```
+
+Protocol:
+
+- seeds `1,2,3`;
+- each seed: Phase24 2000 -> Phase25 2000 -> Phase26 2000;
+- no cross-seed checkpoint reuse;
+- no short run or early termination;
+- hard connectivity action/candidate filters disabled;
+- final deterministic randomized eval: 100 episodes per seed.
+
+After completion:
+
+- read `aggregate_summary.json` and `aggregate_report.md`;
+- pass requires all seed chains to be structurally valid and hard-filter-free;
+- inspect mean/std/worst success, coverage, radius, violation, connected/disconnected new coverage, and action validity;
+- if passed, freeze connectivity and move to the other specialists;
+- if failed, choose Phase32A/B/C/D from the recorded failure taxonomy rather than adding another static reward sweep.

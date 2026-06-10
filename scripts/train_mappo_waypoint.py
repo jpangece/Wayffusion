@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import yaml
 import torch
 
@@ -45,6 +47,15 @@ def deep_update(base: dict, override: dict) -> dict:
 
 def safe_name(value: str) -> str:
     return safe_slug(value)
+
+
+def seed_training_rngs(seed: int) -> None:
+    """Seed policy initialization, PPO minibatches, and action sampling."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
@@ -156,6 +167,8 @@ def main() -> None:
     eval_config = load_yaml(args.eval_config)
     env_config = env_config_for_randomization_mode(load_yaml(args.env_config), args.train_randomization)
     eval_randomization_mode = resolve_eval_randomization_mode(eval_config, args.eval_randomization)
+    training_seed = int(args.seed if args.seed is not None else env_config.get("seed", 0))
+    seed_training_rngs(training_seed)
     eval_episodes = int(args.eval_episodes if args.eval_episodes is not None else eval_config.get("eval_episodes", 10))
     record_eval_episodes = int(
         args.record_eval_episodes
@@ -170,8 +183,8 @@ def main() -> None:
     env_config["task_sampling_probs"] = {task: 1.0 for task in task_names}
     if args.num_agents is not None:
         env_config["num_agents"] = int(args.num_agents)
-    if args.seed is not None:
-        env_config["seed"] = int(args.seed)
+    env_config["seed"] = training_seed
+    train_config["seed"] = training_seed
     if args.num_envs is not None:
         train_config["num_envs"] = int(args.num_envs)
     if args.total_updates is not None:
@@ -211,7 +224,18 @@ def main() -> None:
     )
     (snapshot / "eval_config.yaml").write_text(yaml.safe_dump(resolved_eval_config, sort_keys=False), encoding="utf-8")
     (snapshot / "cli_args.yaml").write_text(yaml.safe_dump(vars(args), sort_keys=False), encoding="utf-8")
-    (snapshot / "metadata.json").write_text(json.dumps({"created_at": datetime.now().astimezone().isoformat(), "main_env": "WaypointMultiUAVEnv"}, indent=2) + "\n", encoding="utf-8")
+    (snapshot / "metadata.json").write_text(
+        json.dumps(
+            {
+                "created_at": datetime.now().astimezone().isoformat(),
+                "main_env": "WaypointMultiUAVEnv",
+                "training_seed": training_seed,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     writer = build_writer(output_dir, args.tensorboard)
     history = []
 
