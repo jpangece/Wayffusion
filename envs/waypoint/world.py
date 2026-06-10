@@ -334,10 +334,20 @@ class MissionWorld:
         return np.asarray([uav.position for uav in self.uavs], dtype=np.float32)
 
     def update_communication_graph(self) -> np.ndarray:
-        n = len(self.uavs)
+        positions = self.get_uav_positions()
+        graph = self.communication_graph_for_positions(positions)
+        visited = self.base_connected_nodes_for_graph(graph)
+        for i, uav in enumerate(self.uavs):
+            uav.connected_to_base = bool(visited[i + 1])
+        self.communication_graph = graph
+        return graph
+
+    def communication_graph_for_positions(self, positions: np.ndarray) -> np.ndarray:
+        """Build the base+UAV communication graph for arbitrary 2D positions."""
+        positions = np.asarray(positions, dtype=np.float32)
+        n = int(len(positions))
         graph = np.zeros((n + 1, n + 1), dtype=bool)
         graph[0, 0] = True
-        positions = self.get_uav_positions()
         for idx, pos in enumerate(positions, start=1):
             base_link = np.linalg.norm(pos - self.base_position) <= self.base_comm_radius
             graph[0, idx] = graph[idx, 0] = bool(base_link)
@@ -345,22 +355,73 @@ class MissionWorld:
             dist = self.compute_pairwise_distances(positions)
             for i in range(n):
                 for j in range(i + 1, n):
-                    radius = min(self.uavs[i].comm_radius, self.uavs[j].comm_radius)
-                    if dist[i, j] <= radius:
+                    radius_i = self.uavs[i].comm_radius if i < len(self.uavs) else float(getattr(self, "comm_radius", self.base_comm_radius))
+                    radius_j = self.uavs[j].comm_radius if j < len(self.uavs) else float(getattr(self, "comm_radius", self.base_comm_radius))
+                    if dist[i, j] <= min(radius_i, radius_j):
                         graph[i + 1, j + 1] = graph[j + 1, i + 1] = True
-        visited = np.zeros(n + 1, dtype=bool)
-        stack = [0]
+        return graph
+
+    def base_connected_nodes_for_graph(self, graph: np.ndarray) -> np.ndarray:
+        graph = np.asarray(graph, dtype=bool)
+        visited = np.zeros(graph.shape[0], dtype=bool)
+        if graph.shape[0] == 0:
+            return visited
         visited[0] = True
+        stack = [0]
         while stack:
             node = stack.pop()
             for nxt in np.where(graph[node])[0]:
                 if not visited[nxt]:
                     visited[nxt] = True
                     stack.append(int(nxt))
-        for i, uav in enumerate(self.uavs):
-            uav.connected_to_base = bool(visited[i + 1])
-        self.communication_graph = graph
-        return graph
+        return visited
+
+    def connected_to_base_mask_for_positions(self, positions: np.ndarray) -> np.ndarray:
+        graph = self.communication_graph_for_positions(positions)
+        return self.base_connected_nodes_for_graph(graph)[1:].astype(bool)
+
+    def connectivity_margin_stats(self, positions: np.ndarray | None = None, threshold: float = 0.05) -> dict[str, np.ndarray | float]:
+        """Distance-to-disconnection diagnostics for soft connectivity rewards.
+
+        For each UAV, the margin is the best communication slack to the current
+        base-connected component, excluding the UAV itself. Base links use
+        base_comm_radius; UAV-UAV links use the pair's smaller comm radius.
+        Disconnected UAVs therefore receive negative margins.
+        """
+        positions = self.get_uav_positions() if positions is None else np.asarray(positions, dtype=np.float32)
+        n = int(len(positions))
+        if n == 0:
+            empty = np.zeros(0, dtype=np.float32)
+            return {
+                "connectivity_margins": empty,
+                "connectivity_margin_penalties": empty,
+                "connectivity_margin_mean": 0.0,
+                "connectivity_margin_min": 0.0,
+                "connectivity_margin_penalty": 0.0,
+            }
+        graph = self.communication_graph_for_positions(positions)
+        connected_nodes = self.base_connected_nodes_for_graph(graph)
+        margins = np.full(n, -float(self.map_size), dtype=np.float32)
+        for i, pos in enumerate(positions):
+            best_margin = float(self.base_comm_radius - np.linalg.norm(pos - self.base_position))
+            for node_idx in np.where(connected_nodes[1:])[0]:
+                if int(node_idx) == i:
+                    continue
+                peer = positions[int(node_idx)]
+                radius_i = self.uavs[i].comm_radius if i < len(self.uavs) else float(getattr(self, "comm_radius", self.base_comm_radius))
+                radius_j = self.uavs[int(node_idx)].comm_radius if int(node_idx) < len(self.uavs) else float(getattr(self, "comm_radius", self.base_comm_radius))
+                peer_margin = float(min(radius_i, radius_j) - np.linalg.norm(pos - peer))
+                best_margin = max(best_margin, peer_margin)
+            margins[i] = float(best_margin)
+        threshold = max(float(threshold), 1e-6)
+        penalties = np.maximum(0.0, threshold - margins) / threshold
+        return {
+            "connectivity_margins": margins.astype(np.float32),
+            "connectivity_margin_penalties": penalties.astype(np.float32),
+            "connectivity_margin_mean": float(margins.mean()),
+            "connectivity_margin_min": float(margins.min()),
+            "connectivity_margin_penalty": float(penalties.mean()),
+        }
 
     def connected_to_base_mask(self) -> np.ndarray:
         self.update_communication_graph()

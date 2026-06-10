@@ -266,6 +266,7 @@ class WaypointMultiUAVEnv:
                 raw_waypoints = self.world.get_uav_positions() + raw_waypoints
             require_connectivity = self.current_scenario.name == "connectivity_expansion" and bool(self.config.get("connectivity_action_filter", False))
             raw_waypoints_2d = raw_waypoints[..., :2].astype(np.float32)
+            action_connectivity_info = self._action_connectivity_diagnostics(raw_waypoints_2d)
             safety_result = self.safety.validate_waypoints(
                 self.world,
                 raw_waypoints_2d,
@@ -277,6 +278,8 @@ class WaypointMultiUAVEnv:
             raw_waypoints[~action_shape_valid] = self.world.get_uav_positions()[~action_shape_valid]
             if not np.all(validity) and bool(self.config.get("strict_action_validation", False)):
                 raise ValueError(f"Illegal waypoint action: {safety_result.to_info()}")
+        if self.action_mode == "candidate_index_legacy":
+            action_connectivity_info = self._action_connectivity_diagnostics(raw_waypoints[..., :2].astype(np.float32))
         safety_result.valid_mask &= validity
         safety_result.rejected_mask |= ~validity
         safety_info = safety_result.to_info()
@@ -289,6 +292,14 @@ class WaypointMultiUAVEnv:
         dynamics_info = self.dynamics_backend.step(self.world, adapter_output.controls, adapter_output, safety_result)
         transition_info = self._merge_transition_info(safety_result, adapter_output, dynamics_info)
         transition_info["invalid_action_count"] = int((~validity).sum())
+        transition_info["connectivity_action_filter_enabled"] = bool(
+            self.current_scenario.name == "connectivity_expansion"
+            and bool(self.config.get("connectivity_action_filter", False))
+        )
+        transition_info["connectivity_filter_replacement_count"] = int(
+            safety_info.get("connectivity_action_rejected_count", 0)
+        )
+        transition_info.update(action_connectivity_info)
         reward_result = self.current_scenario.compute_rewards(prev_world, self.world, self.task_state, transition_info)
         self.last_transition_info = transition_info
         self.last_reward_result = reward_result
@@ -334,6 +345,25 @@ class WaypointMultiUAVEnv:
             key: value for key, value in safety_info.items() if isinstance(value, (int, float, bool, str, np.integer, np.floating, np.bool_))
         }
         return transition
+
+    def _action_connectivity_diagnostics(self, predicted_positions: np.ndarray) -> dict[str, Any]:
+        if self.current_scenario is None or self.current_scenario.name != "connectivity_expansion":
+            return {}
+        if not bool(self.current_scenario.cfg("action_risk_use_predicted_graph", self.config.get("action_risk_use_predicted_graph", False))):
+            return {}
+        positions = np.asarray(predicted_positions, dtype=np.float32)
+        connected = self.world.connected_to_base_mask_for_positions(positions)
+        violation = 1.0 - float(np.mean(connected)) if len(connected) else 0.0
+        disconnected = ~connected
+        return {
+            "predicted_positions": positions.astype(np.float32),
+            "predicted_connected_mask": connected.astype(bool),
+            "predicted_disconnected_mask": disconnected.astype(bool),
+            "predicted_connected_to_base_ratio": float(np.mean(connected)) if len(connected) else 1.0,
+            "predicted_connectivity_violation": float(violation),
+            "action_disconnect_risk": float(violation),
+            "unsafe_action_ratio": float(np.mean(disconnected)) if len(disconnected) else 0.0,
+        }
 
     def _actions_to_waypoints(self, actions: dict[str, np.ndarray | int]) -> tuple[np.ndarray, np.ndarray]:
         strict = bool(self.config.get("strict_action_validation", False))
@@ -488,6 +518,8 @@ class WaypointMultiUAVEnv:
             "path_length": float(sum(uav.path_length for uav in self.world.uavs)),
             "collision_rate": float(self.last_transition_info.get("safety_violation_count", 0) / max(self.world.step_count * self.num_agents, 1)),
             "invalid_action_count": int(self.last_transition_info.get("invalid_action_count", 0)),
+            "connectivity_action_filter_enabled": bool(self.last_transition_info.get("connectivity_action_filter_enabled", False)),
+            "connectivity_filter_replacement_count": int(self.last_transition_info.get("connectivity_filter_replacement_count", 0)),
             "candidate_mask_empty_count": int(np.count_nonzero(~self.last_candidate_mask.any(axis=1))) if self._exposes_candidates() else 0,
             "episode_seed": self.seed_value,
             "domain_randomization": deepcopy(self.episode_randomization_info),

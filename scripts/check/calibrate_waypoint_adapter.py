@@ -515,7 +515,7 @@ def run_mappo_smoke(base_config: dict, setting: dict[str, float], output_dir: Pa
             task_names=env_config["task_names"],
             eval_episodes=1,
             headless=True,
-            record_eval_episodes=0,
+            record_eval_episodes=1,
             record_format="gif",
             record_fps=8,
             record_interval=1,

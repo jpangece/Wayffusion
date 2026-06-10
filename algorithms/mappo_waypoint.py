@@ -155,6 +155,15 @@ class MAPPOWaypointTrainer:
         self.current_obs, _ = self.env_batch.reset()
         self.global_step = 0
         self.completed_episodes = 0
+        self.use_lagrangian_connectivity_cost = bool(train_config.get("use_lagrangian_connectivity_cost", False))
+        self.lambda_connectivity_cost = float(train_config.get("lambda_cost_init", 1.0))
+        self.lambda_connectivity_cost = float(
+            np.clip(
+                self.lambda_connectivity_cost,
+                float(train_config.get("lambda_cost_min", 0.0)),
+                float(train_config.get("lambda_cost_max", 50.0)),
+            )
+        )
 
     def _flatten_time_env(self, array: np.ndarray) -> np.ndarray:
         return array.reshape(array.shape[0] * array.shape[1], *array.shape[2:])
@@ -169,6 +178,33 @@ class MAPPOWaypointTrainer:
         lr = float(self.train_config["learning_rate"]) * frac
         for param_group in self.optimizer.param_groups:
             param_group["lr"] = lr
+
+    def _update_lagrangian_connectivity_cost(self, mean_cost: float) -> dict[str, float]:
+        target = float(self.train_config.get("connectivity_cost_target", 0.05))
+        error = float(mean_cost) - target
+        if self.use_lagrangian_connectivity_cost:
+            lr = float(self.train_config.get("lagrangian_lr", 0.01))
+            self.lambda_connectivity_cost = float(
+                np.clip(
+                    self.lambda_connectivity_cost + lr * error,
+                    float(self.train_config.get("lambda_cost_min", 0.0)),
+                    float(self.train_config.get("lambda_cost_max", 50.0)),
+                )
+            )
+        return {
+            "lambda_connectivity_cost": float(self.lambda_connectivity_cost if self.use_lagrangian_connectivity_cost else 0.0),
+            "connectivity_cost_target": float(target),
+            "connectivity_cost_error": float(error),
+        }
+
+    def _info_scalar(self, info: dict, key: str, default: float = 0.0) -> float:
+        value = info.get(key, None)
+        if value is None:
+            value = info.get("task_metrics", {}).get(key, default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
 
     def collect_rollout(self) -> tuple[MAPPOWaypointBatch, dict]:
         horizon = int(self.train_config["rollout_steps"])
@@ -222,6 +258,47 @@ class MAPPOWaypointTrainer:
         clipped_delta_norm_means = []
         clipped_delta_norm_maxs = []
         delta_clip_fractions = []
+        raw_team_rewards = []
+        penalized_team_rewards = []
+        connectivity_costs = []
+        lagrangian_penalties = []
+        extra_metric_keys = [
+            "connected_to_base_ratio",
+            "connectivity_violation",
+            "connectivity_margin_mean",
+            "connectivity_margin_min",
+            "connectivity_margin_penalty",
+            "action_disconnect_risk",
+            "action_disconnect_risk_mean",
+            "predicted_connected_to_base_ratio",
+            "predicted_connectivity_violation",
+            "unsafe_action_ratio",
+            "action_risk_penalty",
+            "connectivity_cost",
+            "raw_task_reward",
+            "penalized_reward",
+            "lagrangian_penalty",
+            "coverage_gain",
+            "connected_new_coverage_gain",
+            "disconnected_new_coverage_gain",
+            "connected_new_coverage_cells",
+            "disconnected_new_coverage_cells",
+            "connected_new_coverage_ratio",
+            "disconnected_new_coverage_ratio",
+            "connected_coverage_reward",
+            "disconnected_coverage_penalty",
+            "uncovered_approach_gain",
+            "repeat_footprint_ratio",
+            "connected_radius_hold",
+            "connected_angular_spread",
+            "relaxed_success",
+            "relaxed_success_coverage",
+            "relaxed_success_radius",
+            "relaxed_max_violation_rate",
+            "connectivity_action_filter_enabled",
+            "connectivity_filter_replacement_count",
+        ]
+        extra_metrics = {key: [] for key in extra_metric_keys}
         start = time.perf_counter()
         for _ in range(horizon):
             obs_tensor = _obs_to_tensor(self.current_obs, self.device)
@@ -264,7 +341,15 @@ class MAPPOWaypointTrainer:
             step = self.env_batch.step(env_actions)
             with torch.no_grad():
                 bootstrap_value = self.policy.get_action_and_value(_obs_to_tensor(step.bootstrap_observations, self.device)).value
-            train_rewards = step.team_rewards.copy()
+            raw_rewards = step.team_rewards.copy()
+            step_costs = np.asarray([self._info_scalar(info, "connectivity_cost", 0.0) for info in step.infos], dtype=np.float32)
+            applied_lambda = float(self.lambda_connectivity_cost if self.use_lagrangian_connectivity_cost else 0.0)
+            step_lagrangian_penalty = applied_lambda * step_costs
+            train_rewards = raw_rewards - step_lagrangian_penalty
+            raw_team_rewards.extend(float(value) for value in raw_rewards)
+            penalized_team_rewards.extend(float(value) for value in train_rewards)
+            connectivity_costs.extend(float(value) for value in step_costs)
+            lagrangian_penalties.extend(float(value) for value in step_lagrangian_penalty)
             if self.train_config.get("reward_norm", True):
                 self.reward_rms.update(train_rewards)
                 train_rewards = self.reward_rms.normalize(train_rewards)
@@ -283,7 +368,7 @@ class MAPPOWaypointTrainer:
                 step.infos,
             )
             next_values.append(bootstrap_value.detach().cpu().numpy())
-            rollout_rewards.append(float(np.mean(step.team_rewards)))
+            rollout_rewards.append(float(np.mean(train_rewards if self.use_lagrangian_connectivity_cost else step.team_rewards)))
             self.completed_episodes += int(np.count_nonzero(step.done_for_reset))
             for info in step.infos:
                 num_agents = max(len(info.get("per_agent_rewards", [])), 1)
@@ -309,6 +394,8 @@ class MAPPOWaypointTrainer:
                 no_fly_zone_counts.append(float(info.get("no_fly_zone_count", 0.0)))
                 domain_randomization_flags.append(float(bool(info.get("domain_randomization_enabled", False))))
                 geofence_counts.append(float(info.get("geofence_violation_count", 0.0)))
+                for key in extra_metric_keys:
+                    extra_metrics[key].append(self._info_scalar(info, key, 0.0))
                 dyn = info.get("dynamics_info", {})
                 real_mpe_flags.append(float(bool(dyn.get("uses_real_mpe_core", False))))
                 mpe_step_calls.append(float(dyn.get("mpe_world_step_calls", 0.0)))
@@ -334,9 +421,13 @@ class MAPPOWaypointTrainer:
             gae_lambda,
         )
         elapsed = time.perf_counter() - start
-        return buffer.build(advantages, returns), {
+        mean_cost = float(np.mean(connectivity_costs)) if connectivity_costs else 0.0
+        lagrangian_stats = self._update_lagrangian_connectivity_cost(mean_cost)
+        rollout_result = {
             "mean_team_reward": float(np.mean(rollout_rewards)) if rollout_rewards else 0.0,
             "mean_rollout_reward": float(np.mean(rollout_rewards)) if rollout_rewards else 0.0,
+            "mean_raw_team_reward": float(np.mean(raw_team_rewards)) if raw_team_rewards else 0.0,
+            "mean_penalized_team_reward": float(np.mean(penalized_team_rewards)) if penalized_team_rewards else 0.0,
             "mean_per_agent_reward": float(np.mean(np.stack(buffer.per_agent_rewards))) if buffer.per_agent_rewards else 0.0,
             "action_validity_rate": float(np.mean(valid_rates)) if valid_rates else 1.0,
             "candidate_mask_empty_count": float(np.sum(mask_empty_counts)) if mask_empty_counts else 0.0,
@@ -383,15 +474,43 @@ class MAPPOWaypointTrainer:
             "clipped_delta_norm_mean": float(np.mean(clipped_delta_norm_means)) if clipped_delta_norm_means else 0.0,
             "clipped_delta_norm_max": float(np.max(clipped_delta_norm_maxs)) if clipped_delta_norm_maxs else 0.0,
             "delta_clip_fraction": float(np.mean(delta_clip_fractions)) if delta_clip_fractions else 0.0,
+            "connectivity_cost": mean_cost,
+            "lagrangian_penalty": float(np.mean(lagrangian_penalties)) if lagrangian_penalties else 0.0,
             "episodes_completed": int(np.count_nonzero(np.stack(buffer.done_for_reset))),
             "cumulative_episodes": int(self.completed_episodes),
             "rollout_steps_per_sec": float(horizon * self.env_batch.num_envs / max(elapsed, 1e-6)),
             "rollout_wall_clock_time": float(elapsed),
         }
+        for key, values in extra_metrics.items():
+            if values:
+                rollout_result[key] = float(np.mean(values))
+                rollout_result[f"{key}_mean"] = float(np.mean(values))
+        actual_raw_reward = float(np.mean(raw_team_rewards)) if raw_team_rewards else 0.0
+        actual_penalized_reward = float(np.mean(penalized_team_rewards)) if penalized_team_rewards else 0.0
+        actual_lagrangian_penalty = float(np.mean(lagrangian_penalties)) if lagrangian_penalties else 0.0
+        rollout_result.update(
+            {
+                "raw_task_reward": actual_raw_reward,
+                "raw_task_reward_mean": actual_raw_reward,
+                "penalized_reward": actual_penalized_reward,
+                "penalized_reward_mean": actual_penalized_reward,
+                "lagrangian_penalty": actual_lagrangian_penalty,
+                "lagrangian_penalty_mean": actual_lagrangian_penalty,
+            }
+        )
+        rollout_result.update(lagrangian_stats)
+        return buffer.build(advantages, returns), rollout_result
 
     def _masked_mean(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         weights = mask.float()
         return (values * weights).sum() / torch.clamp(weights.sum(), min=1.0)
+
+    def _flatten_info_metric(self, infos: list, key: str, default: float = 0.0) -> np.ndarray:
+        values = []
+        for timestep_infos in infos:
+            for info in timestep_infos:
+                values.append(self._info_scalar(info, key, default))
+        return np.asarray(values, dtype=np.float32)
 
     def update(self, batch: MAPPOWaypointBatch) -> dict:
         advantages = batch.advantages.copy()
@@ -402,6 +521,8 @@ class MAPPOWaypointTrainer:
         flat_old_logprobs = self._flatten_time_env(batch.old_logprobs)
         flat_returns = batch.returns.reshape(-1)
         flat_advantages = advantages.reshape(-1)
+        flat_target_connectivity_violation = self._flatten_info_metric(batch.infos, "connectivity_violation", 0.0)
+        flat_target_coverage_gain = self._flatten_info_metric(batch.infos, "coverage_gain", 0.0)
         batch_size = flat_train_actions.shape[0]
         epochs = int(self.train_config["epochs"])
         minibatch_size = int(self.train_config["minibatch_size"])
@@ -411,9 +532,12 @@ class MAPPOWaypointTrainer:
         value_predictions = batch.values.reshape(-1)
         return_var = float(np.var(return_targets))
         explained_variance = 0.0 if return_var <= 1e-8 else float(1.0 - np.var(return_targets - value_predictions) / return_var)
-        stats = {key: 0.0 for key in ["policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac", "ratio_mean", "grad_norm"]}
+        stats = {key: 0.0 for key in ["policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac", "ratio_mean", "grad_norm", "aux_connectivity_loss", "aux_coverage_loss", "aux_total_loss", "aux_pred_violation_mean", "aux_target_violation_mean", "aux_pred_coverage_gain_mean", "aux_target_coverage_gain_mean"]}
         step_count = 0
         kl_early_stop = 0.0
+        use_aux = bool(self.train_config.get("use_connectivity_auxiliary_loss", False))
+        aux_connectivity_coef = float(self.train_config.get("aux_connectivity_coef", 0.05))
+        aux_coverage_coef = float(self.train_config.get("aux_coverage_coef", 0.02))
         for _ in range(epochs):
             indices = np.random.permutation(batch_size)
             for start in range(0, batch_size, minibatch_size):
@@ -424,6 +548,8 @@ class MAPPOWaypointTrainer:
                 old_logprob_t = torch.as_tensor(flat_old_logprobs[mb], dtype=torch.float32, device=self.device)
                 returns_t = torch.as_tensor(flat_returns[mb], dtype=torch.float32, device=self.device)
                 adv_t = torch.as_tensor(flat_advantages[mb], dtype=torch.float32, device=self.device)
+                target_violation_t = torch.as_tensor(flat_target_connectivity_violation[mb], dtype=torch.float32, device=self.device)
+                target_coverage_t = torch.as_tensor(flat_target_coverage_gain[mb], dtype=torch.float32, device=self.device)
                 policy_output = self.policy.get_action_and_value(obs_t, actions_t)
                 new_logprob = policy_output.logprob
                 entropy = policy_output.entropy
@@ -437,7 +563,18 @@ class MAPPOWaypointTrainer:
                 policy_loss = self._masked_mean(torch.maximum(pg_loss1, pg_loss2), agent_mask)
                 value_loss = 0.5 * ((value - returns_t) ** 2).mean()
                 entropy_loss = self._masked_mean(entropy, agent_mask)
-                loss = policy_loss + float(self.train_config["vf_coef"]) * value_loss - float(self.train_config["ent_coef"]) * entropy_loss
+                aux_connectivity_loss = torch.zeros((), dtype=torch.float32, device=self.device)
+                aux_coverage_loss = torch.zeros((), dtype=torch.float32, device=self.device)
+                aux_total_loss = torch.zeros((), dtype=torch.float32, device=self.device)
+                aux_pred_violation = policy_output.aux.get("aux_pred_connectivity_violation") if policy_output.aux else None
+                aux_pred_coverage = policy_output.aux.get("aux_pred_coverage_gain") if policy_output.aux else None
+                if use_aux and aux_pred_violation is not None:
+                    aux_connectivity_loss = torch.mean((aux_pred_violation.float() - target_violation_t) ** 2)
+                    aux_total_loss = aux_total_loss + aux_connectivity_coef * aux_connectivity_loss
+                if use_aux and aux_pred_coverage is not None:
+                    aux_coverage_loss = torch.mean((aux_pred_coverage.float() - target_coverage_t) ** 2)
+                    aux_total_loss = aux_total_loss + aux_coverage_coef * aux_coverage_loss
+                loss = policy_loss + float(self.train_config["vf_coef"]) * value_loss - float(self.train_config["ent_coef"]) * entropy_loss + aux_total_loss
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
                 grad_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), float(self.train_config["max_grad_norm"]))
@@ -453,6 +590,15 @@ class MAPPOWaypointTrainer:
                 stats["clip_frac"] += float(clip_frac.item())
                 stats["ratio_mean"] += float(ratio_mean.item())
                 stats["grad_norm"] += float(grad_norm.item())
+                stats["aux_connectivity_loss"] += float(aux_connectivity_loss.item())
+                stats["aux_coverage_loss"] += float(aux_coverage_loss.item())
+                stats["aux_total_loss"] += float(aux_total_loss.item())
+                stats["aux_target_violation_mean"] += float(target_violation_t.mean().item())
+                stats["aux_target_coverage_gain_mean"] += float(target_coverage_t.mean().item())
+                if aux_pred_violation is not None:
+                    stats["aux_pred_violation_mean"] += float(aux_pred_violation.detach().float().mean().item())
+                if aux_pred_coverage is not None:
+                    stats["aux_pred_coverage_gain_mean"] += float(aux_pred_coverage.detach().float().mean().item())
                 step_count += 1
                 if target_kl > 0.0 and float(approx_kl.item()) > target_kl:
                     kl_early_stop = 1.0

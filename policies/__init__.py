@@ -65,6 +65,8 @@ def build_policy(policy_config: dict, observation_space, action_space):
             spatial_context_radii=list(policy_config.get("spatial_context_radii", [0.06, 0.12])),
             use_field_moment_context=bool(policy_config.get("use_field_moment_context", False)),
             field_moment_include_inverse=bool(policy_config.get("field_moment_include_inverse", False)),
+            use_connectivity_auxiliary_loss=bool(policy_config.get("use_connectivity_auxiliary_loss", False)),
+            use_comm_graph_encoder=bool(policy_config.get("use_comm_graph_encoder", False)),
         )
     raise ValueError(f"Unsupported waypoint MARL policy class: {policy_class}")
 

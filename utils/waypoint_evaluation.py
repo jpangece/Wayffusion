@@ -136,6 +136,8 @@ def evaluate_waypoint_policy_episodes(
             "num_agents": int(info.get("num_agents", config.get("num_agents", 0))),
             "action_validity_rate": float(1.0 - info.get("invalid_action_count", 0) / max(steps * int(config.get("num_agents", 1)), 1)),
             "candidate_mask_empty_count": float(info.get("candidate_mask_empty_count", 0)),
+            "connectivity_action_filter_enabled": float(bool(info.get("connectivity_action_filter_enabled", False))),
+            "connectivity_filter_replacement_count": float(info.get("connectivity_filter_replacement_count", 0)),
             "mean_speed": float(info.get("mean_speed", 0.0)),
             "max_speed_observed": float(info.get("max_speed_observed", 0.0)),
             "mean_control_norm": float(info.get("mean_control_norm", 0.0)),

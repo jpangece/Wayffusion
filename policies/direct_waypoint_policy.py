@@ -32,6 +32,8 @@ class DirectWaypointPolicy(nn.Module):
         spatial_context_radii: list[float] | None = None,
         use_field_moment_context: bool = False,
         field_moment_include_inverse: bool = False,
+        use_connectivity_auxiliary_loss: bool = False,
+        use_comm_graph_encoder: bool = False,
     ):
         super().__init__()
         del action_space
@@ -43,6 +45,8 @@ class DirectWaypointPolicy(nn.Module):
         self.use_spatial_field_context = bool(use_spatial_field_context)
         self.use_field_moment_context = bool(use_field_moment_context)
         self.field_moment_include_inverse = bool(field_moment_include_inverse)
+        self.use_connectivity_auxiliary_loss = bool(use_connectivity_auxiliary_loss)
+        self.use_comm_graph_encoder = bool(use_comm_graph_encoder)
 
         cnn_channels = cnn_channels or [16, 32, 64]
         task_field_space = observation_space["task_field"] if "task_field" in observation_space else observation_space["global_task_field"]
@@ -90,6 +94,13 @@ class DirectWaypointPolicy(nn.Module):
                 heads -= 1
             self.agent_attention = nn.MultiheadAttention(agent_hidden_dim, heads, batch_first=True)
             self.agent_attention_norm = nn.LayerNorm(agent_hidden_dim)
+        if self.use_comm_graph_encoder:
+            self.comm_graph_update = nn.Sequential(
+                nn.Linear(agent_hidden_dim + 1, agent_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(agent_hidden_dim, agent_hidden_dim),
+            )
+            self.comm_graph_norm = nn.LayerNorm(agent_hidden_dim)
 
         task_dim = int(observation_space["task_id"].shape[0])
         global_dim = int(observation_space["global_info"].shape[0])
@@ -110,6 +121,18 @@ class DirectWaypointPolicy(nn.Module):
             nn.ReLU(),
             nn.Linear(joint_hidden_dim, 1),
         )
+        if self.use_connectivity_auxiliary_loss:
+            aux_hidden = max(32, int(joint_hidden_dim) // 2)
+            self.aux_connectivity_head = nn.Sequential(
+                nn.Linear(critic_dim, aux_hidden),
+                nn.ReLU(),
+                nn.Linear(aux_hidden, 1),
+            )
+            self.aux_coverage_head = nn.Sequential(
+                nn.Linear(critic_dim, aux_hidden),
+                nn.ReLU(),
+                nn.Linear(aux_hidden, 1),
+            )
 
     def _build_task_field_masks(self, channels: int, masks: dict | None) -> torch.Tensor:
         defaults = {
@@ -172,7 +195,7 @@ class DirectWaypointPolicy(nn.Module):
             return obs["agent_mask"].bool()
         return torch.ones((batch_size, num_agents), dtype=torch.bool, device=self._task_field(obs).device)
 
-    def forward(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _forward_impl(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
         field, field_mask = self._masked_task_field(obs)
         field_feat = self.field_pool(self.field_encoder(field))
         agents = obs["all_uav_states"]
@@ -182,6 +205,8 @@ class DirectWaypointPolicy(nn.Module):
         if self.use_attention:
             attended, _ = self.agent_attention(agent_tokens, agent_tokens, agent_tokens, key_padding_mask=~agent_mask)
             agent_tokens = self.agent_attention_norm(agent_tokens + attended)
+        if self.use_comm_graph_encoder and "comm_adjacency" in obs:
+            agent_tokens = self._comm_graph_context(agent_tokens, obs["comm_adjacency"], agent_mask)
         field_per_agent = field_feat.unsqueeze(1).expand(batch_size, num_agents, -1)
         task_per_agent = obs["task_id"].unsqueeze(1).expand(batch_size, num_agents, -1)
         global_per_agent = obs["global_info"].unsqueeze(1).expand(batch_size, num_agents, -1)
@@ -195,6 +220,34 @@ class DirectWaypointPolicy(nn.Module):
         pooled_agents = _masked_mean(agent_tokens, agent_mask, dim=1)
         critic_input = torch.cat([field_feat, pooled_agents, obs["task_id"], obs["global_info"]], dim=-1)
         value = self.critic(critic_input).squeeze(-1)
+        aux_predictions: dict[str, torch.Tensor] = {}
+        if self.use_connectivity_auxiliary_loss:
+            aux_predictions["aux_pred_connectivity_violation"] = torch.sigmoid(self.aux_connectivity_head(critic_input)).squeeze(-1)
+            aux_predictions["aux_pred_coverage_gain"] = torch.sigmoid(self.aux_coverage_head(critic_input)).squeeze(-1)
+        return delta_mean, value, agent_mask, aux_predictions
+
+    def _comm_graph_context(
+        self,
+        agent_tokens: torch.Tensor,
+        comm_adjacency: torch.Tensor,
+        agent_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        batch_size, num_agents, _ = agent_tokens.shape
+        adjacency = comm_adjacency.to(device=agent_tokens.device, dtype=agent_tokens.dtype)
+        if adjacency.ndim != 3 or adjacency.shape[1] < num_agents + 1 or adjacency.shape[2] < num_agents + 1:
+            return agent_tokens
+        agent_adj = adjacency[:, 1 : num_agents + 1, 1 : num_agents + 1]
+        agent_adj = torch.maximum(agent_adj, torch.eye(num_agents, device=agent_tokens.device, dtype=agent_tokens.dtype).view(1, num_agents, num_agents))
+        valid_pair = agent_mask[:, :, None].float() * agent_mask[:, None, :].float()
+        agent_adj = agent_adj * valid_pair
+        degree = torch.clamp(agent_adj.sum(dim=-1, keepdim=True), min=1.0)
+        graph_msg = torch.bmm(agent_adj / degree, agent_tokens)
+        base_link = adjacency[:, 1 : num_agents + 1, 0:1] * agent_mask[:, :, None].float()
+        update = self.comm_graph_update(torch.cat([graph_msg, base_link], dim=-1))
+        return self.comm_graph_norm(agent_tokens + update * agent_mask[:, :, None].float())
+
+    def forward(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        delta_mean, value, agent_mask, _ = self._forward_impl(obs)
         return delta_mean, value, agent_mask
 
     def _spatial_field_context(self, field: torch.Tensor, normalized_positions: torch.Tensor) -> torch.Tensor:
@@ -258,7 +311,7 @@ class DirectWaypointPolicy(nn.Module):
         obs: dict[str, torch.Tensor],
         train_action: torch.Tensor | None = None,
     ) -> PolicyOutput:
-        delta_mean, value, agent_mask = self.forward(obs)
+        delta_mean, value, agent_mask, aux_predictions = self._forward_impl(obs)
         log_std = torch.clamp(self.log_std, self.log_std_min, self.log_std_max)
         std = torch.exp(log_std).view(1, 1, 2).expand_as(delta_mean)
         dist = Normal(delta_mean, std)
@@ -294,6 +347,7 @@ class DirectWaypointPolicy(nn.Module):
                 "clipped_delta_norm_max": torch.where(agent_mask, clipped_delta_norm, torch.zeros_like(clipped_delta_norm)).max(),
                 "delta_clip_fraction": (clip_mask.float() * valid_weights).sum() / valid_count,
                 "agent_mask": agent_mask,
+                **aux_predictions,
             },
         )
 

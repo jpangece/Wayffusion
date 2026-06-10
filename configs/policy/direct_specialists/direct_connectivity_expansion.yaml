@@ -35,3 +35,16 @@ no_fly_zones:
   - center: [0.55, 0.55]
     radius: 0.08
 tensorboard_metric_mode: core
+use_lagrangian_connectivity_cost: false
+connectivity_cost_target: 0.05
+lagrangian_lr: 0.01
+lambda_cost_init: 1.0
+lambda_cost_min: 0.0
+lambda_cost_max: 50.0
+cost_signal: connectivity_violation_rate
+use_connectivity_auxiliary_loss: false
+aux_connectivity_coef: 0.05
+aux_coverage_coef: 0.02
+aux_targets:
+  - connectivity_violation
+  - coverage_gain

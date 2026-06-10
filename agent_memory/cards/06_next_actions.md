@@ -1458,3 +1458,702 @@ Before any formal training:
 - run at least seeds `0,1,2` for area/belief/priority debug winners;
 - connectivity remains blocked at debug stage and should not enter formal
   training yet.
+
+## Active phase17-20 connectivity soft-constraint run
+
+User rejected phase16 hard-filter route for future multi-task policy learning.
+Current active replacement route:
+
+- `phase17_connectivity_margin_penalty`: dense disconnect-margin penalty.
+- `phase18_connectivity_action_risk_penalty`: predicted action disconnect risk
+  penalty only, no replacement.
+- `phase19_connectivity_lagrangian_cost`: rollout-level Lagrangian cost
+  multiplier for connectivity cost.
+- `phase20_connectivity_auxiliary_prediction`: Direct policy auxiliary heads for
+  next connectivity violation and coverage gain.
+
+Hard requirements for these phases:
+
+- `connectivity_action_filter` must stay `false`.
+- `connectivity_candidate_filter` must stay `false` for this Direct debug path.
+- Do not use fallback connectivity action replacement as the training method.
+- Do not add task-specific rules to Direct actor action postprocess.
+- Results must come from full long runs, not smoke/toy/short validation.
+
+Active tmux session:
+
+- `wf_conn_soft_20260608_1206`
+
+Active command:
+
+```bash
+/opt/conda/bin/python scripts/debug_connectivity_soft_phases/run_phase17_20.py \
+  --phase all \
+  --runtime 20260608_1206 \
+  --output-root outputs/debug/mappo_direct_specialists \
+  --total-updates 2000 \
+  --num-envs 8 \
+  --rollout-steps 128 \
+  --eval-interval 100 \
+  --eval-episodes 20 \
+  --epochs 4 \
+  --minibatch-size 512 \
+  --env-backend process
+```
+
+Primary output log:
+
+- `outputs/debug/mappo_direct_specialists/phase17_20_20260608_1206.log`
+
+Phase outputs are expected at:
+
+- `outputs/debug/mappo_direct_specialists/phase17_connectivity_margin_penalty/20260608_1206/connectivity_expansion/trial01/s0/`
+- `outputs/debug/mappo_direct_specialists/phase18_connectivity_action_risk_penalty/20260608_1206/connectivity_expansion/trial01/s0/`
+- `outputs/debug/mappo_direct_specialists/phase19_connectivity_lagrangian_cost/20260608_1206/connectivity_expansion/trial01/s0/`
+- `outputs/debug/mappo_direct_specialists/phase20_connectivity_auxiliary_prediction/20260608_1206/connectivity_expansion/trial01/s0/`
+
+How to monitor:
+
+```bash
+tmux attach -t wf_conn_soft_20260608_1206
+tail -f outputs/debug/mappo_direct_specialists/phase17_20_20260608_1206.log
+tail -f outputs/debug/mappo_direct_specialists/phase17_connectivity_margin_penalty/20260608_1206/connectivity_expansion/trial01/s0/training_metrics.csv
+```
+
+Next action after phase17 finishes:
+
+- read `phase17_connectivity_margin_penalty/20260608_1206/summary.json`;
+- inspect `report.md`;
+- confirm `connectivity_action_filter_enabled == 0` and
+  `connectivity_filter_replacement_count == 0`;
+- if phase17 violation decreases but coverage remains low, continue to phase18
+  as already scheduled;
+- if phase17 fails runtime, fix the runtime issue and rerun phase17 long-run,
+  not a smoke test.
+
+## Active phase17 trial02 branch
+
+A second phase17 long-run branch was started after online analysis showed
+trial01 became too conservative at the first eval.
+
+- tmux session: `wf_conn_p17_t2_20260608_1206`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase17_connectivity_margin_penalty/20260608_1206/connectivity_expansion/trial02/s0/`
+- log:
+  `outputs/debug/mappo_direct_specialists/phase17_trial02_20260608_1206.log`
+
+Trial02 hypothesis:
+
+- reduce margin/disconnect pressure enough to allow connected expansion;
+- raise coverage/uncovered/repeat terms so coverage does not collapse into
+  hover/revisit behavior;
+- keep hard connectivity filter disabled.
+
+Monitor after update 100:
+
+```bash
+python - <<'PY'
+import csv
+from pathlib import Path
+p=Path('outputs/debug/mappo_direct_specialists/phase17_connectivity_margin_penalty/20260608_1206/connectivity_expansion/trial02/s0/training_metrics.csv')
+rows=list(csv.DictReader(p.open()))
+evals=[r for r in rows if r.get('eval_success_rate') not in ('', None)]
+print(rows[-1].get('update'), len(evals), evals[-1] if evals else 'no eval yet')
+PY
+```
+
+Compare trial01 vs trial02 on:
+
+- `eval_connectivity_expansion_coverage_ratio_mean`
+- `eval_connectivity_expansion_effective_explored_radius_mean`
+- `eval_connectivity_expansion_connectivity_violation_rate_mean`
+- `eval_connectivity_expansion_connectivity_margin_penalty_mean`
+- `repeat_footprint_ratio`
+- `uncovered_approach_gain`
+- `connectivity_action_filter_enabled`
+- `connectivity_filter_replacement_count`
+
+## Post phase17-20 connectivity soft-constraint conclusion
+
+Date: 2026-06-09.
+
+All long runs under runtime `20260608_1206` have completed. None of the
+soft-constraint phases solved target `connectivity_expansion` yet. Do not mark
+the task as converged.
+
+Best observed behaviors:
+
+- `phase17/trial02` is the best base for the next attempt:
+  best random eval success `0.35`, coverage `0.531`, effective radius `0.480`,
+  but connectivity violation `0.228`; last eval reached coverage `0.582` but
+  violation worsened to `0.448`.
+- `phase18` confirms action-risk penalty is useful: last random eval violation
+  dropped to `0.063` with action risk `0.025`, but coverage only `0.437`.
+- `phase19` is too conservative as configured: random eval violation `0.000`,
+  connected ratio `1.000`, but coverage only about `0.247`.
+- `phase20` auxiliary losses learn correctly, but behavior is still not enough:
+  last random eval coverage `0.399`, radius `0.420`, violation `0.151`.
+
+Interpretation:
+
+- The policy can currently optimize two of coverage, expansion radius, and low
+  violation, but not all three together.
+- `eval_reward` alone is misleading for connectivity; use success, coverage,
+  effective radius, connectivity violation, connected ratio, and filter flags.
+- Hard filter stayed off in these runs (`connectivity_action_filter_enabled=0`,
+  `connectivity_filter_replacement_count=0`), so the results are valid
+  soft-constraint evidence.
+
+Recommended next phase:
+
+- Start `phase21_connected_coverage_reward` from the `phase17/trial02` reward
+  family, not from the phase19 Lagrangian family.
+- Add dense reward for connected new coverage:
+  `connected_new_coverage_gain`, optionally penalize
+  `disconnected_new_coverage`.
+- Keep a small phase18-style action-risk penalty as a secondary guard.
+- Consider adding observation features for distance/margin to the nearest
+  base-connected component before more scalar reward sweeps.
+
+## Active phase21 connected-coverage reward run
+
+Started on 2026-06-09.
+
+- tmux session: `wf_conn_p21_20260609_1034`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/connectivity_expansion/trial01/s0/`
+- phase report:
+  `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/report.md`
+- run log:
+  `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/connectivity_expansion/trial01/s0/stdout.log`
+
+Monitor command:
+
+```bash
+python - <<'PY'
+from pathlib import Path
+import pandas as pd
+p=Path('outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/connectivity_expansion/trial01/s0/training_metrics.csv')
+df=pd.read_csv(p)
+cols=[
+  'update','eval_random_success_rate',
+  'eval_random_connectivity_expansion_coverage_ratio_mean',
+  'eval_random_connectivity_expansion_effective_explored_radius_mean',
+  'eval_random_connectivity_expansion_connectivity_violation_rate_mean',
+  'eval_random_connectivity_expansion_connected_new_coverage_gain_mean',
+  'eval_random_connectivity_expansion_disconnected_new_coverage_gain_mean',
+  'eval_random_connectivity_expansion_connected_new_coverage_ratio_mean',
+  'eval_random_connectivity_expansion_disconnected_new_coverage_ratio_mean',
+]
+evals=df[df.get('eval_random_success_rate').notna()]
+print(evals[[c for c in cols if c in evals.columns]].tail())
+print(df[['update','coverage_ratio','connected_to_base_ratio','connectivity_violation_rate','connected_new_coverage_gain','disconnected_new_coverage_gain','action_disconnect_risk_mean','connectivity_action_filter_enabled','connectivity_filter_replacement_count']].tail())
+PY
+```
+
+Decision rule after update 100 or 200:
+
+- if connected coverage grows and violation is below phase17/trial02, continue;
+- if coverage grows but `disconnected_new_coverage_gain` or violation remains
+  high, open `phase21/trial02` with stronger
+  `w_disconnected_new_coverage` and/or slightly stronger action-risk penalty;
+- if coverage collapses, lower the disconnected penalty and raise
+  `w_connected_new_coverage`;
+- do not enable `connectivity_action_filter` for this learning path.
+
+Phase21 trial status:
+
+- `trial01`: stopped. It was the only branch with temporary nonzero success,
+  but latest update `1000` eval fell back to success `0.0`, coverage `0.504`,
+  radius `0.490`, violation `0.145`.
+- `trial02`: stopped. It kept violation near zero but coverage/radius collapsed
+  or stagnated; too conservative.
+- `trial03`: stopped. It achieved high coverage/radius at times, but violation
+  rose badly, recreating disconnected expansion.
+
+Final phase21 report:
+
+- `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/phase21_stopped_report_zh.md`
+- `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/phase21_stopped_summary.json`
+
+Conclusion:
+
+- Do not continue scalar reward-only tuning for this task.
+- Next phase should add connectivity observation features while keeping
+  `connectivity_action_filter=false`.
+
+Recommended next phase idea:
+
+- `phase22_connectivity_observation_features`
+- add per-agent/global observation features:
+  - distance to nearest base-connected component;
+  - communication margin to the base-connected component;
+  - connected frontier / connected uncovered approach score;
+  - relay gap or relay importance proxy.
+- keep Direct waypoint policy and soft reward path;
+- keep connected coverage reward from phase21 but use less aggressive scalar
+  weight sweeps.
+
+Future phase comparison metrics:
+
+- `eval_random_success_rate`
+- `eval_random_connectivity_expansion_coverage_ratio_mean`
+- `eval_random_connectivity_expansion_effective_explored_radius_mean`
+- `eval_random_connectivity_expansion_connectivity_violation_rate_mean`
+- `eval_random_connectivity_expansion_connected_to_base_ratio_mean`
+- `eval_random_connectivity_expansion_connected_new_coverage_gain_mean`
+- `eval_random_connectivity_expansion_disconnected_new_coverage_gain_mean`
+- `eval_random_connectivity_expansion_action_disconnect_risk_mean`
+- `eval_random_connectivity_expansion_connectivity_action_filter_enabled_mean`
+- `eval_random_connectivity_expansion_connectivity_filter_replacement_count_mean`
+
+Default media rule:
+
+- Every future experiment should save media by default.
+- Prefer `record_eval_episodes >= 1` and `record_format=gif` for debug.
+- Formal long runs should keep `record_eval_episodes >= 2` unless explicitly
+  disabled for a documented resource reason.
+
+### Next: Monitor Phase23 connectivity relaxed-success route
+
+Active run:
+
+- tmux: `wf_conn_p23_20260609_1517`
+- metrics:
+  `outputs/debug/mappo_direct_specialists/phase23_relaxed_success_graph_reward/20260609_1517/connectivity_expansion/trial01/s0/training_metrics.csv`
+
+Decision at first evals:
+
+- Continue if relaxed success becomes nonzero and violation remains below `0.20` with coverage near/above `0.45` and radius near/above `0.35`.
+- If safe but coverage low, open `phase23/trial02` with stronger coverage/expand pressure and lower repeat penalty.
+- If coverage good but violation too high, open `phase23/trial02` with lower `max_delta` or stronger disconnected/action-risk penalties.
+- Do not add new connectivity-specific observation fields unless phase23 clearly fails; user prefers unified multitask observation.
+- Do not enable hard connectivity action filter for learning phases.
+
+### Immediate Phase23 monitoring rule
+
+Watch trial01 and trial02 at eval updates 100/200:
+
+- trial01 problem: coverage/radius pass relaxed thresholds but violation is too high (`0.334` at eval 100).
+- trial02 target: keep coverage near or above `0.45`, radius above `0.35`, and reduce violation below `0.20`.
+- If trial02 is safe but coverage collapses, tune toward an intermediate preset rather than adding observations.
+- If trial02 still violates, consider phase24 curriculum/cost-schedule route with the same observation schema.
+
+### Monitor Phase24 connected-only reward
+
+Active run:
+
+- tmux: `wf_conn_p24_20260609_1545`
+- metrics:
+  `outputs/debug/mappo_direct_specialists/phase24_connected_only_reward/20260609_1545/connectivity_expansion/trial01/s0/training_metrics.csv`
+
+Decision at eval 100:
+
+- Goal: relaxed success > phase23 with violation <= `0.20`.
+- If coverage/radius too low but violation good, start phase24/trial02 with stronger connected coverage / expand reward.
+- If coverage good but violation high, start phase24/trial02 with stronger disconnected/action-risk penalties or lower `max_delta`.
+- Keep no hard filter and avoid new connectivity-specific observation features.
+
+### Phase24 follow-up after update 100
+
+Phase24/trial01 is currently the best connectivity route:
+
+- relaxed success `0.95` at eval update `100`;
+- no hard filter;
+- connected coverage dominates disconnected coverage.
+
+Next:
+
+- Do not stop phase24/trial01 yet; watch eval update `200` and `300` for stability.
+- If violation stays below `0.20`, open a later phase to tighten success toward official `0.55/0.45/0.10`.
+- If violation drifts upward, add schedule/curriculum or slightly stronger `w_disconnect` / `w_action_disconnect_risk`, not new observation fields.
+
+### Current Active Task: Monitor Phase25 tighter connected curriculum
+
+Phase24 has completed. Treat it as repaired only for the relaxed debug threshold, not the formal target.
+
+Best Phase24 evidence:
+
+- checkpoint:
+  `outputs/debug/mappo_direct_specialists/phase24_connected_only_reward/20260609_1545/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+- best update: `900`
+- relaxed eval success: `1.0`
+- coverage: `0.466104`
+- radius: `0.749350`
+- violation: `0.063939`
+- connected_new_coverage_ratio: `0.979412`
+- hard filter: off, replacement count `0`
+
+Active Phase25 run:
+
+- tmux: `wf_conn_p25_20260610_0212`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial01/s0/`
+- launcher log:
+  `outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/launcher_tmux.log`
+- initialized from Phase24 best checkpoint using `--init-checkpoint`.
+
+Phase25 target:
+
+- coverage >= `0.50`
+- radius >= `0.40`
+- connectivity violation <= `0.15`
+- keep `connectivity_action_filter_enabled=0`
+- keep `connectivity_filter_replacement_count=0`
+
+Immediate monitoring command:
+
+```bash
+/opt/conda/bin/python - <<'PY'
+import csv
+from pathlib import Path
+p = Path('outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial01/s0/training_metrics.csv')
+rows = list(csv.DictReader(p.open())) if p.exists() else []
+for r in rows:
+    if r.get('eval_success_rate') not in ('', None):
+        print(
+            r.get('update'),
+            'succ', r.get('eval_success_rate'),
+            'cov', r.get('eval_connectivity_expansion_coverage_ratio_mean'),
+            'radius', r.get('eval_connectivity_expansion_effective_explored_radius_mean'),
+            'viol', r.get('eval_connectivity_expansion_connectivity_violation_rate_mean'),
+            'conn_cov_ratio', r.get('eval_connectivity_expansion_connected_new_coverage_ratio_mean'),
+            'filter', r.get('eval_connectivity_expansion_connectivity_action_filter_enabled_mean'),
+            'replace', r.get('eval_connectivity_expansion_connectivity_filter_replacement_count_mean'),
+        )
+PY
+```
+
+Decision rule:
+
+- If update `100/200` meets coverage `0.50`, radius `0.40`, violation `0.15`, keep running and plan phase26 formal target `0.55/0.45/0.10`.
+- If safe but under coverage, next phase should increase connected frontier/expand reward or use gradual threshold schedule.
+- If coverage improves but violation rises, lower `max_delta` or raise disconnect/action-risk pressure.
+- Do not add many connectivity-specific observation tricks; user wants future multitask compatibility.
+- Do not re-enable hard connectivity action filter for training.
+
+### Phase25 trial02 safety branch now active
+
+Reason:
+
+- Phase25/trial01 update `100` has good coverage/radius but violation is slightly high:
+  - success `0.80`
+  - coverage `0.543667`
+  - radius `0.743184`
+  - violation `0.164275`
+  - hard filter `0`
+- This is close to phase25 target, so open a parameter-only safety branch instead of changing observation or architecture.
+
+Active trial02:
+
+- tmux: `wf_conn_p25_t2_20260610_0212`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial02/s0/`
+- tuning preset: `tight_safety`
+- key changes vs trial01:
+  - `max_delta/max_waypoint_distance: 0.17 -> 0.16`
+  - lower exploration: `log_std_init -2.45 -> -2.55`, `log_std_max -1.05 -> -1.15`
+  - stronger soft safety: `w_disconnect 13.5 -> 16.0`, `w_action_disconnect_risk 1.9 -> 2.6`, `w_connectivity_margin 1.9 -> 2.4`
+
+Immediate comparison:
+
+```bash
+/opt/conda/bin/python - <<'PY'
+import csv
+from pathlib import Path
+root = Path('outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion')
+for trial in ['trial01', 'trial02']:
+    p = root / trial / 's0' / 'training_metrics.csv'
+    rows = list(csv.DictReader(p.open())) if p.exists() else []
+    evals = [r for r in rows if r.get('eval_success_rate') not in ('', None)]
+    print('\\n', trial, 'last_update', rows[-1].get('update') if rows else 'n/a')
+    for r in evals[-3:]:
+        print(
+            'eval', r.get('update'),
+            'succ', r.get('eval_success_rate'),
+            'cov', r.get('eval_connectivity_expansion_coverage_ratio_mean'),
+            'radius', r.get('eval_connectivity_expansion_effective_explored_radius_mean'),
+            'viol', r.get('eval_connectivity_expansion_connectivity_violation_rate_mean'),
+            'risk', r.get('eval_connectivity_expansion_action_disconnect_risk_mean'),
+        )
+PY
+```
+
+### Current Active Task: Monitor Phase26 formal target
+
+Phase25/trial01 has reached the tighter debug target:
+
+- update `200`
+- success `1.0`
+- coverage `0.510046`
+- radius `0.768290`
+- violation `0.051491`
+- hard filter `0`
+
+Phase26 is now active to test the formal proxy target:
+
+- tmux: `wf_conn_p26_20260610_0238`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/`
+- initialized from:
+  `outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+
+Formal target for phase26:
+
+- coverage >= `0.55`
+- radius >= `0.45`
+- connectivity violation <= `0.10`
+- hard filter remains off.
+
+Monitor command:
+
+```bash
+/opt/conda/bin/python - <<'PY'
+import csv
+from pathlib import Path
+paths = {
+    'p25_t1': Path('outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial01/s0/training_metrics.csv'),
+    'p25_t2': Path('outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial02/s0/training_metrics.csv'),
+    'p26_t1': Path('outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/training_metrics.csv'),
+}
+for name, p in paths.items():
+    rows = list(csv.DictReader(p.open())) if p.exists() else []
+    print('\\n', name, 'last_update', rows[-1].get('update') if rows else 'n/a')
+    for r in [r for r in rows if r.get('eval_success_rate') not in ('', None)][-3:]:
+        print(
+            'eval', r.get('update'),
+            'succ', r.get('eval_success_rate'),
+            'cov', r.get('eval_connectivity_expansion_coverage_ratio_mean'),
+            'radius', r.get('eval_connectivity_expansion_effective_explored_radius_mean'),
+            'viol', r.get('eval_connectivity_expansion_connectivity_violation_rate_mean'),
+            'conn_cov_ratio', r.get('eval_connectivity_expansion_connected_new_coverage_ratio_mean'),
+            'filter', r.get('eval_connectivity_expansion_connectivity_action_filter_enabled_mean'),
+        )
+PY
+```
+
+Decision rule:
+
+- If phase26 reaches success with coverage >= `0.55` and violation <= `0.10`, keep running and then launch repeat seeds.
+- If phase26 coverage stays near `0.51` with safe violation, open phase27 coverage-frontier curriculum.
+- If phase26 violation rises above `0.10`, open a safety-tight branch from phase25/trial02 or lower `max_delta`.
+- Do not add more task-specific observation fields unless reward/curriculum clearly fails.
+
+### Current Active Task: Monitor Phase27 formal safety balance
+
+Phase26 update `100` crossed coverage/radius but missed formal violation:
+
+- success `0.70`
+- coverage `0.556144`
+- radius `0.688906`
+- violation `0.127930`
+- hard filter `0`
+
+Phase27 is active as a safety-balanced branch:
+
+- tmux: `wf_conn_p27_20260610_0252`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase27_formal_safety_balance/20260610_0252/connectivity_expansion/trial01/s0/`
+- initialized from:
+  `outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+
+Resource note:
+
+- Stopped `wf_conn_p25_20260610_0212` after phase25/trial01 had already reached tightened success and its checkpoint was inherited by phase26.
+- Stopped `wf_conn_p25_t2_20260610_0212` because it was safer but lower value than trial01 and not the formal-target branch.
+- Current active sessions should be only:
+  - `wf_conn_p26_20260610_0238`
+  - `wf_conn_p27_20260610_0252`
+
+Monitor command:
+
+```bash
+/opt/conda/bin/python - <<'PY'
+import csv
+from pathlib import Path
+paths = {
+    'p25_t1': Path('outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial01/s0/training_metrics.csv'),
+    'p26_t1': Path('outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/training_metrics.csv'),
+    'p27_t1': Path('outputs/debug/mappo_direct_specialists/phase27_formal_safety_balance/20260610_0252/connectivity_expansion/trial01/s0/training_metrics.csv'),
+}
+for name, p in paths.items():
+    rows = list(csv.DictReader(p.open())) if p.exists() else []
+    print('\\n', name, 'last_update', rows[-1].get('update') if rows else 'n/a')
+    for r in [r for r in rows if r.get('eval_success_rate') not in ('', None)][-3:]:
+        print(
+            'eval', r.get('update'),
+            'succ', r.get('eval_success_rate'),
+            'cov', r.get('eval_connectivity_expansion_coverage_ratio_mean'),
+            'radius', r.get('eval_connectivity_expansion_effective_explored_radius_mean'),
+            'viol', r.get('eval_connectivity_expansion_connectivity_violation_rate_mean'),
+            'conn_cov_ratio', r.get('eval_connectivity_expansion_connected_new_coverage_ratio_mean'),
+            'filter', r.get('eval_connectivity_expansion_connectivity_action_filter_enabled_mean'),
+        )
+PY
+```
+
+Decision rule:
+
+- If phase27 reaches coverage >= `0.55`, radius >= `0.45`, violation <= `0.10`, keep running and schedule repeat seeds.
+- If phase27 violation is safe but coverage drops below `0.55`, open phase28 scheduled coverage-pressure branch.
+- If phase27 still violates, use a stronger curriculum/schedule; do not enable hard action filter.
+
+### Current Active Task: Continue Phase26 only
+
+Phase27 was stopped after update `100` because it underperformed phase26:
+
+- phase27 success `0.60`
+- coverage `0.570651`
+- violation `0.147820`
+- connected_new_coverage_ratio `0.35`
+
+Active session:
+
+- `wf_conn_p26_20260610_0238`
+
+Phase26 update `200` is near formal convergence:
+
+- success `0.85`
+- coverage `0.585064`
+- radius `0.796046`
+- violation `0.108739`
+- hard filter `0`
+
+Next:
+
+- Wait for phase26 update `300`.
+- If phase26 violation <= `0.10`, keep running and then repeat seeds.
+- If phase26 still hovers around `0.105-0.115`, open phase28 with a schedule/curriculum rather than static stronger safety weights.
+
+### Phase26 update 300 status
+
+Phase26 update `300`:
+
+- success `0.65`
+- coverage `0.567747`
+- radius `0.757831`
+- violation `0.097835`
+- hard filter `0`
+
+Interpretation:
+
+- Average formal metrics pass, but per-episode success is not stable.
+- Continue phase26 to update `400`.
+- Do not launch phase28 until update `400` confirms instability.
+
+### Current Active Task: Monitor Phase28 stability fine-tune
+
+Phase26 was stopped after update `400` because late training drifted:
+
+- update `400` success `0.40`
+- coverage `0.626674`
+- violation `0.158631`
+- hard filter `0`
+
+Best phase26 checkpoint remains update `200`:
+
+- success `0.85`
+- coverage `0.585064`
+- radius `0.796046`
+- violation `0.108739`
+
+Active phase28:
+
+- tmux: `wf_conn_p28_20260610_0327`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase28_formal_stability_finetune/20260610_0327/connectivity_expansion/trial01/s0/`
+- initialized from phase26 best checkpoint.
+
+Monitor command:
+
+```bash
+/opt/conda/bin/python - <<'PY'
+import csv
+from pathlib import Path
+p = Path('outputs/debug/mappo_direct_specialists/phase28_formal_stability_finetune/20260610_0327/connectivity_expansion/trial01/s0/training_metrics.csv')
+rows = list(csv.DictReader(p.open())) if p.exists() else []
+print('last_update', rows[-1].get('update') if rows else 'n/a')
+for r in [r for r in rows if r.get('eval_success_rate') not in ('', None)][-5:]:
+    print(
+        'eval', r.get('update'),
+        'succ', r.get('eval_success_rate'),
+        'cov', r.get('eval_connectivity_expansion_coverage_ratio_mean'),
+        'radius', r.get('eval_connectivity_expansion_effective_explored_radius_mean'),
+        'viol', r.get('eval_connectivity_expansion_connectivity_violation_rate_mean'),
+        'conn_cov_ratio', r.get('eval_connectivity_expansion_connected_new_coverage_ratio_mean'),
+        'filter', r.get('eval_connectivity_expansion_connectivity_action_filter_enabled_mean'),
+    )
+PY
+```
+
+Decision:
+
+- If phase28 update `100/200` improves over phase26 best (`success 0.85`, violation `0.1087`), keep it.
+- If phase28 cannot improve, next step should be explicit scheduled curriculum/cost multiplier, not more static reward tweaks.
+
+### Connectivity current status after Phase29
+
+Phase29 robust eval shows phase26 best checkpoint passes the formal proxy on 100 randomized episodes:
+
+- checkpoint:
+  `outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+- eval output:
+  `outputs/debug/mappo_direct_specialists/phase29_checkpoint_robust_eval/20260610_0352/connectivity_expansion/eval_phase26_best/`
+- success_rate `0.82`
+- coverage_ratio `0.581916`
+- effective_explored_radius `0.799667`
+- connectivity_violation_rate `0.095783`
+- hard filter `0`
+- replacement count `0`
+- media saved for 2 episodes.
+
+Status:
+
+- connectivity_expansion is `CONVERGED_SINGLE_SEED_PROXY`.
+- Do not keep static reward tweaking this seed unless repeat-seed validation fails.
+
+Recommended next actions:
+
+- Run repeat-seed validation/training for phase26 recipe, preferably seeds `1` and `2`, initialized either from scratch using phase26 config sequence or from phase25/phase26 checkpoint if the goal is continuation robustness.
+- If repeat seeds fail due violation, implement explicit schedule/cost multiplier; do not use hard action filter.
+- If repeat seeds pass, update documentation that connectivity_expansion is repaired under Direct MAPPO soft-constraint route.
+
+### Connectivity status after Phase30 repeat eval
+
+Current best checkpoint:
+
+- `outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+
+Evidence:
+
+- Phase29 seed-base default, 100 episodes:
+  - success `0.82`
+  - coverage `0.581916`
+  - radius `0.799667`
+  - violation `0.095783`
+- Phase30 seed `5000`, 100 episodes:
+  - success `0.79`
+  - coverage `0.581512`
+  - radius `0.816807`
+  - violation `0.089600`
+- Phase30 seed `9000`, 100 episodes:
+  - success `0.77`
+  - coverage `0.570067`
+  - radius `0.783409`
+  - violation `0.109440`
+
+Status:
+
+- `connectivity_expansion`: `MOSTLY_CONVERGED_DIRECT_MAPPO_SOFT_CONSTRAINT`
+- Hard filter is off in all reported evals.
+- Coverage/radius are stable.
+- Violation margin is narrow and can exceed `0.10` by around `0.01` under some random seeds.
+
+If continuing:
+
+- Do not add observation tricks first.
+- Do not re-enable hard filter.
+- Prefer one of:
+  - train repeat seeds from phase26 recipe;
+  - implement explicit connectivity cost multiplier schedule;
+  - evaluate whether formal `max_violation_rate=0.10` should be relaxed slightly to `0.11-0.12` for randomized debug, while keeping the metric reported transparently.

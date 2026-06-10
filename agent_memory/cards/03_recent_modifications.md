@@ -5969,3 +5969,1223 @@ Result:
 
 Do not claim full four-task convergence yet. Connectivity still needs a
 curriculum or explicit connected-coverage structure.
+
+### Phase17-20: connectivity soft / learnable constraint route
+
+Date: 2026-06-08.
+
+Purpose:
+
+- replace the phase16 `connectivity_action_filter=true` hard-filter route for
+  `connectivity_expansion`;
+- keep Direct MAPPO final-waypoint action semantics unchanged;
+- explicitly set `connectivity_action_filter: false` and
+  `connectivity_candidate_filter: false` in the new debug phase configs;
+- add only soft reward/cost/auxiliary-learning mechanisms, not action
+  replacement or policy action postprocess.
+
+Code changes:
+
+- `tasks/waypoint/connectivity_expansion.py`
+  - added dense `connectivity_margin_*` metrics and reward component;
+  - added `action_disconnect_risk` metrics and optional team/per-agent penalty;
+  - added `connectivity_cost` signal selection for Lagrangian experiments.
+- `envs/waypoint/world.py`
+  - added communication-graph helpers for arbitrary predicted positions;
+  - added `connectivity_margin_stats(...)`.
+- `envs/waypoint_marl_env.py`
+  - added action-risk diagnostics based on predicted waypoint positions;
+  - logs `connectivity_action_filter_enabled` and
+    `connectivity_filter_replacement_count` so reports can prove hard filter is
+    off.
+- `algorithms/mappo_waypoint.py`
+  - added rollout-level Lagrangian connectivity cost support;
+  - logs raw vs penalized reward and lambda/cost diagnostics;
+  - added optional auxiliary prediction loss plumbing for connectivity
+    violation and coverage gain.
+- `policies/direct_waypoint_policy.py` / `policies/__init__.py`
+  - added optional auxiliary heads for DirectWaypointPolicy;
+  - does not modify action space or actor waypoint postprocess.
+- `utils/waypoint_evaluation.py` and `utils/tensorboard_metrics.py`
+  - added connectivity soft-constraint diagnostics to eval/CSV/TensorBoard
+    logging.
+- `configs/policy/direct_specialists/direct_connectivity_expansion.yaml`
+  - added default Lagrangian/auxiliary keys, all disabled by default.
+- `scripts/debug_connectivity_soft_phases/run_phase17_20.py`
+  - new phase launcher/report generator for:
+    - `phase17_connectivity_margin_penalty`
+    - `phase18_connectivity_action_risk_penalty`
+    - `phase19_connectivity_lagrangian_cost`
+    - `phase20_connectivity_auxiliary_prediction`
+  - default long-run settings are now `total_updates=2000`,
+    `num_envs=8`, `rollout_steps=128`, `eval_interval=100`,
+    `eval_episodes=20`, `env_backend=process`;
+  - refuses short-run settings unless `--dry-run` is used only for config
+    generation.
+- `tests/test_connectivity_soft_constraints.py`
+  - added coverage for margin penalty, action-risk penalty, Lagrangian lambda
+    update, auxiliary backward path, CSV metric fields, and non-connectivity
+    task isolation.
+
+Static checks run:
+
+- `/opt/conda/bin/python -m py_compile ...` for modified Python modules and the
+  new test file: passed.
+- YAML parse check for connectivity specialist/env/eval configs: passed.
+
+Important note:
+
+- A `--dry-run` config-generation check was accidentally invoked once and then
+  immediately removed:
+  `outputs/debug/mappo_direct_specialists/phase17_connectivity_margin_penalty/20260608_0000/`.
+  It is not an experiment result.
+
+Long-run experiment started:
+
+- tmux session: `wf_conn_soft_20260608_1206`
+- runtime: `20260608_1206`
+- command:
+  `/opt/conda/bin/python scripts/debug_connectivity_soft_phases/run_phase17_20.py --phase all --runtime 20260608_1206 --output-root outputs/debug/mappo_direct_specialists --total-updates 2000 --num-envs 8 --rollout-steps 128 --eval-interval 100 --eval-episodes 20 --epochs 4 --minibatch-size 512 --env-backend process`
+- output log:
+  `outputs/debug/mappo_direct_specialists/phase17_20_20260608_1206.log`
+- first active phase output:
+  `outputs/debug/mappo_direct_specialists/phase17_connectivity_margin_penalty/20260608_1206/connectivity_expansion/trial01/s0/`
+
+Do not treat phase17-20 as complete until the corresponding `summary.json` and
+final `report.md` are written after each full 2000-update run.
+
+### Phase17-20 full long-run results
+
+Date checked: 2026-06-09.
+
+All phase17-20 long-run processes for runtime `20260608_1206` completed.
+No hard connectivity filter was used in the analyzed paths; eval/training logs
+show `connectivity_action_filter_enabled=0` and
+`connectivity_filter_replacement_count=0`.
+
+Summary:
+
+| Run | Best success | Best coverage | Best radius | Best violation | Main result |
+|---|---:|---:|---:|---:|---|
+| phase17 trial01 margin baseline | `0.00` | `0.344` | `0.317` | `0.129` | too conservative; safety improved but expansion/coverage insufficient |
+| phase17 trial02 expand-balanced | `0.35` | `0.531` | `0.480` | `0.228` | best success; coverage/radius close but connectivity violation too high |
+| phase18 action-risk penalty | `0.00` | `0.544` | `0.575` | `0.354` at high coverage; last violation `0.063` with coverage `0.437` | action risk lowers violation late, but coverage collapses below threshold |
+| phase19 Lagrangian cost | `0.00` | `0.317` | `0.392` | `0.000` | lambda controls connectivity but strongly suppresses coverage |
+| phase20 auxiliary prediction | `0.00` | `0.399` | `0.420` | `0.151`; best reward checkpoint radius `0.515`, violation `0.066`, coverage `0.383` | auxiliary losses learn, representation improves safety/radius somewhat, but coverage remains low |
+
+Interpretation:
+
+- phase17 trial02 is the best overall behavior so far because it is the only
+  run with nonzero eval success (`0.35`), but it is not solved. Its best point
+  is near coverage/radius thresholds but violates connectivity too often.
+- phase18 is useful diagnostically: action risk does reduce predicted dangerous
+  actions and late violation, but the policy trades away coverage.
+- phase19 confirms pure Lagrangian pressure is too conservative with the
+  current cost signal/target: safe behavior is learned, but coverage is poor.
+- phase20 confirms auxiliary prediction is technically working:
+  `aux_total_loss` fell from about `0.0136` to `0.00082`, but the learned
+  representation did not translate into sufficient connected coverage.
+- Persistent failure mode across all runs: connected coverage is a
+  multi-objective tradeoff. Current direct reward/cost terms can get any two of
+  `{coverage, radius, low violation}`, but not all three reliably.
+
+Next recommended route:
+
+- Continue from phase17 trial02 as the best base, not phase19.
+- Add a connected-coverage-specific dense signal, for example reward only for
+  new coverage produced by UAVs currently connected to base or predicted to
+  remain connected after the action.
+- Keep hard filter disabled for learning; use it only as an optional engineering
+  safety wrapper outside this experiment family.
+- Consider adding observation features for nearest relay gap / distance to
+  base-connected component before trying more scalar weights.
+
+### Phase17 online analysis and trial02 adjustment
+
+Date: 2026-06-08.
+
+Observed phase17/trial01 early signal at runtime `20260608_1206`:
+
+- rollout reached roughly update `100` and wrote the first eval row;
+- first eval: `success=0.0`, `coverage≈0.1033`, `effective_radius≈0.2028`,
+  `connectivity_violation_rate=0.0`, `connectivity_margin_penalty=0.0`,
+  `eval_action_validity_rate=1.0`;
+- rollout trend from early to latest window showed violation and margin penalty
+  dropping, but coverage stayed low and `repeat_footprint_ratio≈0.98`.
+
+Interpretation:
+
+- phase17 margin penalty is working as a safety-shaped signal;
+- current weights are too conservative: policy learns to stay connected/repeat
+  coverage instead of connected expansion;
+- this is not a hard-filter artifact because CSV logs show
+  `connectivity_action_filter_enabled=0` and replacement count remains `0`.
+
+Action taken without stopping trial01:
+
+- added `--trial` and `--tuning` support to
+  `scripts/debug_connectivity_soft_phases/run_phase17_20.py`;
+- added tuning preset `expand_balanced`, still only phase17 margin penalty and
+  still `connectivity_action_filter=false`;
+- static config check passed for trial02:
+  - `max_delta=max_waypoint_distance=max_command_distance=0.16`;
+  - `w_expand=12`, `w_coverage=520`, `w_disconnect=8`,
+    `w_uncovered_approach=1600`, `w_repeat_footprint=0.6`,
+    `w_connected_radius_hold=0.08`, `w_relay=2.0`,
+    `w_connectivity_margin=1.5`, `connectivity_margin_threshold=0.04`,
+    `w_distance=0.02`.
+
+New long-run branch started:
+
+- tmux session: `wf_conn_p17_t2_20260608_1206`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase17_connectivity_margin_penalty/20260608_1206/connectivity_expansion/trial02/s0/`
+- log:
+  `outputs/debug/mappo_direct_specialists/phase17_trial02_20260608_1206.log`
+- full long-run settings retained: `total_updates=2000`, `num_envs=8`,
+  `rollout_steps=128`, `eval_interval=100`, `eval_episodes=20`,
+  `env_backend=process`.
+
+### Phase21 connected-coverage reward
+
+Date: 2026-06-09.
+
+Reason:
+
+- phase17/trial02 was the best soft-constraint base, but it rewarded global new
+  coverage even when produced by disconnected UAVs;
+- this encouraged high coverage/radius with excessive connectivity violation;
+- phase21 changes the reward target from generic coverage to connected
+  coverage while keeping the Direct waypoint action space and hard filter off.
+
+Code changes:
+
+- `tasks/waypoint/connectivity_expansion.py`
+  - added `_connected_coverage_breakdown(...)`;
+  - added team metrics `connected_new_coverage_gain`,
+    `disconnected_new_coverage_gain`, `connected_new_coverage_ratio`,
+    `disconnected_new_coverage_ratio`;
+  - added reward terms:
+    `+ w_connected_new_coverage * connected_new_coverage_gain` and
+    `- w_disconnected_new_coverage * disconnected_new_coverage_gain`;
+  - per-agent rewards now reward connected agents' new coverage and penalize
+    disconnected-only new coverage.
+- `algorithms/mappo_waypoint.py`
+  - added the new connected/disconnected coverage fields to rollout metrics.
+- `utils/tensorboard_metrics.py`
+  - added connected/disconnected coverage fields to core TensorBoard logging.
+- `scripts/debug_connectivity_soft_phases/run_phase17_20.py`
+  - added `phase21_connected_coverage_reward`;
+  - fixed env/policy action-scale synchronization so `max_delta`,
+    `max_waypoint_distance`, and adapter `max_command_distance` match.
+- `tests/test_connectivity_soft_constraints.py`
+  - added a phase21 reward test;
+  - extended CSV metric header test for the new fields.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile tasks/waypoint/connectivity_expansion.py scripts/debug_connectivity_soft_phases/run_phase17_20.py algorithms/mappo_waypoint.py utils/tensorboard_metrics.py`
+  passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_connectivity_soft_constraints.py`
+  passed: `10 passed`.
+- phase21 dry-run config check passed; policy/env/adapter action distance is
+  synchronized at `0.16`.
+
+Long run started:
+
+- phase: `phase21_connected_coverage_reward`
+- runtime: `20260609_1034`
+- tmux session: `wf_conn_p21_20260609_1034`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/connectivity_expansion/trial01/s0/`
+- full long-run settings: `total_updates=2000`, `num_envs=8`,
+  `rollout_steps=128`, `eval_interval=100`, `eval_episodes=20`,
+  `env_backend=process`.
+- early update 15 confirmed CSV logging works and hard filter remains off:
+  `connectivity_action_filter_enabled=0`,
+  `connectivity_filter_replacement_count=0`.
+
+Online phase21 tuning:
+
+- trial01 first eval at update `100`:
+  - success `0.0`, coverage `0.296`, radius `0.536`,
+    connectivity violation `0.0006`, connected ratio `1.0`;
+  - interpretation: very safe but coverage too low.
+- trial01 second eval at update `200`:
+  - success `0.0`, coverage `0.365`, radius `0.414`,
+    violation `0.0869`, connected ratio `0.7875`;
+  - interpretation: coverage rises, but connectivity starts degrading.
+- trial02 started with tuning preset `connected_expand`:
+  - output:
+    `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/connectivity_expansion/trial02/s0/`
+  - `w_connected_new_coverage=1000`, `w_disconnected_new_coverage=260`,
+    `w_action_disconnect_risk=0.8`, action scale `0.17`;
+  - first eval at update `100`: success `0.0`, coverage `0.272`,
+    radius `0.533`, violation `0.0`, connected ratio `1.0`;
+  - interpretation: still too safe/low-coverage.
+- trial03 started with tuning preset `connected_balanced`:
+  - output:
+    `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/connectivity_expansion/trial03/s0/`
+  - `w_connected_new_coverage=900`, `w_disconnected_new_coverage=360`,
+    `w_action_disconnect_risk=1.2`, `w_connected_spread=0.35`,
+    action scale `0.165`;
+  - goal: balance trial01's coverage growth and trial02's connectivity safety.
+
+Phase21 latest result and stop decision:
+
+- Date: 2026-06-09.
+- Stopped all phase21 trials early after latest eval analysis:
+  - `trial01` reached temporary success but did not stabilize:
+    best/latest relevant eval around update `900/1000` had coverage about
+    `0.53/0.50`, radius about `0.53/0.49`, violation about `0.25/0.145`;
+    target requires violation `<=0.10`, and success fell back to `0.0` at
+    update `1000`.
+  - `trial02` was too conservative:
+    best coverage only about `0.377`, later falling to about `0.222`, while
+    violation stayed near zero.
+  - `trial03` improved coverage/radius early but recreated the disconnected
+    expansion failure:
+    coverage reached about `0.541`, but violation rose to about `0.384` and
+    connected ratio dropped to about `0.65`.
+- Stopped tmux sessions:
+  - `wf_conn_p21_20260609_1034`
+  - `wf_conn_p21_t2_20260609_1034`
+  - `wf_conn_p21_t3_20260609_1034`
+- Generated:
+  - `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/phase21_stopped_summary.json`
+  - `outputs/debug/mappo_direct_specialists/phase21_connected_coverage_reward/20260609_1034/phase21_stopped_report_zh.md`
+
+Interpretation:
+
+- connected coverage reward is directionally useful, but scalar reward tuning
+  alone is insufficient;
+- the actor still lacks enough connectivity-state information to know relay
+  structure / nearest base-connected component margin;
+- next phase should add connectivity observation features while keeping hard
+  action filter off.
+
+Media rule update:
+
+- Future experiments should save evaluation media by default.
+- `scripts/debug_connectivity_soft_phases/run_phase17_20.py` now passes
+  `--record_eval_episodes 1 --record_format gif`.
+- `scripts/debug/phase11_direct_expert_improvement.py` and
+  `scripts/debug/phase12_direct_reward_curriculum.py` were changed from
+  `--record_eval_episodes 0` to `1`.
+- `scripts/check/calibrate_waypoint_adapter.py` internal MAPPO smoke now uses
+  `record_eval_episodes=1`.
+
+### Phase22 comm-graph encoder + auxiliary route
+
+Date: 2026-06-09.
+
+Reason:
+
+- User does not want many connectivity-specific observation tricks because
+  future multitask training needs a unified observation schema.
+- Existing env already exposes `comm_adjacency`; Direct policy was ignoring it.
+- New route uses the existing generic communication graph inside the policy
+  instead of adding new observation fields.
+
+Code changes:
+
+- `policies/direct_waypoint_policy.py`
+  - added optional `use_comm_graph_encoder`;
+  - graph encoder performs one message-passing update using existing
+    `comm_adjacency` and base-link information;
+  - no new observation field is required.
+- `policies/__init__.py`
+  - wires `use_comm_graph_encoder` from policy config.
+- `tasks/waypoint/connectivity_expansion.py`
+  - added `relaxed_success`, `relaxed_success_coverage`,
+    `relaxed_success_radius`, `relaxed_max_violation_rate`;
+  - official `success` remains unchanged.
+- `algorithms/mappo_waypoint.py` and `utils/tensorboard_metrics.py`
+  - log relaxed success fields.
+- `scripts/debug_connectivity_soft_phases/run_phase17_20.py`
+  - added `phase22_comm_graph_encoder_aux`;
+  - phase22 uses comm graph encoder, auxiliary connectivity/coverage loss,
+    phase21 connected coverage reward, and no hard filter.
+- `tests/test_direct_waypoint_policy.py`
+  - added coverage for `use_comm_graph_encoder=True`.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile policies/direct_waypoint_policy.py policies/__init__.py tasks/waypoint/connectivity_expansion.py algorithms/mappo_waypoint.py utils/tensorboard_metrics.py scripts/debug_connectivity_soft_phases/run_phase17_20.py`
+  passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_direct_waypoint_policy.py tests/test_connectivity_soft_constraints.py`
+  passed: `15 passed`.
+
+Long runs:
+
+- `phase22/trial01`
+  - tmux: `wf_conn_p22_20260609_1431`
+  - output:
+    `outputs/debug/mappo_direct_specialists/phase22_comm_graph_encoder_aux/20260609_1431/connectivity_expansion/trial01/s0/`
+  - first eval at update `100`: success `0.0`, relaxed success `0.0`,
+    coverage `0.275`, radius `0.552`, violation `0.0`.
+  - interpretation: graph+aux path is safe but initially too conservative.
+- `phase22/trial02`
+  - tmux: `wf_conn_p22_t2_20260609_1431`
+  - output:
+    `outputs/debug/mappo_direct_specialists/phase22_comm_graph_encoder_aux/20260609_1431/connectivity_expansion/trial02/s0/`
+  - tuning preset `graph_expand`, stronger coverage/connected coverage and
+    more exploration; wait for update `100` eval before judging.
+
+### Phase22 stopped and Phase23 relaxed-success route
+
+Date: 2026-06-09.
+
+Phase22 status:
+
+- `phase22_comm_graph_encoder_aux` trial01 and trial02 were stopped manually after early evals because both were safe but not converging fast enough on connected expansion.
+- Trial01 reached one promising eval at update 200 (`relaxed_success=0.1`, coverage `0.414`, radius `0.515`, violation `0.034`), then fell back by update 300.
+- Trial02 remained conservative through update 200 (`coverage≈0.298`, radius `0.534`, violation `0.021`, relaxed_success `0.0`).
+- Stopped sessions:
+  - `wf_conn_p22_20260609_1431`
+  - `wf_conn_p22_t2_20260609_1431`
+- Phase22 report path:
+  - `outputs/debug/mappo_direct_specialists/phase22_comm_graph_encoder_aux/20260609_1431/report.md`
+- Stop reason: active choice to free compute for phase23, not runtime bug. Wrapper records return code `-2` from SIGINT.
+
+Phase23 code/config route:
+
+- Added `phase23_relaxed_success_graph_reward` to `scripts/debug_connectivity_soft_phases/run_phase17_20.py`.
+- Purpose: use the existing comm graph encoder and phase21 connected coverage reward, while relaxing debug success thresholds by about 0.1 instead of adding more observation tricks.
+- Phase23 keeps Direct waypoint action semantics and uses no hard action filter.
+- Phase23 config highlights:
+  - `success_coverage: 0.45`
+  - `success_radius: 0.35`
+  - `max_violation_rate: 0.20`
+  - `max_delta/max_waypoint_distance: 0.17`
+  - `use_comm_graph_encoder: true`
+  - `use_connectivity_auxiliary_loss: true`
+  - `w_connected_new_coverage: 950`
+  - `w_disconnected_new_coverage: 300`
+  - `w_action_disconnect_risk: 0.9`
+  - `connectivity_action_filter: false`
+- Important caveat: phase23 success is relaxed debug success, not the official target (`0.55/0.45/0.10`). If phase23 converges, the next step is tightening thresholds back toward official settings.
+
+Verification before phase23:
+
+- `/opt/conda/bin/python -m py_compile policies/direct_waypoint_policy.py policies/__init__.py tasks/waypoint/connectivity_expansion.py algorithms/mappo_waypoint.py utils/tensorboard_metrics.py scripts/debug_connectivity_soft_phases/run_phase17_20.py` passed.
+- `/opt/conda/bin/python -m pytest -q tests/test_direct_waypoint_policy.py tests/test_connectivity_soft_constraints.py` passed: `15 passed`.
+
+Phase23 long run started:
+
+- tmux: `wf_conn_p23_20260609_1517`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase23_relaxed_success_graph_reward/20260609_1517/connectivity_expansion/trial01/s0/`
+- config snapshots:
+  - `outputs/debug/mappo_direct_specialists/phase23_relaxed_success_graph_reward/20260609_1517/configs/policy_phase23_connectivity_expansion_trial01.yaml`
+  - `outputs/debug/mappo_direct_specialists/phase23_relaxed_success_graph_reward/20260609_1517/configs/env_phase23_connectivity_expansion_trial01.yaml`
+- command log:
+  `outputs/debug/mappo_direct_specialists/phase23_relaxed_success_graph_reward/20260609_1517/phase23_tmux.log`
+
+Next checks:
+
+- Wait for eval at update 100.
+- If phase23/trial01 reaches nonzero relaxed success and maintains coverage/radius/violation, continue.
+- If it is too conservative, start phase23/trial02 with more expansion/coverage weight and slightly lower disconnected penalty.
+- If it violates too much, start phase23/trial02 with lower max_delta or stronger `w_disconnected_new_coverage` / `w_action_disconnect_risk`, still without hard filter.
+
+### Phase23 trial02 safety-side branch
+
+Date: 2026-06-09.
+
+Phase23 trial01 first eval at update `100`:
+
+- output:
+  `outputs/debug/mappo_direct_specialists/phase23_relaxed_success_graph_reward/20260609_1517/connectivity_expansion/trial01/s0/`
+- relaxed/debug success rate: `0.20`.
+- coverage: `0.454` (passes relaxed `0.45`).
+- effective radius: `0.625` (passes relaxed `0.35`).
+- connectivity violation rate: `0.334` (fails relaxed max `0.20`).
+- connected_to_base_ratio: `0.7375`.
+- action_disconnect_risk: `0.5125`.
+- hard filter confirmation: eval `connectivity_action_filter_enabled=0`, replacements `0`.
+
+Interpretation:
+
+- This is the first phase23 signal with nonzero eval success under relaxed thresholds.
+- Failure mode is not exploration/coverage anymore; it is over-aggressive expansion and weak connectivity risk control.
+- `delta_clip_fraction≈0.50`, so Direct Gaussian actions are still often clipped, reinforcing the aggressive-action diagnosis.
+
+Action:
+
+- Kept trial01 running for trend observation.
+- Started phase23/trial02 with tuning preset `connected_balanced` to move safety-side while preserving coverage:
+  - tmux: `wf_conn_p23_t2_20260609_1517`
+  - output:
+    `outputs/debug/mappo_direct_specialists/phase23_relaxed_success_graph_reward/20260609_1517/connectivity_expansion/trial02/s0/`
+  - log:
+    `outputs/debug/mappo_direct_specialists/phase23_relaxed_success_graph_reward/20260609_1517/phase23_trial02_tmux.log`
+- Trial02 changes relative to trial01 are parameter-only, not architecture or observation changes:
+  - slightly smaller `max_delta` / `max_waypoint_distance` (`0.165` vs `0.17`);
+  - lower exploration (`log_std_init=-2.3`, `ent_coef=0.0016`);
+  - stronger disconnected coverage penalty (`360` vs `300`);
+  - stronger action-risk penalty (`1.2` vs `0.9`);
+  - stronger margin penalty (`1.15` vs `0.9`);
+  - lower repeat penalty and adjusted connected spread to preserve expansion.
+
+Next decision:
+
+- If trial02 eval reaches coverage/radius with violation <= `0.20`, continue it as current best.
+- If trial02 becomes too conservative, start trial03 with intermediate risk weights or phase24 curriculum tightening.
+- If both trials keep violation high, next mechanism should be curriculum or cost scheduling, not adding connectivity-specific observation fields.
+
+### Phase24 connected-only coverage reward
+
+Date: 2026-06-09.
+
+Phase23 result before stopping:
+
+- trial01 eval update `100`: relaxed success `0.20`, coverage `0.454`, radius `0.625`, violation `0.334`.
+- trial01 eval update `200`: relaxed success `0.15`, coverage `0.448`, radius `0.635`, violation `0.365`.
+- trial02 eval update `100`: relaxed success `0.05`, coverage `0.396`, radius `0.323`, violation `0.384`.
+- Both phase23 trials used `connectivity_action_filter=false` and eval filter replacement `0`.
+- Stopped trial01/trial02 manually to free compute for phase24.
+
+Interpretation:
+
+- Phase23 proved Direct MAPPO can reach relaxed coverage/radius, but it does so by allowing too much disconnected expansion.
+- The remaining failure is a reward shortcut: ordinary coverage/radius can still be obtained by disconnected UAVs.
+- Simple safety-side parameter tuning in trial02 did not fix it and reduced coverage/radius.
+
+Code/config change:
+
+- Added `phase24_connected_only_reward` to `scripts/debug_connectivity_soft_phases/run_phase17_20.py`.
+- No environment dynamics changes.
+- No policy action-space changes.
+- No new observation fields.
+- Hard connectivity action filter remains off.
+
+Phase24 mechanism:
+
+- Keep relaxed debug success thresholds: coverage `0.45`, radius `0.35`, violation max `0.20`.
+- Make reward mostly depend on connected new coverage:
+  - `w_coverage: 40` (down from phase23 `320`)
+  - `w_connected_new_coverage: 1650`
+  - `w_disconnected_new_coverage: 900`
+  - `w_disconnect: 11`
+  - `w_action_disconnect_risk: 1.5`
+  - `w_connectivity_margin: 1.6`
+  - `max_delta/max_waypoint_distance: 0.165`
+- Rationale: remove the disconnected-total-coverage shortcut while still allowing enough expansion.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile scripts/debug_connectivity_soft_phases/run_phase17_20.py` passed.
+- Dry-run generated config/report under:
+  `outputs/debug/mappo_direct_specialists/phase24_connected_only_reward/20260609_1545/`
+
+Long run started:
+
+- tmux: `wf_conn_p24_20260609_1545`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase24_connected_only_reward/20260609_1545/connectivity_expansion/trial01/s0/`
+- log:
+  `outputs/debug/mappo_direct_specialists/phase24_connected_only_reward/20260609_1545/phase24_tmux.log`
+
+Next decision:
+
+- If phase24 is safe but under-covers, trial02 should raise `w_connected_new_coverage` / `w_expand` slightly while keeping total `w_coverage` low.
+- If phase24 still violates, increase disconnected/action-risk penalties or lower `max_delta`; do not add observation fields first.
+
+### Phase24 first positive connectivity result
+
+Date: 2026-06-09.
+
+Phase24/trial01 eval at update `100`:
+
+- output:
+  `outputs/debug/mappo_direct_specialists/phase24_connected_only_reward/20260609_1545/connectivity_expansion/trial01/s0/`
+- relaxed/debug success rate: `0.95`.
+- coverage: `0.494976` (passes relaxed threshold `0.45`).
+- effective radius: `0.692773` (passes relaxed threshold `0.35`).
+- connectivity violation rate: `0.19586` (passes relaxed threshold `0.20`, narrowly).
+- connected_to_base_ratio: `0.9375`.
+- action_disconnect_risk: `0.125`.
+- connected_new_coverage_gain: `0.014218`.
+- disconnected_new_coverage_gain: `0.000648`.
+- connected_new_coverage_ratio: `0.815789`.
+- disconnected_new_coverage_ratio: `0.034211`.
+- hard filter confirmation: eval `connectivity_action_filter_enabled=0`, replacements `0`.
+
+Interpretation:
+
+- This is the first strong Direct MAPPO connectivity soft-constraint result.
+- Phase24 fixed the phase23 failure mode by removing the disconnected total-coverage reward shortcut.
+- The policy is now mostly producing connected coverage rather than disconnected coverage.
+- Remaining caveat: violation is barely under the relaxed threshold (`0.19586` vs `0.20`) and still above the official target (`0.10`).
+
+Current decision:
+
+- Keep phase24/trial01 running to test stability at eval updates `200`, `300`, etc.
+- If stable, next phase should tighten thresholds toward official target, probably using a curriculum or scheduled penalty, not extra observation fields.
+
+### Phase24 full result and Phase25 tighter curriculum launch
+
+Date: 2026-06-10.
+
+Context:
+
+- Previous agent connection was interrupted for several hours.
+- On reconnect there were no active `train_mappo_waypoint` / phase tmux processes.
+- Phase24 full run had completed:
+  `outputs/debug/mappo_direct_specialists/phase24_connected_only_reward/20260609_1545/connectivity_expansion/trial01/s0/`
+
+Phase24 full result:
+
+- Best checkpoint:
+  `outputs/debug/mappo_direct_specialists/phase24_connected_only_reward/20260609_1545/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+- Best eval summary:
+  - update `900`
+  - eval_success_rate `1.0`
+  - eval_reward `947.026422`
+- Best eval metrics at update `900`:
+  - coverage `0.466104`
+  - effective radius `0.749350`
+  - connectivity violation `0.063939`
+  - connected_to_base_ratio `0.9875`
+  - action_disconnect_risk `0.05`
+  - connected_new_coverage_ratio `0.979412`
+  - disconnected_new_coverage_ratio `0.020588`
+- Hard-filter confirmation remained clean:
+  - `connectivity_action_filter_enabled=0`
+  - `connectivity_filter_replacement_count=0`
+
+Interpretation:
+
+- Phase24 is the first strong soft-constraint Direct MAPPO connectivity route.
+- It learns connected expansion under the relaxed debug threshold (`coverage>=0.45`, `radius>=0.35`, `violation<=0.20`) without hard action replacement.
+- It does not yet solve the formal proxy threshold (`coverage>=0.55`, `radius>=0.45`, `violation<=0.10`), mainly because coverage stays around `0.45-0.50`.
+- Late updates (`1400-1700`) showed instability/collapse, so the best checkpoint at update `900` is preferable to final checkpoint.
+
+Code changes after reconnect:
+
+- `scripts/train_mappo_waypoint.py` now supports `--init-checkpoint` for PPO continuation from an existing checkpoint.
+  This is PPO warm continuation, not BC.
+- `scripts/debug_connectivity_soft_phases/run_phase17_20.py` now passes `--init-checkpoint` through to the training script.
+- Added `phase25_tight_connected_curriculum` to `run_phase17_20.py`.
+
+Phase25 mechanism:
+
+- Starts from Phase24 best checkpoint.
+- Keeps Direct waypoint actor, MPE core dynamics, and `connectivity_action_filter=false`.
+- Does not add observation fields or change action space.
+- Tightens debug success thresholds:
+  - coverage `0.50`
+  - effective radius `0.40`
+  - max violation `0.15`
+- Reward emphasis:
+  - increases connected-new-coverage reward to `2300`
+  - increases disconnected-new-coverage penalty to `1150`
+  - keeps total coverage reward small (`65`) to avoid disconnected coverage shortcuts
+  - keeps action-risk penalty moderate (`1.9`) as auxiliary, not dominant
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile scripts/train_mappo_waypoint.py scripts/debug_connectivity_soft_phases/run_phase17_20.py` passed.
+- Phase25 run directory, snapshot, TensorBoard event file, and stdout log were created.
+- stdout confirmed checkpoint load:
+  `loaded init_checkpoint=.../phase24_connected_only_reward/.../checkpoint_best_eval.pt`
+
+Phase25 long run started:
+
+- tmux: `wf_conn_p25_20260610_0212`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial01/s0/`
+- launcher log:
+  `outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/launcher_tmux.log`
+- settings:
+  - `total_updates=2000`
+  - `num_envs=8`
+  - `rollout_steps=128`
+  - `eval_interval=100`
+  - `eval_episodes=20`
+  - `env_backend=process`
+  - train/eval randomization: `random`
+  - media enabled: `record_eval_episodes=1`, `record_format=gif`
+
+Next decision:
+
+- At update `100` and `200`, compare phase25 against phase24 best:
+  - target: coverage >= `0.50`, radius >= `0.40`, violation <= `0.15`;
+  - hard-filter fields must remain `0`;
+  - connected_new_coverage_ratio should remain high.
+- If phase25 passes tightened thresholds, open phase26 with formal proxy `0.55/0.45/0.10`.
+- If phase25 stays safe but under-covers, increase connected frontier/expand reward or use a threshold schedule.
+- If phase25 violates, lower `max_delta` or raise disconnect/action-risk pressure, still without hard filter.
+
+### Phase25/trial02 safety-tight branch
+
+Date: 2026-06-10.
+
+Phase25/trial01 first eval at update `100`:
+
+- eval_success_rate `0.80`
+- eval_reward `1164.232212`
+- coverage `0.543667`
+- effective radius `0.743184`
+- connectivity violation `0.164275`
+- connected_to_base_ratio `0.9875`
+- connected_new_coverage_ratio `0.60`
+- disconnected_new_coverage_ratio `0.0`
+- action_disconnect_risk `0.1625`
+- hard filter: `0`, replacements `0`
+
+Interpretation:
+
+- Phase25/trial01 solved the prior under-coverage issue at the first eval.
+- Remaining failure is violation just above the phase25 threshold (`0.164 > 0.15`).
+- Because the mechanism is otherwise working, the next branch should be safety-tight parameter tuning, not observation expansion or hard filtering.
+
+Code/config change:
+
+- Added `tight_safety` tuning preset to `scripts/debug_connectivity_soft_phases/run_phase17_20.py`.
+- This is parameter-only:
+  - `max_delta/max_waypoint_distance: 0.16`
+  - `log_std_init: -2.55`
+  - `log_std_max: -1.15`
+  - `learning_rate: 0.00014`
+  - `target_kl: 0.022`
+  - `w_disconnect: 16.0`
+  - `w_connectivity_margin: 2.4`
+  - `w_action_disconnect_risk: 2.6`
+  - `w_disconnected_new_coverage: 1250.0`
+  - `w_connected_new_coverage: 2200.0`
+- No architecture change.
+- No new observation field.
+- No hard connectivity action filter.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile scripts/debug_connectivity_soft_phases/run_phase17_20.py` passed.
+- trial02 created snapshots, TensorBoard event file, and `training_metrics.csv`.
+- stdout confirmed loading:
+  `loaded init_checkpoint=.../phase24_connected_only_reward/.../checkpoint_best_eval.pt`
+
+Phase25/trial02 long run started:
+
+- tmux: `wf_conn_p25_t2_20260610_0212`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial02/s0/`
+- log:
+  `outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/phase25_trial02_tmux.log`
+
+Decision rule:
+
+- Compare trial01 and trial02 at update `100`.
+- Prefer trial02 only if it keeps coverage >= `0.50` and radius >= `0.40` while reducing violation below `0.15`.
+- If trial02 becomes too conservative, keep trial01 and wait for later evals before opening another branch.
+
+### Phase25 success signal and Phase26 formal-target launch
+
+Date: 2026-06-10.
+
+Phase25/trial01 update `200`:
+
+- eval_success_rate `1.0`
+- eval_reward `1385.627775`
+- coverage `0.510046`
+- effective radius `0.768290`
+- connectivity violation `0.051491`
+- connected_to_base_ratio `0.925`
+- connected_new_coverage_ratio `0.90`
+- disconnected_new_coverage_ratio `0.10`
+- action_disconnect_risk `0.15`
+- hard filter: `0`, replacements `0`
+- best checkpoint updated to:
+  `outputs/debug/mappo_direct_specialists/phase25_tight_connected_curriculum/20260610_0212/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+
+Phase25/trial02 update `100`:
+
+- eval_success_rate `0.8`
+- eval_reward `1188.707103`
+- coverage `0.513971`
+- effective radius `0.755674`
+- connectivity violation `0.085106`
+- connected_to_base_ratio `0.95`
+- connected_new_coverage_ratio `0.80`
+- disconnected_new_coverage_ratio `0.0`
+- action_disconnect_risk `0.35`
+- hard filter: `0`, replacements `0`
+
+Interpretation:
+
+- Phase25 proves the soft-constraint route can learn a connected expansion policy under the tighter debug threshold (`0.50/0.40/0.15`).
+- Trial01 is currently better by success/reward and connected coverage ratio; trial02 is safer on violation but has lower success.
+- This is no longer just random coverage: coverage, radius, and low violation co-occur while hard filter remains off.
+- Remaining gap is the formal proxy target coverage `0.55`; phase25 coverage is around `0.51`.
+
+Code/config change:
+
+- Added `phase26_formal_connected_target` to `scripts/debug_connectivity_soft_phases/run_phase17_20.py`.
+- Phase26 restores formal proxy thresholds:
+  - coverage `0.55`
+  - radius `0.45`
+  - max violation `0.10`
+- Phase26 continues from phase25/trial01 best checkpoint.
+- Phase26 changes are reward/threshold/PPO-parameter only:
+  - `w_connected_new_coverage: 2750`
+  - `w_disconnected_new_coverage: 1350`
+  - `w_expand: 18`
+  - `w_disconnect: 15`
+  - `w_action_disconnect_risk: 2.2`
+  - `learning_rate: 0.00012`
+  - `log_std_init: -2.55`
+- Still no hard filter, no action-space change, no additional observation fields.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile scripts/debug_connectivity_soft_phases/run_phase17_20.py` passed.
+- Phase26 snapshot confirms:
+  - `success_coverage=0.55`
+  - `success_radius=0.45`
+  - `max_violation_rate=0.10`
+  - `connectivity_action_filter=false`
+  - `connectivity_candidate_filter=false`
+- stdout confirms loading:
+  `loaded init_checkpoint=.../phase25_tight_connected_curriculum/.../checkpoint_best_eval.pt`
+
+Phase26 long run started:
+
+- tmux: `wf_conn_p26_20260610_0238`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/`
+- launcher log:
+  `outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/launcher_tmux.log`
+
+Next decision:
+
+- At phase26 update `100`, check whether coverage crosses `0.55` without violation rising above `0.10`.
+- If coverage remains `0.50-0.53` and violation is safe, next phase should use a coverage curriculum or stronger connected frontier reward.
+- If violation rises, split into a safety branch rather than raising coverage pressure further.
+
+### Phase26 first eval and Phase27 safety-balanced formal branch
+
+Date: 2026-06-10.
+
+Phase26/trial01 update `100`:
+
+- eval_success_rate `0.70`
+- eval_reward `1453.948086`
+- coverage `0.556144`
+- effective radius `0.688906`
+- connectivity violation `0.127930`
+- connected_new_coverage_ratio `0.70`
+- disconnected_new_coverage_ratio `0.05`
+- action_disconnect_risk `0.0625`
+- hard filter: `0`
+
+Interpretation:
+
+- Phase26 crossed the formal coverage/radius thresholds at the first eval.
+- Remaining failure is formal violation (`0.128 > 0.10`), not coverage.
+- This indicates the learned policy is close but slightly too aggressive for the formal connectivity budget.
+
+Action:
+
+- Stopped phase25/trial02 to free resources:
+  - trial02 was safe (`violation=0.0975`) but had lower success/reward than phase25/trial01 and was not the formal-target branch.
+- Kept phase25/trial01 and phase26 running.
+- Added `phase27_formal_safety_balance` to `scripts/debug_connectivity_soft_phases/run_phase17_20.py`.
+
+Phase27 mechanism:
+
+- Starts from phase26 update100 best checkpoint:
+  `outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+- Keeps formal target:
+  - coverage `0.55`
+  - radius `0.45`
+  - max violation `0.10`
+- Parameter-only safety tightening:
+  - `max_delta: 0.16`
+  - `log_std_init: -2.65`
+  - `log_std_max: -1.20`
+  - `learning_rate: 0.00010`
+  - `w_disconnect: 19.0`
+  - `w_connectivity_margin: 3.0`
+  - `w_action_disconnect_risk: 3.2`
+  - `w_disconnected_new_coverage: 1500`
+  - `w_connected_new_coverage: 2700`
+- No action-space change, no observation change, no hard filter.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile scripts/debug_connectivity_soft_phases/run_phase17_20.py` passed.
+- Phase27 snapshot confirms:
+  - `success_coverage=0.55`
+  - `success_radius=0.45`
+  - `max_violation_rate=0.10`
+  - `connectivity_action_filter=false`
+  - `connectivity_candidate_filter=false`
+- stdout confirms loading:
+  `loaded init_checkpoint=.../phase26_formal_connected_target/.../checkpoint_best_eval.pt`
+
+Phase27 long run started:
+
+- tmux: `wf_conn_p27_20260610_0252`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase27_formal_safety_balance/20260610_0252/connectivity_expansion/trial01/s0/`
+- launcher log:
+  `outputs/debug/mappo_direct_specialists/phase27_formal_safety_balance/20260610_0252/launcher_tmux.log`
+
+Next decision:
+
+- At phase27 update `100`, check whether violation drops below `0.10` while coverage stays >= `0.55`.
+- If phase27 is safe but coverage falls, next branch should restore coverage pressure gradually.
+- If phase27 still violates, use a scheduled/curriculum phase28 rather than a hard filter.
+
+### Phase26 near-converged; Phase27 stopped
+
+Date: 2026-06-10.
+
+Phase26/trial01 update `200`:
+
+- eval_success_rate `0.85`
+- eval_reward `1574.552763`
+- coverage `0.585064`
+- effective radius `0.796046`
+- connectivity violation `0.108739`
+- connected_to_base_ratio `0.975`
+- connected_new_coverage_ratio `0.80`
+- disconnected_new_coverage_ratio `0.0`
+- action_disconnect_risk `0.2625`
+- hard filter: `0`
+
+Interpretation:
+
+- Phase26 is currently the best formal-target route.
+- It passes formal coverage/radius clearly and misses only the violation line by a small margin (`0.1087` vs `0.10`).
+- This is strong evidence of learned connected expansion without hard action filtering.
+
+Phase27/trial01 update `100`:
+
+- eval_success_rate `0.60`
+- eval_reward `1569.405500`
+- coverage `0.570651`
+- effective radius `0.738829`
+- connectivity violation `0.147820`
+- connected_new_coverage_ratio `0.35`
+- action_disconnect_risk `0.20`
+- hard filter: `0`
+
+Interpretation:
+
+- Phase27's stronger safety penalties and lower action scale did not improve formal violation.
+- It reduced connected coverage structure and made violation worse than phase26.
+- This suggests naive static safety tightening is counterproductive from the phase26 checkpoint.
+
+Action:
+
+- Stopped phase27 to free resources:
+  `wf_conn_p27_20260610_0252`
+- Kept phase26 running as the only active formal-target branch.
+
+Next decision:
+
+- Wait for phase26 update `300`.
+- If violation drops below `0.10`, keep phase26 and plan repeat seeds.
+- If phase26 remains just above `0.10`, next phase should be a scheduled/curriculum phase rather than stronger static safety weights.
+
+### Phase26 update 300 formal metrics
+
+Date: 2026-06-10.
+
+Phase26/trial01 update `300`:
+
+- eval_success_rate `0.65`
+- eval_reward `1573.362983`
+- coverage `0.567747`
+- effective radius `0.757831`
+- connectivity violation `0.097835`
+- connected_to_base_ratio `1.0`
+- connected_new_coverage_ratio `0.35`
+- disconnected_new_coverage_ratio `0.0`
+- action_disconnect_risk `0.15`
+- hard filter: `0`
+
+Interpretation:
+
+- This is the first eval where the average formal proxy metrics all pass:
+  - coverage >= `0.55`
+  - radius >= `0.45`
+  - violation <= `0.10`
+- However, success_rate is only `0.65`, so per-episode robustness is not yet stable enough.
+- The phase26 route is promising and should continue to update `400` before opening another phase.
+
+Next decision:
+
+- If update `400` keeps average metrics passing and success improves toward `0.8+`, keep phase26 as the main formal route.
+- If update `400` is unstable, open phase28 with a schedule/curriculum rather than static stronger safety penalties, because phase27 already showed static safety tightening can make behavior worse.
+
+### Phase26 instability and Phase28 stability fine-tune
+
+Date: 2026-06-10.
+
+Phase26/trial01 update `400`:
+
+- eval_success_rate `0.40`
+- eval_reward `1459.770826`
+- coverage `0.626674`
+- effective radius `0.679547`
+- connectivity violation `0.158631`
+- connected_to_base_ratio `0.9625`
+- connected_new_coverage_ratio `0.20`
+- disconnected_new_coverage_ratio `0.0`
+- action_disconnect_risk `0.0`
+- hard filter: `0`
+
+Interpretation:
+
+- Phase26 update `200` remains the best checkpoint:
+  - success `0.85`
+  - coverage `0.585064`
+  - violation `0.108739`
+- Update `300` passed average formal metrics but only success `0.65`.
+- Update `400` became unstable: higher coverage but worse connectivity violation and lower success.
+- The failure mode is late-training instability / policy drift, not lack of reward signal.
+
+Action:
+
+- Stopped phase26 to preserve compute and use the best checkpoint.
+- Added `phase28_formal_stability_finetune` to `scripts/debug_connectivity_soft_phases/run_phase17_20.py`.
+
+Phase28 mechanism:
+
+- Starts from phase26 update200 best checkpoint:
+  `outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+- Keeps formal target:
+  - coverage `0.55`
+  - radius `0.45`
+  - violation `0.10`
+- Stabilization-oriented PPO:
+  - `learning_rate: 0.00006`
+  - `target_kl: 0.015`
+  - `ent_coef: 0.0005`
+  - `log_std_init: -2.70`
+  - `log_std_max: -1.25`
+  - `max_delta: 0.165`
+- Reward is not made aggressively safer like phase27:
+  - `w_connected_new_coverage: 2600`
+  - `w_disconnected_new_coverage: 1300`
+  - `w_disconnect: 15.5`
+  - `w_action_disconnect_risk: 2.4`
+  - `w_connectivity_margin: 2.4`
+- No observation change, no hard filter, no action-space change.
+
+Verification:
+
+- `/opt/conda/bin/python -m py_compile scripts/debug_connectivity_soft_phases/run_phase17_20.py` passed.
+- Phase28 snapshot confirms:
+  - `success_coverage=0.55`
+  - `success_radius=0.45`
+  - `max_violation_rate=0.10`
+  - `connectivity_action_filter=false`
+  - `connectivity_candidate_filter=false`
+- stdout confirms loading:
+  `loaded init_checkpoint=.../phase26_formal_connected_target/.../checkpoint_best_eval.pt`
+
+Phase28 long run started:
+
+- tmux: `wf_conn_p28_20260610_0327`
+- output:
+  `outputs/debug/mappo_direct_specialists/phase28_formal_stability_finetune/20260610_0327/connectivity_expansion/trial01/s0/`
+- launcher log:
+  `outputs/debug/mappo_direct_specialists/phase28_formal_stability_finetune/20260610_0327/launcher_tmux.log`
+
+Next decision:
+
+- At update `100`, phase28 should ideally keep coverage >= `0.55`, radius >= `0.45`, violation near/below `0.10`, and success >= phase26 update200 (`0.85`).
+- If phase28 still drifts, implement explicit schedule/curriculum rather than another static weight tweak.
+
+### Phase28 first eval
+
+Date: 2026-06-10.
+
+Phase28/trial01 update `100`:
+
+- eval_success_rate `0.45`
+- eval_reward `1373.894504`
+- coverage `0.592707`
+- effective radius `0.683569`
+- connectivity violation `0.162039`
+- connected_to_base_ratio `0.925`
+- connected_new_coverage_ratio `0.436`
+- disconnected_new_coverage_ratio `0.014`
+- action_disconnect_risk `0.1875`
+- hard filter: `0`
+
+Rollout at update `116`:
+
+- connectivity_violation_rate `0.031096`
+- coverage_ratio `0.407949`
+- connected_to_base_ratio `0.979004`
+- action_validity_rate `0.941651`
+- approx_kl `0.001189`
+- clip_frac `0.009644`
+
+Interpretation:
+
+- Static stability fine-tuning did not improve formal eval at update `100`.
+- Coverage is high enough, but eval connectivity violation is too high.
+- Rollout violation is low while eval violation is high, suggesting randomization/eval distribution sensitivity or policy instability rather than a pure reward-scale issue.
+
+Decision:
+
+- Keep phase28 until update `200` before declaring it failed.
+- If update `200` remains poor, next step should be explicit schedule/cost multiplier or evaluation-distribution robustness work, not another static reward tweak.
+
+### Phase28 stopped; current best remains Phase26 update 200
+
+Date: 2026-06-10.
+
+Phase28/trial01 update `200`:
+
+- eval_success_rate `0.75`
+- eval_reward `1416.989682`
+- coverage `0.569552`
+- effective radius `0.664408`
+- connectivity violation `0.122960`
+- connected_to_base_ratio `0.95`
+- connected_new_coverage_ratio `0.50`
+- disconnected_new_coverage_ratio `0.0`
+- action_disconnect_risk `0.1625`
+- hard filter: `0`
+
+Interpretation:
+
+- Phase28 improved over its update `100` but did not beat phase26 update `200`.
+- Lower LR / lower exploration stability fine-tune is not sufficient.
+- Current best remains:
+  `outputs/debug/mappo_direct_specialists/phase26_formal_connected_target/20260610_0238/connectivity_expansion/trial01/s0/checkpoints/checkpoint_best_eval.pt`
+  with update `200`, success `0.85`, coverage `0.585064`, violation `0.108739`.
+
+Action:
+
+- Stopped phase28:
+  `wf_conn_p28_20260610_0327`
+- No active training processes remain after this stop.
+
+Next diagnosis:
+
+- The remaining issue is not coverage/radius learning; those are above formal target.
+- The issue is robustness of connectivity violation under randomized eval.
+- Before another static reward tweak, check whether the phase26 best checkpoint's `0.1087` violation is eval sampling noise or a systematic boundary miss.
+
+### Phase29 robust eval of Phase26 best checkpoint
+
+Date: 2026-06-10.
+
+Reason:
+
+- Phase26 update `200` had success `0.85`, coverage `0.585064`, radius `0.796046`, but 20-episode eval violation `0.108739`, slightly above formal `0.10`.
+- Phase26 update `300` passed average formal metrics but success dropped to `0.65`.
+- Need to distinguish actual policy failure from 20-episode randomized eval noise.
+
+Experiment:
+
+- Evaluated the phase26 best checkpoint for `100` randomized episodes.
+- Deterministic policy evaluation.
+- Media enabled for 2 episodes.
+- Output:
+  `outputs/debug/mappo_direct_specialists/phase29_checkpoint_robust_eval/20260610_0352/connectivity_expansion/eval_phase26_best/`
+- Files:
+  - `eval_records.csv`
+  - `summary.json`
+  - `report.md`
+  - `media/phase26_best_random100_ep000_connectivity_expansion.gif`
+  - `media/phase26_best_random100_ep001_connectivity_expansion.gif`
+
+Result:
+
+- episodes `100`
+- success_rate `0.82`
+- return `1774.072813`
+- coverage_ratio `0.581916`
+- effective_explored_radius `0.799667`
+- connectivity_violation_rate `0.095783`
+- connected_to_base_ratio `0.98`
+- connected_new_coverage_ratio `0.619259`
+- disconnected_new_coverage_ratio `0.000741`
+- action_validity_rate `0.998206`
+- connectivity_action_filter_enabled `0.0`
+- connectivity_filter_replacement_count `0.0`
+
+Interpretation:
+
+- Phase26 best checkpoint passes the formal proxy averages under a stronger 100-episode randomized eval.
+- The earlier `0.1087` violation from 20-episode eval was likely evaluation sampling noise / boundary variance.
+- Current connectivity_expansion status should be considered `CONVERGED_SINGLE_SEED_PROXY`, not final multi-seed solved.
+- Remaining work is repeat-seed validation or training additional seeds from the same phase26 recipe.
+
+Cleanup:
+
+- Initial report generation had shell heredoc backtick interpolation errors; `summary.json` and CSV were valid.
+- Rewrote `report.md` with correct metrics and media paths.
+- No active training sessions remain.
+- `git diff --check` passed.
+
+### Phase30 repeat randomized eval
+
+Date: 2026-06-10.
+
+Reason:
+
+- Phase29 showed phase26 best passes a 100-episode randomized eval with success `0.82` and violation `0.09578`.
+- Need check whether this is robust to different eval seed bases.
+
+Experiment:
+
+- Same phase26 best checkpoint.
+- Deterministic policy.
+- Two independent 100-episode randomized evals.
+- Media enabled: 2 GIFs per eval seed.
+- Output root:
+  `outputs/debug/mappo_direct_specialists/phase30_checkpoint_repeat_eval/20260610_0357/connectivity_expansion/`
+
+Seed base `5000`:
+
+- output:
+  `outputs/debug/mappo_direct_specialists/phase30_checkpoint_repeat_eval/20260610_0357/connectivity_expansion/eval_seed5000/`
+- success_rate `0.79`
+- return `1766.297837`
+- coverage_ratio `0.581512`
+- effective_explored_radius `0.816807`
+- connectivity_violation_rate `0.089600`
+- connected_to_base_ratio `0.995`
+- connected_new_coverage_ratio `0.62`
+- disconnected_new_coverage_ratio `0.0`
+- action_validity_rate `0.998926`
+- hard filter `0`, replacement count `0`
+
+Seed base `9000`:
+
+- output:
+  `outputs/debug/mappo_direct_specialists/phase30_checkpoint_repeat_eval/20260610_0357/connectivity_expansion/eval_seed9000/`
+- success_rate `0.77`
+- return `1496.660205`
+- coverage_ratio `0.570067`
+- effective_explored_radius `0.783409`
+- connectivity_violation_rate `0.109440`
+- connected_to_base_ratio `0.975`
+- connected_new_coverage_ratio `0.628`
+- disconnected_new_coverage_ratio `0.002`
+- action_validity_rate `0.998349`
+- hard filter `0`, replacement count `0`
+
+Interpretation:
+
+- Phase26 best is robust enough to call the connectivity route `mostly converged` under Direct MAPPO soft constraints.
+- Coverage/radius consistently pass formal target.
+- Violation is near the boundary: seed `5000` passes `0.10`, seed `9000` misses by about `0.0094`.
+- Given the user's allowance for slight success relaxation, this is acceptable as a practical convergence result, but not a perfect margin.
+- If stricter formal robustness is required, next work should implement an explicit schedule/cost multiplier or train repeat seeds, not further static reward tweaks.
+
+Verification:
+
+- All phase30 eval outputs include CSV, summary, report, and GIFs.
+- No active tmux sessions remain.
+- `git diff --check` passed.
