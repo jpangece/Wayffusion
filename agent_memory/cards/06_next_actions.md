@@ -2213,3 +2213,24 @@ After Phase31 workers finish without runtime errors:
 Continue per-task specialist debugging in separate versioned debug phases when
 needed. Do not overwrite `swarm30_v1`; create a new benchmark policy/protocol
 version for changed rewards, observations, or architectures.
+
+### UVFA phase32
+
+Run:
+
+```bash
+python scripts/debug/phase32_uvfa_goal_conditioning.py
+```
+
+Compare trial01 goal-blind Direct MAPPO against trial02
+`direct_waypoint_uvfa` on the same four-task train-goal distribution and the
+same seeds. Read `summary.json` and `report_zh.md`; do not claim UVFA improves
+performance unless interpolation/formal progress improves across seeds.
+
+### Evaluate-only output rule
+
+Use `outputs/eval/` for runs that only load a checkpoint and evaluate it.
+Match the training hierarchy:
+`outputs/eval/mappo_direct_specialists/<runtime>/<task>/s<seed>/`.
+Do not put pure evaluation results in `outputs/debug/` or
+`outputs/training/`.

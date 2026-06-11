@@ -294,9 +294,9 @@ class ConnectivityExpansionScenario(WaypointScenario):
         coverage = world.coverage_ratio()
         radius = self._effective_radius(world)
         violation_rate = float(task_state.get("disconnect_steps", 0) / max(world.step_count, 1))
-        success_coverage = float(self.cfg("success_coverage", 0.35))
-        success_radius = float(self.cfg("success_radius", 0.45))
-        max_violation_rate = float(self.cfg("max_violation_rate", 0.1))
+        success_coverage = self.goal_value(task_state, 0, "success_coverage", 0.35)
+        success_radius = self.goal_value(task_state, 1, "success_radius", 0.45)
+        max_violation_rate = self.goal_value(task_state, 2, "max_violation_rate", 0.1)
         relaxed_success_coverage = float(self.cfg("relaxed_success_coverage", max(success_coverage - 0.10, 0.0)))
         relaxed_success_radius = float(self.cfg("relaxed_success_radius", max(success_radius - 0.10, 0.0)))
         relaxed_max_violation_rate = float(self.cfg("relaxed_max_violation_rate", min(max_violation_rate + 0.10, 1.0)))
@@ -305,6 +305,9 @@ class ConnectivityExpansionScenario(WaypointScenario):
             "connectivity_violation_rate": violation_rate,
             "effective_explored_radius": radius,
             "coverage_ratio": coverage,
+            "goal_coverage_target": success_coverage,
+            "goal_radius_target": success_radius,
+            "goal_violation_budget": max_violation_rate,
             "relaxed_success": bool(
                 coverage >= relaxed_success_coverage
                 and radius >= relaxed_success_radius

@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 
 from policies.candidate_selection_policy import CandidateSelectionWaypointPolicy, MAPPOWaypointPolicy
-from policies.direct_waypoint_policy import DirectWaypointPolicy
+from policies.direct_waypoint_policy import DirectWaypointPolicy, UVFADirectWaypointPolicy
 from policies.policy_output import PolicyOutput
 
 
@@ -50,8 +50,9 @@ def build_policy(policy_config: dict, observation_space, action_space):
             candidate_prior_coef=float(policy_config.get("candidate_prior_coef", 0.0)),
             connectivity_chain_candidates=bool(policy_config.get("connectivity_chain_candidates", False)),
         )
-    if policy_class == "direct_waypoint":
-        return DirectWaypointPolicy(
+    if policy_class in {"direct_waypoint", "direct_waypoint_uvfa"}:
+        policy_type = UVFADirectWaypointPolicy if policy_class == "direct_waypoint_uvfa" else DirectWaypointPolicy
+        return policy_type(
             observation_space,
             action_space,
             **common,
@@ -67,6 +68,8 @@ def build_policy(policy_config: dict, observation_space, action_space):
             field_moment_include_inverse=bool(policy_config.get("field_moment_include_inverse", False)),
             use_connectivity_auxiliary_loss=bool(policy_config.get("use_connectivity_auxiliary_loss", False)),
             use_comm_graph_encoder=bool(policy_config.get("use_comm_graph_encoder", False)),
+            goal_embedding_dim=int(policy_config.get("goal_embedding_dim", 64)),
+            goal_hidden_dim=int(policy_config.get("goal_hidden_dim", 64)),
         )
     raise ValueError(f"Unsupported waypoint MARL policy class: {policy_class}")
 
@@ -74,6 +77,7 @@ def build_policy(policy_config: dict, observation_space, action_space):
 __all__ = [
     "CandidateSelectionWaypointPolicy",
     "DirectWaypointPolicy",
+    "UVFADirectWaypointPolicy",
     "MAPPOWaypointPolicy",
     "PolicyOutput",
     "build_policy",

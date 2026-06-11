@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 import yaml
+import pytest
 
 from algorithms.mappo_waypoint import MAPPOWaypointTrainer
 from utils.tensorboard_metrics import should_log_tensorboard_metric
@@ -109,3 +110,53 @@ def test_both_eval_produces_prefixed_metrics_and_separate_media(tmp_path: Path, 
 
     assert should_log_tensorboard_metric("eval_fixed_success_rate", 0.75, mode="core")
     assert should_log_tensorboard_metric("eval_random_reward", 2.0, mode="core")
+
+
+def test_goal_split_eval_produces_seen_interpolation_and_formal_metrics(tmp_path: Path, monkeypatch):
+    calls = []
+
+    def fake_evaluate(
+        env_config,
+        policy,
+        task_names,
+        episodes,
+        device,
+        headless=True,
+        record_dir=None,
+        record_episodes=0,
+        record_format="gif",
+        record_fps=8,
+        record_prefix="eval",
+        goal_split=None,
+    ):
+        del env_config, policy, episodes, device, headless, record_episodes, record_format, record_fps, record_prefix
+        values = {"seen": 0.8, "interpolation": 0.6, "formal": 0.4}
+        success = values[goal_split]
+        calls.append((goal_split, Path(record_dir)))
+        Path(record_dir).mkdir(parents=True, exist_ok=True)
+        records = [{"return": success, "success_rate": success, "task_name": task_names[0]}]
+        summary = {"return_mean": success, "success_rate_mean": success, "goal_progress_mean": success}
+        return records, {task_names[0]: summary}, summary
+
+    monkeypatch.setattr("utils.waypoint_evaluation.evaluate_waypoint_policy_per_task", fake_evaluate)
+    trainer = object.__new__(MAPPOWaypointTrainer)
+    trainer.policy = object()
+    trainer.device = torch.device("cpu")
+    metrics = trainer.evaluate(
+        {"domain_randomization": {"enabled": True}},
+        ["area_coverage"],
+        episodes=1,
+        output_dir=tmp_path,
+        update_idx=5,
+        record_episodes=1,
+        randomization_mode="random",
+        goal_splits=["seen", "interpolation", "formal"],
+    )
+
+    assert metrics["eval_random_goal_seen_success_rate"] == 0.8
+    assert metrics["eval_random_goal_interpolation_success_rate"] == 0.6
+    assert metrics["eval_random_goal_formal_success_rate"] == 0.4
+    assert metrics["eval_goal_interpolation_gap"] == pytest.approx(0.2)
+    assert metrics["eval_goal_formal_gap"] == pytest.approx(0.4)
+    assert metrics["eval_success_rate"] == 0.4
+    assert calls[0][1] == tmp_path / "media" / "eval_random" / "eval_0005" / "goal_seen"

@@ -139,6 +139,13 @@ def main() -> None:
     parser.add_argument("--eval-config", default="configs/eval/waypoint_eval.yaml")
     parser.add_argument("--train-randomization", choices=["inherit", "fixed", "random"], default="inherit")
     parser.add_argument("--eval-randomization", choices=["inherit", "fixed", "random", "both"], default=None)
+    parser.add_argument("--train-goal-split", choices=["fixed", "train"], default="fixed")
+    parser.add_argument(
+        "--eval-goal-splits",
+        nargs="+",
+        choices=["seen", "interpolation", "formal"],
+        default=None,
+    )
     parser.add_argument("--tasks", nargs="+", default=["area_coverage", "belief_search", "priority_inspection", "connectivity_expansion"])
     parser.add_argument("--num_agents", type=int, default=None)
     parser.add_argument("--num_envs", type=int, default=None)
@@ -181,6 +188,7 @@ def main() -> None:
     env_config["task_names"] = task_names
     env_config["task_name"] = task_names[0] if len(task_names) == 1 else None
     env_config["task_sampling_probs"] = {task: 1.0 for task in task_names}
+    env_config.setdefault("mission_goals", {})["train_split"] = str(args.train_goal_split)
     if args.num_agents is not None:
         env_config["num_agents"] = int(args.num_agents)
     env_config["seed"] = training_seed
@@ -220,6 +228,7 @@ def main() -> None:
             "record_eval_episodes": record_eval_episodes,
             "record_format": record_format,
             "record_fps": record_fps,
+            "goal_splits": list(args.eval_goal_splits or []),
         }
     )
     (snapshot / "eval_config.yaml").write_text(yaml.safe_dump(resolved_eval_config, sort_keys=False), encoding="utf-8")
@@ -262,6 +271,7 @@ def main() -> None:
         record_fps=record_fps,
         record_interval=int(args.record_interval),
         eval_randomization_mode=eval_randomization_mode,
+        eval_goal_splits=list(args.eval_goal_splits) if args.eval_goal_splits else None,
         log_callback=on_record,
     )
     if not history:

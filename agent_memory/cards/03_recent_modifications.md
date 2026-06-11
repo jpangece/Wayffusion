@@ -7285,3 +7285,40 @@ Queue:
 
 This is an experiment scaffold and protocol implementation, not a benchmark
 performance conclusion.
+
+### UVFA-conditioned Direct MAPPO scaffold
+
+Date: 2026-06-11.
+
+Implemented the first Wayffusion adaptation of Schaul et al. (2015), Universal
+Value Function Approximators:
+
+- added episode-level `mission_goal[3]` and `goal_mask[3]`;
+- added train, interpolation, and formal goal sets for area coverage, belief
+  search, priority inspection, and connectivity expansion;
+- task success and termination now use the sampled goal, while the default
+  `fixed` split preserves the existing YAML thresholds;
+- added `direct_waypoint_uvfa`, with a separate goal encoder and a two-stream
+  centralized value function using state, goal, and state-goal product;
+- retained the original `direct_waypoint` parameter structure and checkpoint
+  compatibility;
+- added task-scoped reward normalization and goal-split evaluation metrics;
+- added `phase32_uvfa_goal_conditioning.py` for a matched baseline versus UVFA
+  comparison.
+
+This is an implementation and experiment scaffold, not a performance
+conclusion. The first version does not implement Horde, matrix factorization,
+or hindsight goal relabeling.
+
+### Pure evaluation output convention
+
+Date: 2026-06-11.
+
+- `outputs/eval/` is reserved for evaluate-only runs that do not train or
+  update a policy.
+- Pure specialist evaluations mirror the formal training layout:
+  `outputs/eval/mappo_direct_specialists/<runtime>/<task>/s<seed>/`.
+- The N=4 specialist to N=30 zero-shot launcher is
+  `scripts/benchmarks/swarm30/evaluate_n4_specialists_on_n30.sh`.
+- Debug experiments remain under `outputs/debug/`; training runs remain under
+  `outputs/training/`.

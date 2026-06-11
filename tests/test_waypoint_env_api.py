@@ -28,6 +28,10 @@ def test_waypoint_parallel_api_reset_step_and_global_state():
     global_state = env.get_global_state()
     assert "candidate_waypoints" not in global_state
     assert "candidate_mask" not in global_state
+    assert global_state["mission_goal"].shape == (3,)
+    assert global_state["goal_mask"].shape == (3,)
+    assert first_obs["mission_goal"].shape == (3,)
+    assert first_obs["goal_mask"].shape == (3,)
     assert isinstance(env.action_space("uav_0"), spaces.Box)
     assert env.action_space("uav_0").shape == (2,)
     assert env.observation_space("uav_0").contains(first_obs)
@@ -57,6 +61,11 @@ def test_waypoint_parallel_api_reset_step_and_global_state():
         "command_update_rate",
         "command_reject_rate",
         "mean_desired_speed_mps",
+        "mission_goal",
+        "goal_mask",
+        "goal_split",
+        "goal_progress",
+        "goal_achieved",
     ]:
         assert key in info
     assert np.asarray(info["per_agent_rewards"]).shape == (3,)

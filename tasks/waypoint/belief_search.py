@@ -74,13 +74,15 @@ class BeliefSearchScenario(WaypointScenario):
         for i, uav in enumerate(world.uavs):
             mask = prev_world.sensor_mask_for_position(uav.position, uav.sensor_radius)
             per_agent[i] = float(self.cfg("w_prob", 120.0)) * float(prev_belief[mask].sum())
+        success_mass = self.goal_value(task_state, 0, "success_mass", 0.55)
         metrics = {
             "searched_probability_mass": float(1.0 - remaining),
             "detection_rate": float(task_state.get("detected", False)),
             "time_to_detection": float(task_state.get("time_to_detection", 0)),
             "repeated_search_mass": float(repeated_mass),
             "remaining_belief_mass": remaining,
-            "success": bool(task_state.get("detected", False) or (1.0 - remaining) >= float(self.cfg("success_mass", 0.55))),
+            "goal_searched_mass_target": success_mass,
+            "success": bool(task_state.get("detected", False) or (1.0 - remaining) >= success_mass),
         }
         return {
             "team_reward": float(reward),
@@ -92,9 +94,11 @@ class BeliefSearchScenario(WaypointScenario):
 
     def get_metrics(self, world: MissionWorld, task_state: dict) -> dict:
         searched = float(1.0 - world.belief_grid.sum())
+        success_mass = self.goal_value(task_state, 0, "success_mass", 0.55)
         return {
             "searched_probability_mass": searched,
             "remaining_belief_mass": float(world.belief_grid.sum()),
             "detection_rate": float(task_state.get("detected", False)),
-            "success": bool(task_state.get("detected", False) or searched >= float(self.cfg("success_mass", 0.55))),
+            "goal_searched_mass_target": success_mass,
+            "success": bool(task_state.get("detected", False) or searched >= success_mass),
         }

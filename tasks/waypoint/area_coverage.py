@@ -34,7 +34,7 @@ class AreaCoverageScenario(WaypointScenario):
         )
         per_agent = float(self.cfg("w_new", 160.0)) * per_agent_new_coverage(prev_world, world)
         per_agent -= float(self.cfg("w_distance", 0.2)) * np.asarray(transition_info["path_length_delta"], dtype=np.float32)
-        metrics = self.get_metrics(world, {})
+        metrics = self.get_metrics(world, task_state)
         metrics.update(
             {
                 "new_coverage_ratio": new_ratio,
@@ -99,6 +99,10 @@ class AreaCoverageScenario(WaypointScenario):
         return float(np.mean(ratios)) if ratios else 0.0
 
     def get_metrics(self, world: MissionWorld, task_state: dict) -> dict:
-        del task_state
         ratio = world.coverage_ratio()
-        return {"coverage_ratio": ratio, "success": ratio >= float(self.cfg("success_ratio", 0.55))}
+        threshold = self.goal_value(task_state, 0, "success_ratio", 0.55)
+        return {
+            "coverage_ratio": ratio,
+            "goal_coverage_target": threshold,
+            "success": ratio >= threshold,
+        }

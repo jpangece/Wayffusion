@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from envs.waypoint_marl_env import WaypointMultiUAVEnv
+from envs.waypoint.mission_goals import goal_values_for_split
 
 
 EVAL_RANDOMIZATION_MODES = {"inherit", "fixed", "random", "both"}
@@ -84,6 +85,7 @@ def evaluate_waypoint_policy_episodes(
     record_format: str = "gif",
     record_fps: int = 8,
     record_prefix: str = "episode",
+    goal_split: str | None = None,
 ) -> list[dict]:
     config = deepcopy(env_config)
     if task_name is not None:
@@ -92,8 +94,15 @@ def evaluate_waypoint_policy_episodes(
     env = WaypointMultiUAVEnv(config)
     records = []
     record_root = Path(record_dir) if record_dir is not None else None
+    split_goals = goal_values_for_split(task_name, config, goal_split) if task_name is not None and goal_split is not None else []
     for episode_idx in range(int(episodes)):
-        env.reset(seed=int(config.get("seed", 0)) + 1000 + episode_idx)
+        reset_options = None
+        if split_goals:
+            reset_options = {
+                "goal_split": goal_split,
+                "mission_goal": split_goals[episode_idx % len(split_goals)],
+            }
+        env.reset(seed=int(config.get("seed", 0)) + 1000 + episode_idx, options=reset_options)
         done = False
         total_reward = 0.0
         steps = 0
@@ -133,6 +142,13 @@ def evaluate_waypoint_policy_episodes(
             "collision_rate": float(info.get("collision_rate", 0.0)),
             "steps": float(steps),
             "task_name": str(info.get("task_name", task_name or "unknown")),
+            "goal_split": str(info.get("goal_split", goal_split or "fixed")),
+            "goal_id": str(info.get("goal_id", "")),
+            "mission_goal_0": float(np.asarray(info.get("mission_goal", np.zeros(3)))[0]),
+            "mission_goal_1": float(np.asarray(info.get("mission_goal", np.zeros(3)))[1]),
+            "mission_goal_2": float(np.asarray(info.get("mission_goal", np.zeros(3)))[2]),
+            "goal_progress": float(info.get("goal_progress", metrics.get("goal_progress", 0.0))),
+            "goal_achieved": float(bool(info.get("goal_achieved", info.get("success", False)))),
             "num_agents": int(info.get("num_agents", config.get("num_agents", 0))),
             "action_validity_rate": float(1.0 - info.get("invalid_action_count", 0) / max(steps * int(config.get("num_agents", 1)), 1)),
             "candidate_mask_empty_count": float(info.get("candidate_mask_empty_count", 0)),
@@ -177,6 +193,7 @@ def evaluate_waypoint_policy_per_task(
     record_format: str = "gif",
     record_fps: int = 8,
     record_prefix: str = "eval",
+    goal_split: str | None = None,
 ) -> tuple[list[dict], dict[str, dict], dict]:
     all_records = []
     summaries = {}
@@ -195,6 +212,7 @@ def evaluate_waypoint_policy_per_task(
             record_format=record_format,
             record_fps=record_fps,
             record_prefix=f"{record_prefix}_{task_name}",
+            goal_split=goal_split,
         )
         all_records.extend(records)
         summaries[task_name] = _aggregate(records)

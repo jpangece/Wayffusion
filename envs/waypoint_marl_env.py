@@ -8,6 +8,7 @@ import numpy as np
 from gymnasium import spaces
 
 from envs.waypoint.control import build_action_adapter, build_dynamics_backend
+from envs.waypoint.mission_goals import GOAL_DIM, goal_progress, resolve_episode_goal
 from envs.waypoint.randomization import build_episode_config
 from envs.waypoint.rendering import render_world
 from envs.waypoint.safety import SafetyLayer
@@ -52,6 +53,10 @@ class WaypointMultiUAVEnv:
         self.dynamics_backend = build_dynamics_backend(self._dynamics_backend_config())
         self.current_scenario = None
         self.task_state: dict[str, Any] = {}
+        self.current_mission_goal = np.zeros(GOAL_DIM, dtype=np.float32)
+        self.current_goal_mask = np.zeros(GOAL_DIM, dtype=np.float32)
+        self.current_goal_split = "fixed"
+        self.current_goal_id = "fixed_00"
         self.last_candidate_waypoints = np.zeros((self.num_agents, self.candidate_count, 2), dtype=np.float32)
         self.last_candidate_mask = np.zeros((self.num_agents, self.candidate_count), dtype=bool)
         self.last_selected_waypoints: np.ndarray | None = None
@@ -119,6 +124,8 @@ class WaypointMultiUAVEnv:
             "neighbor_relative_states": spaces.Box(low=-10.0, high=10.0, shape=(max(n - 1, 0), 4), dtype=np.float32),
             "task_field": spaces.Box(low=0.0, high=1.0, shape=(5, g, g), dtype=np.float32),
             "task_id": spaces.Box(low=0.0, high=1.0, shape=(len(WAYPOINT_TASKS),), dtype=np.float32),
+            "mission_goal": spaces.Box(low=0.0, high=10.0, shape=(GOAL_DIM,), dtype=np.float32),
+            "goal_mask": spaces.Box(low=0.0, high=1.0, shape=(GOAL_DIM,), dtype=np.float32),
             "global_summary": spaces.Box(low=-10.0, high=10.0, shape=(8,), dtype=np.float32),
             "all_uav_states": spaces.Box(low=-10.0, high=10.0, shape=(n, 8), dtype=np.float32),
             "comm_adjacency": spaces.MultiBinary((n + 1, n + 1)),
@@ -128,6 +135,8 @@ class WaypointMultiUAVEnv:
             "global_task_field": spaces.Box(low=0.0, high=1.0, shape=(5, g, g), dtype=np.float32),
             "all_uav_states": spaces.Box(low=-10.0, high=10.0, shape=(n, 8), dtype=np.float32),
             "task_id": spaces.Box(low=0.0, high=1.0, shape=(len(WAYPOINT_TASKS),), dtype=np.float32),
+            "mission_goal": spaces.Box(low=0.0, high=10.0, shape=(GOAL_DIM,), dtype=np.float32),
+            "goal_mask": spaces.Box(low=0.0, high=1.0, shape=(GOAL_DIM,), dtype=np.float32),
             "global_info": spaces.Box(low=-10.0, high=10.0, shape=(8,), dtype=np.float32),
             "comm_adjacency": spaces.MultiBinary((n + 1, n + 1)),
             "agent_mask": spaces.MultiBinary(n),
@@ -202,6 +211,24 @@ class WaypointMultiUAVEnv:
         task_name = str(options.get("task_name") or self.rng.choice(self.task_names, p=self.task_sampling_probs))
         self.current_scenario = build_waypoint_scenario(task_name, self.episode_config.get("tasks", self.episode_config))
         self.task_state = self.current_scenario.reset(self.rng, self.world)
+        goal_config = dict(self.episode_config.get("mission_goals", {}))
+        requested_split = str(options.get("goal_split", goal_config.get("train_split", "fixed")))
+        (
+            self.current_mission_goal,
+            self.current_goal_mask,
+            self.current_goal_split,
+            self.current_goal_id,
+        ) = resolve_episode_goal(
+            task_name,
+            self.episode_config,
+            self.rng,
+            split=requested_split,
+            forced_goal=options.get("mission_goal"),
+        )
+        self.task_state["_mission_goal"] = self.current_mission_goal.copy()
+        self.task_state["_goal_mask"] = self.current_goal_mask.copy()
+        self.task_state["_goal_split"] = self.current_goal_split
+        self.task_state["_goal_id"] = self.current_goal_id
         self._record_episode_randomization(task_name)
         self.agents = self.possible_agents.copy()
         self.last_selected_waypoints = None
@@ -217,6 +244,10 @@ class WaypointMultiUAVEnv:
     def _record_episode_randomization(self, task_name: str) -> None:
         metadata = self.episode_randomization_info
         metadata["task_name"] = task_name
+        metadata["mission_goal"] = self.current_mission_goal.astype(float).tolist()
+        metadata["goal_mask"] = self.current_goal_mask.astype(float).tolist()
+        metadata["goal_split"] = self.current_goal_split
+        metadata["goal_id"] = self.current_goal_id
         metadata["base_position"] = self.world.base_position.astype(float).tolist()
         metadata["spawn_positions"] = self.world.get_uav_positions().astype(float).tolist()
         metadata["fixed_parameters"] = {
@@ -472,6 +503,8 @@ class WaypointMultiUAVEnv:
                 "neighbor_relative_states": self._neighbor_relative_states(idx),
                 "task_field": global_state["task_field"].astype(np.float32),
                 "task_id": global_state["task_id"].astype(np.float32),
+                "mission_goal": global_state["mission_goal"].astype(np.float32),
+                "goal_mask": global_state["goal_mask"].astype(np.float32),
                 "global_summary": global_state["global_info"].astype(np.float32),
                 "all_uav_states": all_states.astype(np.float32),
                 "comm_adjacency": self.world.communication_graph.astype(np.int8),
@@ -491,6 +524,13 @@ class WaypointMultiUAVEnv:
     def _build_agent_info(self, agent_idx: int) -> dict[str, Any]:
         reward_result = self.last_reward_result or {}
         metrics = dict(reward_result.get("metrics", self.current_scenario.get_metrics(self.world, self.task_state)))
+        progress = goal_progress(
+            self.current_scenario.name,
+            self.current_mission_goal,
+            metrics,
+        )
+        metrics["goal_progress"] = progress
+        metrics["goal_achieved"] = bool(reward_result.get("success", metrics.get("success", False)))
         adapter_info = dict(self.last_transition_info.get("adapter_info", {}))
         info = {
             "team_reward": float(reward_result.get("team_reward", 0.0)),
@@ -520,6 +560,12 @@ class WaypointMultiUAVEnv:
             "no_fly_violation_count": int(self.last_transition_info.get("no_fly_violation_count", 0)),
             "geofence_violation_count": int(self.last_transition_info.get("geofence_violation_count", 0)),
             "task_name": self.current_scenario.name,
+            "mission_goal": self.current_mission_goal.copy(),
+            "goal_mask": self.current_goal_mask.copy(),
+            "goal_split": self.current_goal_split,
+            "goal_id": self.current_goal_id,
+            "goal_progress": progress,
+            "goal_achieved": bool(reward_result.get("success", metrics.get("success", False))),
             "num_agents": self.num_agents,
             "success": bool(reward_result.get("success", metrics.get("success", False))),
             "failure": bool(reward_result.get("failure", False)),
@@ -552,6 +598,8 @@ class WaypointMultiUAVEnv:
             "global_task_field": task_field.astype(np.float32),
             "all_uav_states": normalized_positions(self.world).astype(np.float32),
             "task_id": task_id.astype(np.float32),
+            "mission_goal": self.current_mission_goal.astype(np.float32),
+            "goal_mask": self.current_goal_mask.astype(np.float32),
             "global_info": self.world.get_global_summary().astype(np.float32),
             "comm_adjacency": self.world.communication_graph.astype(np.int8),
             "agent_mask": np.ones(self.num_agents, dtype=np.int8),

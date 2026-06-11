@@ -66,6 +66,41 @@ task_sampling_probs:
   connectivity_expansion: 1.0
   dynamic_target_escort: 0.5
   target_interception: 0.5
+mission_goals:
+  train_split: fixed
+  tasks:
+    area_coverage:
+      train:
+        - [0.45, 0.0, 0.0]
+        - [0.60, 0.0, 0.0]
+        - [0.75, 0.0, 0.0]
+      interpolation:
+        - [0.525, 0.0, 0.0]
+        - [0.675, 0.0, 0.0]
+    belief_search:
+      train:
+        - [0.45, 0.0, 0.0]
+        - [0.60, 0.0, 0.0]
+        - [0.75, 0.0, 0.0]
+      interpolation:
+        - [0.525, 0.0, 0.0]
+        - [0.675, 0.0, 0.0]
+    priority_inspection:
+      train:
+        - [0.40, 0.0, 0.0]
+        - [0.55, 0.0, 0.0]
+        - [0.70, 0.0, 0.0]
+      interpolation:
+        - [0.475, 0.0, 0.0]
+        - [0.625, 0.0, 0.0]
+    connectivity_expansion:
+      train:
+        - [0.35, 0.30, 0.20]
+        - [0.45, 0.35, 0.15]
+        - [0.50, 0.40, 0.12]
+      interpolation:
+        - [0.40, 0.325, 0.18]
+        - [0.475, 0.375, 0.135]
 no_fly_zones:
   - center: [0.55, 0.55]
     radius: 0.08

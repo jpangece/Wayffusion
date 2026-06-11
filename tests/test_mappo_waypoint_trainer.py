@@ -80,6 +80,13 @@ def test_mappo_waypoint_collect_update_direct_waypoint():
     _run_collect_update(_base_env_config(), _train_config("configs/policy/direct_waypoint_debug.yaml"))
 
 
+def test_mappo_waypoint_collect_update_uvfa_direct_waypoint():
+    config = _train_config("configs/policy/direct_waypoint_debug.yaml")
+    config["policy_class"] = "direct_waypoint_uvfa"
+    config["reward_norm_scope"] = "task"
+    _run_collect_update(_base_env_config(), config)
+
+
 def test_gae_truncated_bootstraps_value_but_does_not_cross_episode():
     rewards = np.array([[1.0], [2.0]], dtype=np.float32)
     values = np.array([[0.5], [0.25]], dtype=np.float32)

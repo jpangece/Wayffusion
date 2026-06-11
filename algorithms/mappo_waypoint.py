@@ -152,6 +152,7 @@ class MAPPOWaypointTrainer:
         self.policy.to(self.device)
         self.optimizer = torch.optim.Adam(self.policy.parameters(), lr=float(train_config["learning_rate"]))
         self.reward_rms = RunningMeanStd()
+        self.reward_rms_by_task: dict[str, RunningMeanStd] = {}
         self.current_obs, _ = self.env_batch.reset()
         self.global_step = 0
         self.completed_episodes = 0
@@ -206,6 +207,22 @@ class MAPPOWaypointTrainer:
         except (TypeError, ValueError):
             return float(default)
 
+    def _normalize_rewards(self, rewards: np.ndarray, infos: list[dict]) -> np.ndarray:
+        scope = str(self.train_config.get("reward_norm_scope", "global")).lower()
+        if scope == "global":
+            self.reward_rms.update(rewards)
+            return self.reward_rms.normalize(rewards)
+        if scope != "task":
+            raise ValueError(f"Unsupported reward_norm_scope={scope!r}; expected 'global' or 'task'")
+        normalized = np.asarray(rewards, dtype=np.float32).copy()
+        task_names = np.asarray([str(info.get("task_name", "unknown")) for info in infos], dtype=object)
+        for task_name in sorted(set(task_names.tolist())):
+            indices = np.where(task_names == task_name)[0]
+            rms = self.reward_rms_by_task.setdefault(task_name, RunningMeanStd())
+            rms.update(rewards[indices])
+            normalized[indices] = rms.normalize(rewards[indices])
+        return normalized
+
     def collect_rollout(self) -> tuple[MAPPOWaypointBatch, dict]:
         horizon = int(self.train_config["rollout_steps"])
         gamma = float(self.train_config["gamma"])
@@ -258,6 +275,8 @@ class MAPPOWaypointTrainer:
         clipped_delta_norm_means = []
         clipped_delta_norm_maxs = []
         delta_clip_fractions = []
+        goal_embedding_norms = []
+        goal_embedding_variances = []
         raw_team_rewards = []
         penalized_team_rewards = []
         connectivity_costs = []
@@ -298,6 +317,8 @@ class MAPPOWaypointTrainer:
             "relaxed_max_violation_rate",
             "connectivity_action_filter_enabled",
             "connectivity_filter_replacement_count",
+            "goal_progress",
+            "goal_achieved",
         ]
         extra_metrics = {key: [] for key in extra_metric_keys}
         start = time.perf_counter()
@@ -339,6 +360,10 @@ class MAPPOWaypointTrainer:
                 clipped_delta_norm_maxs.append(float(torch.as_tensor(aux["clipped_delta_norm_max"]).detach().cpu().item()))
             if "delta_clip_fraction" in aux:
                 delta_clip_fractions.append(float(torch.as_tensor(aux["delta_clip_fraction"]).detach().cpu().item()))
+            if "goal_embedding_norm" in aux:
+                goal_embedding_norms.append(float(torch.as_tensor(aux["goal_embedding_norm"]).detach().cpu().item()))
+            if "goal_embedding_variance" in aux:
+                goal_embedding_variances.append(float(torch.as_tensor(aux["goal_embedding_variance"]).detach().cpu().item()))
             step = self.env_batch.step(env_actions)
             with torch.no_grad():
                 bootstrap_value = self.policy.get_action_and_value(_obs_to_tensor(step.bootstrap_observations, self.device)).value
@@ -352,8 +377,7 @@ class MAPPOWaypointTrainer:
             connectivity_costs.extend(float(value) for value in step_costs)
             lagrangian_penalties.extend(float(value) for value in step_lagrangian_penalty)
             if self.train_config.get("reward_norm", True):
-                self.reward_rms.update(train_rewards)
-                train_rewards = self.reward_rms.normalize(train_rewards)
+                train_rewards = self._normalize_rewards(train_rewards, step.infos)
             buffer.add(
                 self.current_obs,
                 env_actions,
@@ -477,6 +501,8 @@ class MAPPOWaypointTrainer:
             "clipped_delta_norm_mean": float(np.mean(clipped_delta_norm_means)) if clipped_delta_norm_means else 0.0,
             "clipped_delta_norm_max": float(np.max(clipped_delta_norm_maxs)) if clipped_delta_norm_maxs else 0.0,
             "delta_clip_fraction": float(np.mean(delta_clip_fractions)) if delta_clip_fractions else 0.0,
+            "goal_embedding_norm": float(np.mean(goal_embedding_norms)) if goal_embedding_norms else 0.0,
+            "goal_embedding_variance": float(np.mean(goal_embedding_variances)) if goal_embedding_variances else 0.0,
             "connectivity_cost": mean_cost,
             "lagrangian_penalty": float(np.mean(lagrangian_penalties)) if lagrangian_penalties else 0.0,
             "episodes_completed": int(np.count_nonzero(np.stack(buffer.done_for_reset))),
@@ -507,6 +533,11 @@ class MAPPOWaypointTrainer:
             safe_task = task_name.replace("-", "_")
             rollout_result[f"task_steps_{safe_task}"] = float(count)
             rollout_result[f"task_fraction_{safe_task}"] = float(count / task_step_total)
+        if str(self.train_config.get("reward_norm_scope", "global")).lower() == "task":
+            for task_name, rms in sorted(self.reward_rms_by_task.items()):
+                safe_task = task_name.replace("-", "_")
+                rollout_result[f"reward_norm_{safe_task}_mean"] = float(rms.mean)
+                rollout_result[f"reward_norm_{safe_task}_var"] = float(rms.var)
         return buffer.build(advantages, returns), rollout_result
 
     def _masked_mean(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -638,6 +669,7 @@ class MAPPOWaypointTrainer:
         record_format: str = "gif",
         record_fps: int = 8,
         randomization_mode: str = "inherit",
+        goal_splits: list[str] | None = None,
     ) -> dict:
         from utils.waypoint_evaluation import (
             env_config_for_randomization_mode,
@@ -647,6 +679,23 @@ class MAPPOWaypointTrainer:
 
         mode = resolve_eval_randomization_mode({"randomization_mode": randomization_mode})
         modes = ["fixed", "random"] if mode == "both" else [mode]
+        if goal_splits:
+            return self._evaluate_goal_splits(
+                env_config,
+                task_names,
+                episodes,
+                modes=modes,
+                randomization_mode=mode,
+                goal_splits=goal_splits,
+                output_dir=output_dir,
+                update_idx=update_idx,
+                headless=headless,
+                record_episodes=record_episodes,
+                record_format=record_format,
+                record_fps=record_fps,
+                env_config_fn=env_config_for_randomization_mode,
+                evaluate_fn=evaluate_waypoint_policy_per_task,
+            )
         results: dict[str, dict] = {}
         for current_mode in modes:
             current_config = env_config_for_randomization_mode(env_config, current_mode)
@@ -687,6 +736,77 @@ class MAPPOWaypointTrainer:
             )
         return combined
 
+    def _evaluate_goal_splits(
+        self,
+        env_config: dict,
+        task_names: list[str],
+        episodes: int,
+        modes: list[str],
+        randomization_mode: str,
+        goal_splits: list[str],
+        output_dir: Path | None,
+        update_idx: int,
+        headless: bool,
+        record_episodes: int,
+        record_format: str,
+        record_fps: int,
+        env_config_fn,
+        evaluate_fn,
+    ) -> dict:
+        normalized_splits = [str(split).lower() for split in goal_splits]
+        results: dict[tuple[str, str], dict] = {}
+        for current_mode in modes:
+            current_config = env_config_fn(env_config, current_mode)
+            for goal_split in normalized_splits:
+                results[(current_mode, goal_split)] = self._evaluate_single_mode(
+                    current_config,
+                    task_names,
+                    episodes,
+                    output_dir=output_dir,
+                    update_idx=update_idx,
+                    headless=headless,
+                    record_episodes=record_episodes,
+                    record_format=record_format,
+                    record_fps=record_fps,
+                    randomization_mode=current_mode,
+                    evaluate_fn=evaluate_fn,
+                    goal_split=goal_split,
+                )
+
+        combined: dict[str, float | str] = {
+            "eval_randomization_mode": randomization_mode,
+            "eval_goal_splits": ",".join(normalized_splits),
+        }
+        for (current_mode, goal_split), metrics in results.items():
+            for key, value in metrics.items():
+                if key.startswith("eval_"):
+                    combined[f"eval_{current_mode}_goal_{goal_split}_{key[5:]}"] = value
+
+        primary_mode = "random" if "random" in modes else modes[0]
+        primary_split = "formal" if "formal" in normalized_splits else normalized_splits[0]
+        combined.update(results[(primary_mode, primary_split)])
+        if "seen" in normalized_splits:
+            seen = results[(primary_mode, "seen")]
+            for goal_split in ["interpolation", "formal"]:
+                if goal_split in normalized_splits:
+                    target = results[(primary_mode, goal_split)]
+                    combined[f"eval_goal_{goal_split}_gap"] = float(
+                        seen.get("eval_success_rate", 0.0) - target.get("eval_success_rate", 0.0)
+                    )
+                    combined[f"eval_goal_{goal_split}_reward_gap"] = float(
+                        seen.get("eval_reward", 0.0) - target.get("eval_reward", 0.0)
+                    )
+        if len(modes) == 2:
+            fixed = results[("fixed", primary_split)]
+            random = results[("random", primary_split)]
+            combined["eval_generalization_gap"] = float(
+                fixed.get("eval_success_rate", 0.0) - random.get("eval_success_rate", 0.0)
+            )
+            combined["eval_reward_generalization_gap"] = float(
+                fixed.get("eval_reward", 0.0) - random.get("eval_reward", 0.0)
+            )
+        return combined
+
     def _evaluate_single_mode(
         self,
         env_config: dict,
@@ -700,10 +820,16 @@ class MAPPOWaypointTrainer:
         record_fps: int,
         randomization_mode: str,
         evaluate_fn,
+        goal_split: str | None = None,
     ) -> dict:
         record_dir = None
         if output_dir is not None and int(record_episodes) > 0:
             record_dir = output_dir / "media" / f"eval_{randomization_mode}" / f"eval_{update_idx:04d}"
+            if goal_split is not None:
+                record_dir = record_dir / f"goal_{goal_split}"
+        evaluate_kwargs = {}
+        if goal_split is not None:
+            evaluate_kwargs["goal_split"] = goal_split
         records, task_summaries, overall = evaluate_fn(
             env_config,
             self.policy,
@@ -716,10 +842,16 @@ class MAPPOWaypointTrainer:
             record_format=record_format,
             record_fps=record_fps,
             record_prefix=f"update_{update_idx:04d}_{randomization_mode}",
+            **evaluate_kwargs,
         )
         if output_dir is not None and records:
             eval_records = [
-                dict(record, update=int(update_idx), eval_randomization_mode=randomization_mode)
+                dict(
+                    record,
+                    update=int(update_idx),
+                    eval_randomization_mode=randomization_mode,
+                    eval_goal_split=goal_split or "fixed",
+                )
                 for record in records
             ]
             _append_metrics_csv(eval_records, Path(output_dir) / "eval_metrics.csv")
@@ -742,6 +874,8 @@ class MAPPOWaypointTrainer:
             "eval_geofence_violation_count": float(overall.get("geofence_violation_count_mean", 0.0)),
             "eval_uses_real_mpe_core": float(overall.get("uses_real_mpe_core_mean", 0.0)),
             "eval_mpe_world_step_calls": float(overall.get("mpe_world_step_calls_mean", 0.0)),
+            "eval_goal_progress": float(overall.get("goal_progress_mean", 0.0)),
+            "eval_goal_achieved": float(overall.get("goal_achieved_mean", 0.0)),
         }
         if "mpe_source" in overall:
             result["eval_mpe_source"] = str(overall["mpe_source"])
@@ -766,6 +900,7 @@ class MAPPOWaypointTrainer:
         record_fps: int = 8,
         record_interval: int = 1,
         eval_randomization_mode: str = "inherit",
+        eval_goal_splits: list[str] | None = None,
         log_callback: Callable[[dict], None] | None = None,
     ) -> list[dict]:
         output_dir = Path(output_dir)
@@ -795,6 +930,7 @@ class MAPPOWaypointTrainer:
                         record_format=record_format,
                         record_fps=record_fps,
                         randomization_mode=eval_randomization_mode,
+                        goal_splits=eval_goal_splits,
                     )
                 )
                 ckpt = checkpoints / f"checkpoint_{update_idx:04d}.pt"

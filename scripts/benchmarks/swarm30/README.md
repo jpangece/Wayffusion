@@ -23,3 +23,15 @@ Check status:
 ```bash
 bash scripts/benchmarks/swarm30/status.sh
 ```
+
+Evaluate the existing four-UAV specialists directly on the 30-UAV benchmark:
+
+```bash
+bash scripts/benchmarks/swarm30/evaluate_n4_specialists_on_n30.sh
+```
+
+Pure evaluation outputs use the training-style layout:
+
+```text
+outputs/eval/mappo_direct_specialists/<runtime>/<task>/s<seed>/
+```

@@ -6,6 +6,7 @@ import pytest
 
 from utils.experiment_layout import (
     make_debug_output_dir,
+    make_eval_output_dir,
     make_run_name,
     make_training_output_dir,
     trial_dir_name,
@@ -34,6 +35,16 @@ def test_training_output_path_without_and_with_trial():
     )
     assert make_training_output_dir(root, "20260607_2200", "belief_search", 1, trial=2) == Path(
         "outputs/training/mappo_direct_specialists/20260607_2200/belief_search/trial02/s1"
+    )
+
+
+def test_eval_output_path_matches_training_layout():
+    root = "outputs/eval/mappo_direct_specialists"
+    assert make_eval_output_dir(root, "20260611_1430", "area_coverage", 0) == Path(
+        "outputs/eval/mappo_direct_specialists/20260611_1430/area_coverage/s0"
+    )
+    assert make_eval_output_dir(root, "20260611_1430", "area_coverage", 0, trial=2) == Path(
+        "outputs/eval/mappo_direct_specialists/20260611_1430/area_coverage/trial02/s0"
     )
 
 

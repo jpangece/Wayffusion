@@ -72,6 +72,17 @@ def make_training_output_dir(
     return base / seed_dir_name(seed)
 
 
+def make_eval_output_dir(
+    root: str | Path,
+    runtime: str,
+    task_name: str,
+    seed: int,
+    trial: int | None = None,
+) -> Path:
+    """Build pure-evaluation paths with the same layout as formal training."""
+    return make_training_output_dir(root, runtime, task_name, seed, trial=trial)
+
+
 def debug_summary_dir(root: str | Path, phase_name: str, runtime: str) -> Path:
     return Path(root) / validate_phase_name(phase_name) / validate_runtime(runtime)
 
@@ -90,6 +101,7 @@ def _validate_task_name(task_name: str) -> str:
 __all__ = [
     "debug_summary_dir",
     "make_debug_output_dir",
+    "make_eval_output_dir",
     "make_run_name",
     "make_training_output_dir",
     "seed_dir_name",

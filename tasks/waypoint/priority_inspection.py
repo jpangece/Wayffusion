@@ -116,9 +116,11 @@ class PriorityInspectionScenario(WaypointScenario):
         weights = np.asarray(task_state.get("weights", np.ones(len(visited))), dtype=np.float32)
         weighted = float(weights[visited].sum() / max(float(weights.sum()), 1e-8)) if len(weights) else 0.0
         ratio = float(visited.mean()) if len(visited) else 0.0
+        threshold = self.goal_value(task_state, 0, "success_weighted_completion", 0.7)
         return {
             "weighted_poi_completion": weighted,
             "visited_poi_ratio": ratio,
             "repeat_visit_count": float(task_state.get("repeat_visit_count", 0)),
-            "success": weighted >= float(self.cfg("success_weighted_completion", 0.7)),
+            "goal_weighted_completion_target": threshold,
+            "success": weighted >= threshold,
         }

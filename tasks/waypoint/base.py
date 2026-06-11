@@ -91,6 +91,16 @@ class WaypointScenario:
         out[int(self.task_id)] = 1.0
         return out
 
+    def mission_goal(self, task_state: dict) -> np.ndarray:
+        return np.asarray(task_state.get("_mission_goal", np.zeros(3)), dtype=np.float32)
+
+    def goal_value(self, task_state: dict, index: int, config_key: str, default: float) -> float:
+        goal = self.mission_goal(task_state)
+        mask = np.asarray(task_state.get("_goal_mask", np.zeros(3)), dtype=np.float32)
+        if int(index) < len(goal) and int(index) < len(mask) and mask[int(index)] > 0.5:
+            return float(goal[int(index)])
+        return float(self.cfg(config_key, default))
+
     def cfg(self, key: str, default):
         return self.config.get(self.name, {}).get(key, self.config.get(key, default))
 

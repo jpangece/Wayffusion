@@ -11,6 +11,7 @@ The environment simulates waypoint tracking, real MPE core particle dynamics, sa
 - Validation entry: `scripts/check/validate_waypoint_mappo.py`
 - Candidate-selection policy: `policies/candidate_selection_policy.py::CandidateSelectionWaypointPolicy`
 - Direct waypoint policy: `policies/direct_waypoint_policy.py::DirectWaypointPolicy`
+- UVFA-conditioned direct policy: `policies/direct_waypoint_policy.py::UVFADirectWaypointPolicy`
 - Action adapters: `envs/waypoint/control/action_adapters.py`
 - Dynamics backends: `envs/waypoint/control/dynamics_backends.py`
 - MAPPO trainer: `algorithms/mappo_waypoint.py::MAPPOWaypointTrainer`
@@ -75,6 +76,8 @@ Only supported backend:
 - `logprob [B, N]`, `entropy [B, N]`, `value [B]`.
 
 `DirectWaypointPolicy` directly samples a Gaussian waypoint delta per UAV, clips it by vector norm, converts it into a final waypoint, and uses the sampled delta as `train_action`.
+
+`UVFADirectWaypointPolicy` keeps the same action distribution but encodes a compact episode-level `mission_goal` with a separate goal stream. The centralized critic combines state and goal embeddings as a universal value function \(V(s,g)\). See `docs/uvfa_waypoint_mappo_zh.md`.
 
 The trainer only requires a common `PolicyOutput`; it does not assume the policy is categorical or Gaussian.
 
@@ -164,6 +167,12 @@ python scripts/train_mappo_waypoint.py \
   --record_eval_episodes 1 \
   --record_format gif \
   --headless
+```
+
+Run the four-task UVFA comparison:
+
+```bash
+python scripts/debug/phase32_uvfa_goal_conditioning.py
 ```
 
 Run longer training:

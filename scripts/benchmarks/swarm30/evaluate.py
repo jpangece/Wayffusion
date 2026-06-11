@@ -162,7 +162,11 @@ def evaluate_checkpoint(args: argparse.Namespace) -> list[dict]:
             policy, resolved_policy = load_policy(checkpoint, policy_config_path, scaled, device)
             for mode in args.modes:
                 current_env = env_config_for_randomization_mode(scaled, mode)
-                output_dir = Path(args.output_dir) / task_name / f"N{scale}" / mode
+                output_root = Path(args.output_dir)
+                if getattr(args, "output_dir_is_task_root", False):
+                    output_dir = output_root / f"N{scale}" / mode
+                else:
+                    output_dir = output_root / task_name / f"N{scale}" / mode
                 output_dir.mkdir(parents=True, exist_ok=True)
                 rows = evaluate_waypoint_policy_episodes(
                     current_env,
@@ -262,6 +266,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default=None)
     parser.add_argument("--env-config", default="configs/env/waypoint_missions.yaml")
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument(
+        "--output-dir-is-task-root",
+        action="store_true",
+        help="Write N<scale>/<mode> directly below output-dir instead of adding task_name.",
+    )
     parser.add_argument("--baselines", nargs="+", choices=["hold", "random", "greedy"])
     return parser.parse_args()
 

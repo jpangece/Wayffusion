@@ -34,6 +34,9 @@ class DirectWaypointPolicy(nn.Module):
         field_moment_include_inverse: bool = False,
         use_connectivity_auxiliary_loss: bool = False,
         use_comm_graph_encoder: bool = False,
+        use_uvfa_goal: bool = False,
+        goal_embedding_dim: int = 64,
+        goal_hidden_dim: int = 64,
     ):
         super().__init__()
         del action_space
@@ -47,6 +50,7 @@ class DirectWaypointPolicy(nn.Module):
         self.field_moment_include_inverse = bool(field_moment_include_inverse)
         self.use_connectivity_auxiliary_loss = bool(use_connectivity_auxiliary_loss)
         self.use_comm_graph_encoder = bool(use_comm_graph_encoder)
+        self.use_uvfa_goal = bool(use_uvfa_goal)
 
         cnn_channels = cnn_channels or [16, 32, 64]
         task_field_space = observation_space["task_field"] if "task_field" in observation_space else observation_space["global_task_field"]
@@ -104,7 +108,29 @@ class DirectWaypointPolicy(nn.Module):
 
         task_dim = int(observation_space["task_id"].shape[0])
         global_dim = int(observation_space["global_info"].shape[0])
-        actor_dim = agent_hidden_dim + self.field_dim + task_dim + global_dim + self.spatial_context_dim + self.field_moment_dim
+        if self.use_uvfa_goal:
+            mission_goal_dim = int(observation_space["mission_goal"].shape[0])
+            goal_mask_dim = int(observation_space["goal_mask"].shape[0])
+            goal_input_dim = task_dim + mission_goal_dim + goal_mask_dim
+            self.goal_encoder = nn.Sequential(
+                nn.Linear(goal_input_dim, goal_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(goal_hidden_dim, goal_embedding_dim),
+                nn.ReLU(),
+            )
+            state_input_dim = self.field_dim + agent_hidden_dim + global_dim
+            self.uvfa_state_encoder = nn.Sequential(
+                nn.Linear(state_input_dim, joint_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(joint_hidden_dim, goal_embedding_dim),
+                nn.ReLU(),
+            )
+            actor_goal_dim = goal_embedding_dim
+            critic_dim = goal_embedding_dim * 3
+        else:
+            actor_goal_dim = task_dim
+            critic_dim = self.field_dim + agent_hidden_dim + task_dim + global_dim
+        actor_dim = agent_hidden_dim + self.field_dim + actor_goal_dim + global_dim + self.spatial_context_dim + self.field_moment_dim
         self.actor = nn.Sequential(
             nn.Linear(actor_dim, agent_hidden_dim),
             nn.ReLU(),
@@ -113,7 +139,6 @@ class DirectWaypointPolicy(nn.Module):
             nn.Linear(agent_hidden_dim, 2),
         )
         self.log_std = nn.Parameter(torch.full((2,), float(log_std_init)))
-        critic_dim = self.field_dim + agent_hidden_dim + task_dim + global_dim
         self.critic = nn.Sequential(
             nn.Linear(critic_dim, joint_hidden_dim),
             nn.ReLU(),
@@ -208,23 +233,50 @@ class DirectWaypointPolicy(nn.Module):
         if self.use_comm_graph_encoder and "comm_adjacency" in obs:
             agent_tokens = self._comm_graph_context(agent_tokens, obs["comm_adjacency"], agent_mask)
         field_per_agent = field_feat.unsqueeze(1).expand(batch_size, num_agents, -1)
-        task_per_agent = obs["task_id"].unsqueeze(1).expand(batch_size, num_agents, -1)
         global_per_agent = obs["global_info"].unsqueeze(1).expand(batch_size, num_agents, -1)
-        pieces = [agent_tokens, field_per_agent, task_per_agent, global_per_agent]
+        pooled_agents = _masked_mean(agent_tokens, agent_mask, dim=1)
+        aux_predictions: dict[str, torch.Tensor] = {}
+        if self.use_uvfa_goal:
+            goal_embedding = self.encode_goal(obs)
+            goal_per_agent = goal_embedding.unsqueeze(1).expand(batch_size, num_agents, -1)
+            state_embedding = self.uvfa_state_encoder(
+                torch.cat([field_feat, pooled_agents, obs["global_info"]], dim=-1)
+            )
+            critic_input = torch.cat(
+                [state_embedding, goal_embedding, state_embedding * goal_embedding],
+                dim=-1,
+            )
+            pieces = [agent_tokens, field_per_agent, goal_per_agent, global_per_agent]
+            aux_predictions.update(
+                {
+                    "goal_embedding_norm": torch.linalg.norm(goal_embedding, dim=-1).mean(),
+                    "goal_embedding_variance": goal_embedding.var(dim=0, unbiased=False).mean(),
+                }
+            )
+        else:
+            task_per_agent = obs["task_id"].unsqueeze(1).expand(batch_size, num_agents, -1)
+            pieces = [agent_tokens, field_per_agent, task_per_agent, global_per_agent]
+            critic_input = torch.cat([field_feat, pooled_agents, obs["task_id"], obs["global_info"]], dim=-1)
         if self.use_spatial_field_context:
             pieces.append(self._spatial_field_context(field, agents[..., :2]))
         if self.use_field_moment_context:
             pieces.append(self._field_moment_context(field, field_mask, agents[..., :2]))
         actor_input = torch.cat(pieces, dim=-1)
         delta_mean = torch.tanh(self.actor(actor_input)) * self.max_delta
-        pooled_agents = _masked_mean(agent_tokens, agent_mask, dim=1)
-        critic_input = torch.cat([field_feat, pooled_agents, obs["task_id"], obs["global_info"]], dim=-1)
         value = self.critic(critic_input).squeeze(-1)
-        aux_predictions: dict[str, torch.Tensor] = {}
         if self.use_connectivity_auxiliary_loss:
             aux_predictions["aux_pred_connectivity_violation"] = torch.sigmoid(self.aux_connectivity_head(critic_input)).squeeze(-1)
             aux_predictions["aux_pred_coverage_gain"] = torch.sigmoid(self.aux_coverage_head(critic_input)).squeeze(-1)
         return delta_mean, value, agent_mask, aux_predictions
+
+    def encode_goal(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+        if not self.use_uvfa_goal:
+            raise RuntimeError("encode_goal is only available when use_uvfa_goal=True")
+        goal_input = torch.cat(
+            [obs["task_id"], obs["mission_goal"], obs["goal_mask"]],
+            dim=-1,
+        )
+        return self.goal_encoder(goal_input)
 
     def _comm_graph_context(
         self,
@@ -356,4 +408,12 @@ class DirectWaypointPolicy(nn.Module):
         return self._delta_to_waypoint(obs, delta_mean).float()
 
 
-__all__ = ["DirectWaypointPolicy"]
+class UVFADirectWaypointPolicy(DirectWaypointPolicy):
+    """Direct waypoint actor with a two-stream UVFA state-goal critic."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs["use_uvfa_goal"] = True
+        super().__init__(*args, **kwargs)
+
+
+__all__ = ["DirectWaypointPolicy", "UVFADirectWaypointPolicy"]
