@@ -233,6 +233,17 @@ def greedy_waypoint_action(env: WaypointMultiUAVEnv) -> dict[str, np.ndarray]:
         positions = env.world.get_uav_positions()[:, None, :]
         outward = np.linalg.norm(candidates - env.world.base_position[None, None, :], axis=-1)
         scores = outward / max(env.world.map_size, 1e-6) + 0.5 * features[..., 3]
+    elif task == "dynamic_target_escort":
+        targets = np.asarray(env.task_state.get("target_positions", []), dtype=np.float32)
+        if len(targets):
+            target_distance = np.linalg.norm(
+                candidates[:, :, None, :] - targets[None, None, :, :],
+                axis=-1,
+            ).min(axis=-1)
+            desired = float(env.current_scenario.distance_cfg("escort_radius", 0.18, env.world))
+            scores = -np.abs(target_distance - desired)
+    elif task == "target_interception":
+        scores = 3.0 * features[..., 4] - 0.1 * features[..., 2]
     scores = np.where(mask, scores, -1e9)
     actions = {}
     chosen: list[np.ndarray] = []

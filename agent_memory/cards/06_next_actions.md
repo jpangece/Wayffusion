@@ -2199,3 +2199,17 @@ After completion:
 - inspect mean/std/worst success, coverage, radius, violation, connected/disconnected new coverage, and action validity;
 - if passed, freeze connectivity and move to the other specialists;
 - if failed, choose Phase32A/B/C/D from the recorded failure taxonomy rather than adding another static reward sweep.
+
+### Swarm30 v1 queued benchmark
+
+After Phase31 workers finish without runtime errors:
+
+1. The queued `swarm30_v1` tmux waiter starts formal long training.
+2. Monitor `outputs/training/benchmarks/swarm30_v1/queue_state.json`.
+3. Training covers standardized specialists, tuned specialists, and the six-task generalist.
+4. Final evaluation covers 4/10/20/30 UAV, fixed/random domains, three seeds, and saved media.
+5. Read `report/leaderboard.csv` and `report/report.md`; compare macro success and normalized progress, not raw reward sums.
+
+Continue per-task specialist debugging in separate versioned debug phases when
+needed. Do not overwrite `swarm30_v1`; create a new benchmark policy/protocol
+version for changed rewards, observations, or architectures.

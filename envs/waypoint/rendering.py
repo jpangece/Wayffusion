@@ -166,12 +166,34 @@ def render_world(
         ax.scatter(pois[~visited, 0], pois[~visited, 1], marker="*", c=WAYF_COLORS["gold"], s=140, edgecolors="#3A2D00", linewidths=0.9, label="poi", zorder=8)
         if visited.any():
             ax.scatter(pois[visited, 0], pois[visited, 1], marker="*", c="#B9B7AD", s=95, edgecolors="#525252", linewidths=0.6, zorder=7)
-    if "target_position" in task_state:
-        target = np.asarray(task_state["target_position"], dtype=np.float32)
-        ax.scatter([target[0]], [target[1]], marker="D", c=WAYF_COLORS["red"], s=95, edgecolors=WAYF_COLORS["white"], linewidths=1.0, label="target", zorder=8)
-        route = np.asarray(task_state.get("target_route", []), dtype=np.float32)
-        if route.ndim == 2 and len(route) > 1:
-            ax.plot(route[:, 0], route[:, 1], color=WAYF_COLORS["red"], linestyle="--", linewidth=1.2, alpha=0.72, zorder=5)
+    target_positions = task_state.get("target_positions")
+    if target_positions is None and "target_position" in task_state:
+        target_positions = np.asarray(task_state["target_position"], dtype=np.float32)[None, :]
+    if target_positions is not None:
+        targets = np.asarray(target_positions, dtype=np.float32).reshape(-1, 2)
+        ax.scatter(
+            targets[:, 0],
+            targets[:, 1],
+            marker="D",
+            c=WAYF_COLORS["red"],
+            s=95,
+            edgecolors=WAYF_COLORS["white"],
+            linewidths=1.0,
+            label="target",
+            zorder=8,
+        )
+        for idx, target in enumerate(targets):
+            _with_outline(
+                ax.text(target[0], target[1] + 0.025 * world.map_size, f"T{idx}", fontsize=6.5, ha="center", color=WAYF_COLORS["red"], zorder=9),
+                1.3,
+            )
+        routes = task_state.get("target_routes")
+        if routes is None:
+            routes = [task_state.get("target_route", [])]
+        for route in routes:
+            route_array = np.asarray(route, dtype=np.float32)
+            if route_array.ndim == 2 and len(route_array) > 1:
+                ax.plot(route_array[:, 0], route_array[:, 1], color=WAYF_COLORS["red"], linestyle="--", linewidth=1.2, alpha=0.58, zorder=5)
 
     graph = world.communication_graph
     if graph.shape[0] == len(world.uavs) + 1:

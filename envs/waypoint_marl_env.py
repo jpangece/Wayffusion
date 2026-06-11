@@ -246,6 +246,12 @@ class WaypointMultiUAVEnv:
                 self.task_state.get("deadlines", []),
                 dtype=np.int64,
             ).astype(int).tolist()
+        elif task_name in {"dynamic_target_escort", "target_interception"}:
+            metadata["target_positions"] = np.asarray(
+                self.task_state.get("target_positions", []),
+                dtype=np.float32,
+            ).astype(float).tolist()
+            metadata["target_count"] = int(len(self.task_state.get("target_positions", [])))
 
     def step(self, actions: dict[str, np.ndarray | int]):
         if self.current_scenario is None:
@@ -307,7 +313,8 @@ class WaypointMultiUAVEnv:
             self._refresh_candidates()
 
         success = bool(reward_result.get("success", False))
-        terminated = success
+        failure = bool(reward_result.get("failure", False))
+        terminated = success or failure
         truncated = bool(self.world.step_count >= self.world.max_steps)
         observations = self._build_agent_observations()
         rewards = {
@@ -515,6 +522,7 @@ class WaypointMultiUAVEnv:
             "task_name": self.current_scenario.name,
             "num_agents": self.num_agents,
             "success": bool(reward_result.get("success", metrics.get("success", False))),
+            "failure": bool(reward_result.get("failure", False)),
             "path_length": float(sum(uav.path_length for uav in self.world.uavs)),
             "collision_rate": float(self.last_transition_info.get("safety_violation_count", 0) / max(self.world.step_count * self.num_agents, 1)),
             "invalid_action_count": int(self.last_transition_info.get("invalid_action_count", 0)),

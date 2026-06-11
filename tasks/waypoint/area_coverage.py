@@ -75,7 +75,7 @@ class AreaCoverageScenario(WaypointScenario):
         if not bool(uncovered.any()) or not world.uavs:
             return 0.0
         points = world.grid_cell_centers()[uncovered]
-        scale = max(float(self.cfg("uncovered_approach_scale", 0.20)) * world.map_size, 1e-6)
+        scale = max(self.distance_cfg("uncovered_approach_scale", 0.20, world), 1e-6)
 
         def score(positions: np.ndarray) -> float:
             distances = np.linalg.norm(positions[:, None, :] - points[None, :, :], axis=-1)

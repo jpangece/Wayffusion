@@ -1,0 +1,100 @@
+name: swarm30_v1
+description: Density-normalized six-task waypoint MARL benchmark up to 30 UAVs.
+tasks:
+  - area_coverage
+  - belief_search
+  - priority_inspection
+  - connectivity_expansion
+  - dynamic_target_escort
+  - target_interception
+train:
+  num_agents: 30
+  num_envs: 8
+  rollout_steps: 256
+  env_backend: process
+  eval_interval: 100
+  eval_episodes: 20
+  record_eval_episodes: 2
+  record_format: gif
+  record_fps: 8
+  train_randomization: random
+  eval_randomization: random
+  tensorboard: true
+  specialist_updates: 2000
+  generalist_updates: 12000
+  seeds: [0, 1, 2]
+evaluation:
+  scales: [4, 10, 20, 30]
+  random_episodes: 100
+  fixed_episodes: 20
+  deterministic: true
+  record_episodes: 2
+  record_format: gif
+  record_fps: 8
+tracks:
+  standardized_specialists:
+    policy_config: configs/policy/benchmarks/swarm30_standardized.yaml
+  tuned_specialists:
+    policy_configs:
+      area_coverage: configs/policy/direct_specialists_v2/direct_area_coverage_v2.yaml
+      belief_search: configs/policy/direct_specialists_v2/direct_belief_search_v2.yaml
+      priority_inspection: configs/policy/direct_specialists_v2/direct_priority_inspection_v2.yaml
+      connectivity_expansion: configs/policy/benchmarks/swarm30_tuned_connectivity.yaml
+      dynamic_target_escort: configs/policy/benchmarks/swarm30_tuned_escort.yaml
+      target_interception: configs/policy/benchmarks/swarm30_tuned_interception.yaml
+    env_task_overrides:
+      area_coverage:
+        w_new: 220.0
+        w_uncovered_approach: 4000.0
+        uncovered_approach_scale: 0.24
+        w_overlap: 1.0
+        w_repeat_footprint: 0.3
+        w_distance: 0.03
+      belief_search:
+        w_prob: 150.0
+        w_repeat: 2.0
+        w_distance: 0.05
+        detection_bonus: 10.0
+      priority_inspection:
+        w_visit: 12.0
+        w_approach: 80.0
+        approach_scale: 0.26
+        w_repeat: 2.0
+        w_distance: 0.03
+      connectivity_expansion:
+        w_expand: 18.0
+        w_coverage: 45.0
+        w_connected_new_coverage: 2750.0
+        w_disconnected_new_coverage: 1350.0
+        w_disconnect: 15.0
+        w_uncovered_approach: 1200.0
+        w_repeat_footprint: 1.1
+        w_connected_radius_hold: 0.08
+        w_connected_spread: 0.30
+        w_relay: 3.0
+        w_connectivity_margin: 2.2
+        connectivity_margin_threshold: 0.045
+        w_action_disconnect_risk: 2.2
+        action_risk_use_predicted_graph: true
+        w_distance: 0.016
+      dynamic_target_escort:
+        w_obs: 3.0
+        w_view: 0.8
+        w_too_close: 2.0
+        w_too_far: 1.2
+        w_distance: 0.05
+      target_interception:
+        interception_bonus: 10.0
+        w_belief: 3.0
+        w_contain: 0.8
+        w_escape: 8.0
+        w_distance: 0.05
+  generalist:
+    policy_config: configs/policy/benchmarks/swarm30_generalist.yaml
+leaderboard:
+  primary: macro_success_rate
+  secondary:
+    - macro_normalized_progress
+    - action_validity_rate
+    - collision_rate
+    - connectivity_violation_rate

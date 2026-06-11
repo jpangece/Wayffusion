@@ -121,8 +121,12 @@ class MissionWorld:
 
     def _sample_safe_initial_positions(self, num_agents: int) -> np.ndarray:
         cfg = self.spawn_randomization
-        min_radius = float(cfg.get("min_radius", 0.02)) * self.map_size
-        max_radius = float(cfg.get("max_radius", 0.22)) * self.map_size
+        units = str(cfg.get("spatial_units", "relative")).lower()
+        if units not in {"relative", "absolute"}:
+            raise ValueError(f"Unsupported spawn spatial_units={units!r}")
+        scale = 1.0 if units == "absolute" else self.map_size
+        min_radius = float(cfg.get("min_radius", 0.02)) * scale
+        max_radius = float(cfg.get("max_radius", 0.22)) * scale
         min_dist_scale = float(cfg.get("min_separation_scale", 1.8))
         min_dist = max(float(self.min_uav_distance) * min_dist_scale, float(self.radius) * 2.5)
         positions: list[np.ndarray] = []

@@ -18,7 +18,7 @@ class PriorityInspectionScenario(WaypointScenario):
             count,
             lower_fraction=0.10,
             upper_fraction=0.92,
-            min_separation=float(self.cfg("poi_min_separation", 0.05)) * world.map_size,
+            min_separation=self.distance_cfg("poi_min_separation", 0.05, world),
             avoid_points=world.get_uav_positions(),
         )
         weights = rng.uniform(0.5, 2.0, size=count).astype(np.float32)
@@ -38,7 +38,7 @@ class PriorityInspectionScenario(WaypointScenario):
         target = np.zeros_like(field[4], dtype=np.float32)
         if len(pois):
             centers = world.grid_cell_centers()
-            sigma = max(float(self.cfg("poi_target_sigma", 0.08)) * world.map_size, 1e-6)
+            sigma = max(self.distance_cfg("poi_target_sigma", 0.08, world), 1e-6)
             for point, weight, is_visited in zip(pois, weights, visited):
                 if is_visited:
                     continue
@@ -96,7 +96,7 @@ class PriorityInspectionScenario(WaypointScenario):
     def _approach_gain(self, prev_world: MissionWorld, world: MissionWorld, pois: np.ndarray, weights: np.ndarray, visited: np.ndarray) -> float:
         if not len(pois) or bool(np.all(visited)):
             return 0.0
-        scale = float(self.cfg("approach_scale", 0.20))
+        scale = self.distance_cfg("approach_scale", 0.20, world)
         remaining = ~visited
         points = pois[remaining]
         point_weights = weights[remaining]

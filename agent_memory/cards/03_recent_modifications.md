@@ -7250,3 +7250,38 @@ Active run:
   - no startup/runtime failure.
 
 Do not claim Phase31 passed until all three seeds complete 6000 updates and their 100-episode evals.
+
+### Swarm30 v1 benchmark scaffold
+
+Date: 2026-06-10.
+
+Implemented the frozen `swarm30_v1` six-task benchmark:
+
+- tasks: area coverage, belief search, priority inspection, connectivity expansion, dynamic target escort, target interception;
+- tracks: standardized specialists, task-tuned specialists, and one six-task generalist;
+- training seeds: `0,1,2`;
+- standardized/tuned specialist budget: 2000 updates per task and seed;
+- generalist budget: 12000 updates per seed;
+- scale eval: `N=4,10,20,30`;
+- final eval: 100 randomized plus 20 fixed deterministic episodes per task/scale/seed;
+- baselines: hold, random, task-aware greedy;
+- leaderboard primary metric: six-task macro success rate.
+
+Density-normalized scale profiles grow map size, grid, horizon, POIs, belief
+peaks, no-fly count, and dynamic target count. Sensor radius, communication
+radius, speed, waypoint delta, obstacle physical size, and task physical
+distances remain absolute map units.
+
+Dynamic escort and interception now support multiple targets while retaining
+the same five task-field channels. No task-specific observation channels were
+added.
+
+Queue:
+
+- `scripts/benchmarks/swarm30/launch_tmux.sh` starts a tmux waiter.
+- The waiter does not interrupt Phase31.
+- Benchmark training starts only after all Phase31 workers exit without runtime errors.
+- Formal outputs go to `outputs/training/benchmarks/swarm30_v1/<runtime>/`.
+
+This is an experiment scaffold and protocol implementation, not a benchmark
+performance conclusion.

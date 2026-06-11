@@ -68,7 +68,7 @@ def _sample_base_position(
     if x_high < x_low or y_high < y_low:
         raise ValueError("domain_randomization.base_position ranges do not intersect the geofence")
 
-    clearance = float(zone_cfg.get("base_clearance", 0.0)) * map_size
+    clearance = float(zone_cfg.get("base_clearance", 0.0)) * _spatial_scale(config, zone_cfg)
     max_attempts = int(base_cfg.get("max_attempts", 300))
     for _ in range(max_attempts):
         candidate = np.asarray(
@@ -101,9 +101,10 @@ def _sample_no_fly_zones(
     circle_probability = float(zone_cfg.get("circle_probability", 0.75))
     radius_range = _ordered_range(zone_cfg.get("radius_range", [0.04, 0.09]))
     rect_range = _ordered_range(zone_cfg.get("rectangle_size_range", [0.06, 0.14]))
-    boundary_margin = float(zone_cfg.get("boundary_margin", 0.03)) * map_size
-    base_clearance = float(zone_cfg.get("base_clearance", 0.08)) * map_size
-    zone_clearance = float(zone_cfg.get("zone_clearance", 0.025)) * map_size
+    spatial_scale = _spatial_scale(config, zone_cfg)
+    boundary_margin = float(zone_cfg.get("boundary_margin", 0.03)) * spatial_scale
+    base_clearance = float(zone_cfg.get("base_clearance", 0.08)) * spatial_scale
+    zone_clearance = float(zone_cfg.get("zone_clearance", 0.025)) * spatial_scale
     max_attempts = int(zone_cfg.get("max_attempts", 300))
     base = np.asarray(config.get("base_position", [0.1, 0.1]), dtype=np.float32)
 
@@ -113,7 +114,7 @@ def _sample_no_fly_zones(
         accepted = None
         for _attempt in range(max_attempts):
             if rng.random() < circle_probability:
-                radius = float(rng.uniform(*radius_range)) * map_size
+                radius = float(rng.uniform(*radius_range)) * spatial_scale
                 low = np.asarray([x_min + boundary_margin + radius, y_min + boundary_margin + radius])
                 high = np.asarray([x_max - boundary_margin - radius, y_max - boundary_margin - radius])
                 if np.any(high <= low):
@@ -121,8 +122,8 @@ def _sample_no_fly_zones(
                 center = rng.uniform(low, high).astype(np.float32)
                 candidate = {"center": center.tolist(), "radius": radius}
             else:
-                width = float(rng.uniform(*rect_range)) * map_size
-                height = float(rng.uniform(*rect_range)) * map_size
+                width = float(rng.uniform(*rect_range)) * spatial_scale
+                height = float(rng.uniform(*rect_range)) * spatial_scale
                 low = np.asarray([x_min + boundary_margin + width / 2.0, y_min + boundary_margin + height / 2.0])
                 high = np.asarray([x_max - boundary_margin - width / 2.0, y_max - boundary_margin - height / 2.0])
                 if np.any(high <= low):
@@ -151,6 +152,20 @@ def _ordered_range(values: Any) -> tuple[float, float]:
     if len(array) != 2:
         raise ValueError(f"Expected a two-value range, got {values!r}")
     return float(min(array)), float(max(array))
+
+
+def _spatial_scale(config: dict[str, Any], section: dict[str, Any]) -> float:
+    """Resolve whether randomization distances are map-relative or absolute.
+
+    Existing configs remain map-relative. Scale benchmarks opt into absolute
+    map units so a 0.06 no-fly radius remains six metres at every map size.
+    """
+    units = str(section.get("spatial_units", "relative")).lower()
+    if units == "absolute":
+        return 1.0
+    if units != "relative":
+        raise ValueError(f"Unsupported spatial_units={units!r}; expected 'relative' or 'absolute'")
+    return float(config.get("map_size", 1.0))
 
 
 def _zone_bounding_circle(zone: dict[str, Any]) -> tuple[np.ndarray, float]:

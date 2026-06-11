@@ -146,5 +146,6 @@ tasks:
     interception_bonus: 8.0
     w_belief: 2.0
     w_contain: 0.5
+    w_escape: 5.0
     w_distance: 0.1
     w_safety: 2.0

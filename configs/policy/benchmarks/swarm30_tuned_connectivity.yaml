@@ -1,0 +1,42 @@
+name: swarm30_tuned_connectivity
+algorithm: mappo_waypoint
+policy_class: direct_waypoint
+num_envs: 8
+rollout_steps: 256
+total_updates: 2000
+epochs: 4
+minibatch_size: 512
+gamma: 0.99
+gae_lambda: 0.95
+clip_coef: 0.2
+ent_coef: 0.001
+vf_coef: 0.75
+learning_rate: 0.00012
+max_grad_norm: 0.5
+reward_norm: true
+advantage_norm: true
+lr_schedule: linear
+target_kl: 0.022
+eval_interval: 100
+cnn_channels: [16, 32, 64]
+agent_hidden_dim: 96
+joint_hidden_dim: 256
+attention_heads: 4
+use_attention: true
+task_field_channel_mode: task_relevant
+use_spatial_field_context: true
+spatial_context_radii: [0.05, 0.10, 0.18]
+use_comm_graph_encoder: true
+use_connectivity_auxiliary_loss: true
+aux_connectivity_coef: 0.04
+aux_coverage_coef: 0.015
+aux_targets:
+  - connectivity_violation
+  - coverage_gain
+max_waypoint_distance: 0.17
+max_delta: 0.17
+log_std_init: -2.55
+log_std_min: -3.6
+log_std_max: -1.10
+tensorboard_metric_mode: minimal
+connectivity_candidate_filter: false

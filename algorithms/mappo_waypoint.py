@@ -262,6 +262,7 @@ class MAPPOWaypointTrainer:
         penalized_team_rewards = []
         connectivity_costs = []
         lagrangian_penalties = []
+        task_step_counts: dict[str, int] = {}
         extra_metric_keys = [
             "connected_to_base_ratio",
             "connectivity_violation",
@@ -371,6 +372,8 @@ class MAPPOWaypointTrainer:
             rollout_rewards.append(float(np.mean(train_rewards if self.use_lagrangian_connectivity_cost else step.team_rewards)))
             self.completed_episodes += int(np.count_nonzero(step.done_for_reset))
             for info in step.infos:
+                task_name = str(info.get("task_name", "unknown"))
+                task_step_counts[task_name] = task_step_counts.get(task_name, 0) + 1
                 num_agents = max(len(info.get("per_agent_rewards", [])), 1)
                 valid_rates.append(float(1.0 - info.get("invalid_action_count", 0) / num_agents))
                 mask_empty_counts.append(float(info.get("candidate_mask_empty_count", 0)))
@@ -499,6 +502,11 @@ class MAPPOWaypointTrainer:
             }
         )
         rollout_result.update(lagrangian_stats)
+        task_step_total = max(sum(task_step_counts.values()), 1)
+        for task_name, count in sorted(task_step_counts.items()):
+            safe_task = task_name.replace("-", "_")
+            rollout_result[f"task_steps_{safe_task}"] = float(count)
+            rollout_result[f"task_fraction_{safe_task}"] = float(count / task_step_total)
         return buffer.build(advantages, returns), rollout_result
 
     def _masked_mean(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:

@@ -16,9 +16,19 @@ class BeliefSearchScenario(WaypointScenario):
         num_peaks_range = self.cfg("num_peaks_range", None)
         num_peaks = int(rng.integers(int(num_peaks_range[0]), int(num_peaks_range[1]) + 1)) if num_peaks_range else int(self.cfg("num_peaks", 3))
         grid = np.zeros((world.grid_size, world.grid_size), dtype=np.float32)
-        peak_centers = world.sample_safe_points(num_peaks, lower_fraction=0.12, upper_fraction=0.88, min_separation=0.08 * world.map_size)
+        peak_centers = world.sample_safe_points(
+            num_peaks,
+            lower_fraction=0.12,
+            upper_fraction=0.88,
+            min_separation=self.distance_cfg("peak_min_separation", 0.08, world),
+        )
         for center in peak_centers:
-            sigma = float(rng.uniform(0.08, 0.18)) * world.map_size
+            sigma_range = self.cfg("peak_sigma_range", [0.08, 0.18])
+            sigma = self.distance_cfg(
+                "peak_sigma",
+                float(rng.uniform(float(sigma_range[0]), float(sigma_range[1]))),
+                world,
+            )
             grid += np.exp(-0.5 * (np.linalg.norm(centers - center, axis=-1) / max(sigma, 1e-6)) ** 2).astype(np.float32)
         grid[~world.navigable_grid_mask()] = 0.0
         grid /= max(float(grid.sum()), 1e-8)

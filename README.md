@@ -204,6 +204,22 @@ View TensorBoard:
 /opt/conda/bin/tensorboard --logdir outputs/training/mappo_waypoint --bind_all --port 6006
 ```
 
+## Swarm30 Benchmark
+
+The frozen `swarm30_v1` protocol evaluates standardized specialists, tuned
+specialists, and a six-task generalist at 4, 10, 20, and 30 UAVs. It scales map
+area and task load while keeping sensing, communication, speed, and waypoint
+capabilities in fixed physical units.
+
+```bash
+bash scripts/benchmarks/swarm30/launch_tmux.sh
+bash scripts/benchmarks/swarm30/status.sh
+```
+
+The launcher waits for the active Phase31 connectivity reproducibility run
+before starting long benchmark training. See
+`docs/swarm30_v1_benchmark_zh.md` for the complete protocol.
+
 ## Removed Centralized V1
 
 The previous centralized Gymnasium-style benchmark has been removed from the working tree to keep the MARL branch focused on waypoint-level multi-agent training. It remains recoverable from git history if an old experiment needs to be reproduced.

@@ -51,9 +51,13 @@ class WaypointScenario:
                 )
                 risk = np.maximum(risk, inside.astype(np.float32))
         target = np.zeros_like(coverage, dtype=np.float32)
-        if "target_position" in task_state:
-            idx = world.world_to_grid(np.asarray(task_state["target_position"], dtype=np.float32)[None, :])[0]
-            target[idx[1], idx[0]] = 1.0
+        target_positions = task_state.get("target_positions")
+        if target_positions is None and "target_position" in task_state:
+            target_positions = np.asarray(task_state["target_position"], dtype=np.float32)[None, :]
+        if target_positions is not None:
+            for position in np.asarray(target_positions, dtype=np.float32).reshape(-1, 2):
+                idx = world.world_to_grid(position[None, :])[0]
+                target[idx[1], idx[0]] = 1.0
         if "pois" in task_state:
             for point, visited in zip(task_state["pois"], task_state.get("visited", np.zeros(len(task_state["pois"]), dtype=bool))):
                 if not visited:
@@ -89,6 +93,17 @@ class WaypointScenario:
 
     def cfg(self, key: str, default):
         return self.config.get(self.name, {}).get(key, self.config.get(key, default))
+
+    def distance_cfg(self, key: str, default: float, world: MissionWorld) -> float:
+        """Read a task distance in map-relative or absolute map units."""
+        task_config = self.config.get(self.name, {})
+        units = str(task_config.get("spatial_units", self.config.get("spatial_units", "relative"))).lower()
+        value = float(self.cfg(key, default))
+        if units == "absolute":
+            return value
+        if units != "relative":
+            raise ValueError(f"Unsupported task spatial_units={units!r} for {self.name}")
+        return value * world.map_size
 
 
 def per_agent_new_coverage(prev_world: MissionWorld, world: MissionWorld) -> np.ndarray:
