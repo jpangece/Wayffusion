@@ -103,3 +103,21 @@ outputs/training/benchmarks/swarm30_v1/<runtime>/
 ```
 
 每个 run 保留 snapshot、TensorBoard、training metrics、checkpoints 和 eval media。
+
+## Runtime Profiling
+
+`swarm30_v1` 的主要 wall-clock 瓶颈是 CPU 侧环境步进和渲染，不是 PPO 网络更新。详细 profiling 见：
+
+```text
+docs/swarm30_runtime_profile_zh.md
+```
+
+关键结论：
+
+- rollout collect / `env.step` 约占每 100 update 周期的 `86.2%`；
+- eval stepping 约占 `9.1%`；
+- render 约占 `3.7%`；
+- PPO backward/update 约占 `0.8%`；
+- N=30 connectivity 的热点包括 MPE collision force、通信图计算和重复 connectivity metrics。
+
+因此后续提速应优先做 step-level metrics/cache、降低中途 media 频率和控制并发度；降低 MPE substeps 或关闭 collision force 必须作为单独 ablation，不能混入当前 frozen benchmark。

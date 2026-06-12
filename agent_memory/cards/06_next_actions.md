@@ -2234,3 +2234,21 @@ Match the training hierarchy:
 `outputs/eval/mappo_direct_specialists/<runtime>/<task>/s<seed>/`.
 Do not put pure evaluation results in `outputs/debug/` or
 `outputs/training/`.
+
+### Swarm30 speed optimization priorities
+
+Runtime profiling showed `swarm30_v1` is CPU-env-step bound, not PPO/GPU bound.
+Before relaunching long N=30 benchmark runs, consider a non-semantic speed
+phase:
+
+1. Cache per-step `task_metrics` in `WaypointMultiUAVEnv.step` so agent infos do
+   not recompute the same team-level metrics 30 times.
+2. Cache connectivity graph, connected mask, margin stats, and effective radius
+   within one connectivity step.
+3. Reduce intermediate media during training; keep full GIF recording for final
+   evaluate-only runs.
+4. Use lower benchmark `max_parallel` if CPU oversubscription dominates.
+5. Do not change MPE substeps or collision/contact force unless explicitly
+   launching an ablation benchmark version.
+
+Reference doc: `docs/swarm30_runtime_profile_zh.md`.

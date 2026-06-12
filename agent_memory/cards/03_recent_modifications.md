@@ -7322,3 +7322,57 @@ Date: 2026-06-11.
   `scripts/benchmarks/swarm30/evaluate_n4_specialists_on_n30.sh`.
 - Debug experiments remain under `outputs/debug/`; training runs remain under
   `outputs/training/`.
+
+### Swarm30 runtime profiling
+
+Date: 2026-06-11.
+
+Ran profiling after stopping active `swarm30_v1`, N4-to-N30 evaluate, and the
+Phase32 queue to avoid interference. Existing outputs were not deleted.
+
+Added diagnostic-only scripts:
+
+- `scripts/benchmarks/swarm30/profile_runtime_breakdown.py`
+- `scripts/benchmarks/swarm30/profile_env_step_cprofile.py`
+
+Outputs:
+
+- `outputs/debug/perf_profile/swarm30_runtime_breakdown/20260611_1526/`
+- `outputs/debug/perf_profile/env_step_cprofile/20260611_1526_connectivity/`
+
+Main timing conclusion:
+
+- rollout collect / environment stepping dominates: about `86.2%` of a
+  benchmark 100-update period;
+- eval stepping is about `9.1%`;
+- render is about `3.7%`;
+- GIF write is about `0.2%`;
+- PPO backward/update is only about `0.8%`.
+
+Measured references:
+
+- N=30 single-env step: area `0.271s`, belief `0.221s`, connectivity `0.422s`;
+- N=30 process batch collect with 8 envs: `0.453s` per batch step;
+- process batch policy forward: `0.011s`;
+- process batch env step: `0.442s`;
+- render frame: `1.14s`;
+- GIF write frame: `0.068s`;
+- fake PPO minibatch backward: `0.066s`.
+
+Connectivity cProfile (`N=30`) showed the main hotspots are:
+
+- `MPECoreBackend.step`;
+- vendored OpenAI MPE `World.step` and `get_collision_force`;
+- `communication_graph_for_positions`;
+- `connectivity_expansion.compute_rewards`;
+- repeated `_build_agent_info` / `get_metrics` calls.
+
+Interpretation:
+
+- the main bottleneck is CPU-side environment simulation, not neural network
+  optimization;
+- for non-semantic speedups, prioritize step-level metric caching,
+  connectivity graph/margin/effective-radius caching, lower intermediate media
+  frequency, and lower benchmark `max_parallel`;
+- changing MPE `substeps` or collision force would change environment
+  semantics and must be tracked as an ablation.
