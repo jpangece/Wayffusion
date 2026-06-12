@@ -14,9 +14,11 @@ Removed classes:
 - `MPEParticleBackend`
 - `KinematicPointBackend`
 
-The only supported dynamics backend is now `MPECoreBackend` with
-`dynamics_backend.name: mpe_core`. It calls an actual MPE `World.step()`
-implementation and keeps Wayffusion-specific task/reward/observation logic in
-Wayffusion.
+This note is historical. The handwritten MPE-like and kinematic backends remain
+removed, but Wayffusion now supports three explicit backend modes:
+`waypoint_behavior_fast`, `waypoint_behavior_realistic`, and `mpe_core`.
+`mpe_core` calls an actual MPE `World.step()` implementation and keeps
+Wayffusion-specific task/reward/observation logic in Wayffusion.
 
-See `docs/mpe_core_backend_zh.md` for the current architecture.
+See `docs/dynamics_backend_modes_zh.md` for current backend choices, and
+`docs/mpe_core_backend_zh.md` for the MPE core source details.

@@ -34,15 +34,12 @@ class WaypointScenario:
         if belief.max() > 1e-8:
             belief = belief / float(belief.max())
         risk = np.zeros_like(coverage, dtype=np.float32)
+        centers = world.grid_cell_centers()
         for zone in world.no_fly_zones:
             if "center" in zone and "radius" in zone:
-                yy, xx = np.mgrid[0 : world.grid_size, 0 : world.grid_size]
-                centers = np.stack([(xx + 0.5) / world.grid_size, (yy + 0.5) / world.grid_size], axis=-1) * world.map_size
                 dist = np.linalg.norm(centers - np.asarray(zone["center"], dtype=np.float32), axis=-1)
                 risk = np.maximum(risk, (dist <= float(zone["radius"])).astype(np.float32))
             elif {"x_min", "x_max", "y_min", "y_max"}.issubset(zone):
-                yy, xx = np.mgrid[0 : world.grid_size, 0 : world.grid_size]
-                centers = np.stack([(xx + 0.5) / world.grid_size, (yy + 0.5) / world.grid_size], axis=-1) * world.map_size
                 inside = (
                     (centers[..., 0] >= float(zone["x_min"]))
                     & (centers[..., 0] <= float(zone["x_max"]))
@@ -120,11 +117,13 @@ def per_agent_new_coverage(prev_world: MissionWorld, world: MissionWorld) -> np.
     before = prev_world.coverage_grid > 0.0
     navigable = world.navigable_grid_mask()
     denominator = max(float(navigable.sum()), 1.0)
-    rewards = []
-    for uav in world.uavs:
-        mask = world.sensor_mask_for_position(uav.position, uav.sensor_radius) & navigable
-        rewards.append(float(np.logical_and(mask, ~before).sum() / denominator))
-    return np.asarray(rewards, dtype=np.float32)
+    if not world.uavs:
+        return np.zeros(0, dtype=np.float32)
+    positions = world.get_uav_positions()
+    radii = np.asarray([uav.sensor_radius for uav in world.uavs], dtype=np.float32)
+    masks = world.sensor_masks_for_positions(positions, radii) & navigable[None, :, :]
+    gains = np.logical_and(masks, ~before[None, :, :]).sum(axis=(1, 2)) / denominator
+    return np.asarray(gains, dtype=np.float32)
 
 
 def path_length_delta(transition_info: dict) -> float:

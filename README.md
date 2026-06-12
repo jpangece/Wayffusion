@@ -43,7 +43,7 @@ Policy env_action [B,N,2]
   -> WaypointMultiUAVEnv.step(dict[str, waypoint])
   -> SafetyLayer.validate_waypoints
   -> WaypointVelocityTracker
-  -> MPECoreBackend
+  -> DynamicsBackend
   -> scenario reward/metrics
 ```
 
@@ -53,9 +53,15 @@ Default config:
 - `action_adapter.name: waypoint_velocity_tracker`
 - `dynamics_backend.name: mpe_core`
 
-`ActionAdapter` is environment transition dynamics, not policy. It converts safe final waypoints into low-level MPE physical actions. `MPECoreBackend` owns the physical backend call: it synchronizes Wayffusion UAV state into MPE agents, writes `agent.action.u`, calls the real MPE `World.step()`, then synchronizes MPE agent state back into Wayffusion.
+`ActionAdapter` is environment transition dynamics, not policy. It converts safe final waypoints into backend controls. The selected `DynamicsBackend` then advances UAV state and updates communication, coverage, path length, trajectory, and diagnostics.
 
-Wayffusion no longer uses a self-written MPE-style particle backend. The old handwritten particle backend and kinematic waypoint backend were removed from the runnable mainline. If a config asks for `mpe_particle` or `kinematic_point`, backend construction fails and tells the user to use `mpe_core`.
+Wayffusion supports three manually selected dynamics backend modes:
+
+- `waypoint_behavior_fast`: mission-level waypoint behavior simulation for large-scale training; no MPE dependency.
+- `waypoint_behavior_realistic`: mission-level waypoint behavior simulation with smoothing, speed variability, tracking noise, and command latency; no MPE dependency.
+- `mpe_core`: high-fidelity pre-deployment check; synchronizes Wayffusion UAV state into real MPE agents, writes `agent.action.u`, calls actual MPE `World.step()`, then synchronizes back.
+
+The old handwritten particle backend and kinematic waypoint backend remain removed. If a config asks for `mpe_particle` or `kinematic_point`, backend construction fails and tells the user to use `waypoint_behavior_fast`, `waypoint_behavior_realistic`, or `mpe_core`.
 
 Available adapters:
 
@@ -63,9 +69,7 @@ Available adapters:
 - `WaypointPDTracker`: debug/ablation PD controller.
 - `VelocityToForceAdapter` and `DirectAccelerationAdapter`: smoke placeholders for future lower-level action interfaces.
 
-Only supported backend:
-
-- `MPECoreBackend`: calls actual MPE `World.step()` from the explicitly configured source. The default source is the vendored local OpenAI MPE core in `third_party/openai_mpe/core.py`; using installed `mpe2` requires manually setting `dynamics_backend.source: mpe2`.
+See `docs/dynamics_backend_modes_zh.md` for mode details and configuration examples. For `mpe_core`, the default source is the vendored local OpenAI MPE core in `third_party/openai_mpe/core.py`; using installed `mpe2` requires manually setting `dynamics_backend.source: mpe2`.
 
 ## Policy Families
 

@@ -89,14 +89,14 @@ class AreaCoverageScenario(WaypointScenario):
     def _repeat_footprint_ratio(self, prev_world: MissionWorld, world: MissionWorld) -> float:
         if not world.uavs:
             return 0.0
-        ratios = []
         navigable = world.navigable_grid_mask()
         previously_seen = prev_world.visit_count_grid > 0.0
-        for uav in world.uavs:
-            mask = world.sensor_mask_for_position(uav.position, uav.sensor_radius) & navigable
-            denom = max(float(mask.sum()), 1.0)
-            ratios.append(float((mask & previously_seen).sum() / denom))
-        return float(np.mean(ratios)) if ratios else 0.0
+        positions = world.get_uav_positions()
+        radii = np.asarray([uav.sensor_radius for uav in world.uavs], dtype=np.float32)
+        masks = world.sensor_masks_for_positions(positions, radii) & navigable[None, :, :]
+        denom = np.maximum(masks.sum(axis=(1, 2)).astype(np.float32), 1.0)
+        ratios = (masks & previously_seen[None, :, :]).sum(axis=(1, 2)) / denom
+        return float(np.mean(ratios)) if ratios.size else 0.0
 
     def get_metrics(self, world: MissionWorld, task_state: dict) -> dict:
         ratio = world.coverage_ratio()

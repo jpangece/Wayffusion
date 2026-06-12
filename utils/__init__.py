@@ -5,9 +5,10 @@ from utils.waypoint_evaluation import (
     random_waypoint_action,
     write_episode_media,
 )
-from utils.waypoint_vector_env import SyncWaypointEnvBatch, ThreadWaypointEnvBatch, make_waypoint_env_batch
+from utils.waypoint_vector_env import BatchedFastWaypointEnvBatch, SyncWaypointEnvBatch, ThreadWaypointEnvBatch, make_waypoint_env_batch
 
 __all__ = [
+    "BatchedFastWaypointEnvBatch",
     "SyncWaypointEnvBatch",
     "ThreadWaypointEnvBatch",
     "evaluate_waypoint_policy_episodes",

@@ -55,22 +55,26 @@ class SyncWaypointEnvBatch:
         action_array = np.asarray(actions)
         for env, action_row in zip(self.envs, action_array):
             action_dict = self._action_dict(env, action_row)
-            _, _, terms, truncs, info_by_agent = env.step(action_dict)
-            info = next(iter(info_by_agent.values()))
-            is_terminated = bool(any(terms.values()))
-            is_truncated = bool(any(truncs.values()))
-            done = is_terminated or is_truncated
-            terminal_global = env.get_global_state()
+            (
+                current_global,
+                terminal_global,
+                team_reward,
+                per_agent_reward,
+                is_terminated,
+                is_truncated,
+                done,
+                info,
+            ) = env.step_global(action_dict)
             if done:
                 info = dict(info)
                 info["terminal_info"] = dict(info)
                 info["terminal_global_state"] = {key: value.copy() for key, value in terminal_global.items()}
                 env.reset()
-            current_global = env.get_global_state()
+                current_global = env.get_global_state()
             next_obs.append(current_global)
             bootstrap_obs.append(terminal_global if done else current_global)
-            team_rewards.append(float(info.get("team_reward", 0.0)))
-            per_agent_rewards.append(np.asarray(info.get("per_agent_rewards", np.zeros(env.num_agents)), dtype=np.float32))
+            team_rewards.append(float(team_reward))
+            per_agent_rewards.append(np.asarray(per_agent_reward, dtype=np.float32))
             terminated.append(is_terminated)
             truncated.append(is_truncated)
             done_for_reset.append(done)
@@ -137,22 +141,27 @@ class ThreadWaypointEnvBatch(SyncWaypointEnvBatch):
         )
 
     def _step_one(self, env: WaypointMultiUAVEnv, action_dict: dict):
-        _, _, terms, truncs, info_by_agent = env.step(action_dict)
-        info = next(iter(info_by_agent.values()))
-        is_terminated = bool(any(terms.values()))
-        is_truncated = bool(any(truncs.values()))
-        done = is_terminated or is_truncated
-        terminal_global = env.get_global_state()
+        (
+            current_global,
+            terminal_global,
+            team_reward,
+            per_agent_reward,
+            is_terminated,
+            is_truncated,
+            done,
+            info,
+        ) = env.step_global(action_dict)
         if done:
             info = dict(info)
             info["terminal_info"] = dict(info)
             info["terminal_global_state"] = {key: value.copy() for key, value in terminal_global.items()}
             env.reset()
+            current_global = env.get_global_state()
         return (
-            env.get_global_state(),
-            terminal_global if done else env.get_global_state(),
-            float(info.get("team_reward", 0.0)),
-            np.asarray(info.get("per_agent_rewards", np.zeros(env.num_agents)), dtype=np.float32),
+            current_global,
+            terminal_global if done else current_global,
+            float(team_reward),
+            np.asarray(per_agent_reward, dtype=np.float32),
             is_terminated,
             is_truncated,
             done,
@@ -162,6 +171,25 @@ class ThreadWaypointEnvBatch(SyncWaypointEnvBatch):
     def close(self) -> None:
         self.executor.shutdown(wait=True)
         super().close()
+
+
+class BatchedFastWaypointEnvBatch(ThreadWaypointEnvBatch):
+    """Fast-backend-only batch wrapper using the trainer global-state fast path.
+
+    This keeps the public WaypointBatchStep contract while avoiding per-agent
+    PettingZoo observation expansion and process Pipe serialization. It is the
+    compatibility shell for future true BxNxgrid batched kernels.
+    """
+
+    def __init__(self, envs: list[WaypointMultiUAVEnv], max_workers: int | None = None):
+        for env in envs:
+            backend_name = str(env.config.get("dynamics_backend", {}).get("name", "mpe_core"))
+            if backend_name != "waypoint_behavior_fast":
+                raise ValueError(
+                    "batched_fast env backend requires dynamics_backend.name='waypoint_behavior_fast'; "
+                    f"got {backend_name!r}"
+                )
+        super().__init__(envs, max_workers=max_workers or len(envs))
 
 
 def _process_worker(connection, config: dict) -> None:
@@ -179,12 +207,16 @@ def _process_worker(connection, config: dict) -> None:
                 connection.send(("ok", (env.get_global_state(), next(iter(info_by_agent.values())))))
                 continue
             if command == "step":
-                _, _, terms, truncs, info_by_agent = env.step(payload)
-                info = next(iter(info_by_agent.values()))
-                is_terminated = bool(any(terms.values()))
-                is_truncated = bool(any(truncs.values()))
-                done = is_terminated or is_truncated
-                terminal_global = env.get_global_state()
+                (
+                    current_global,
+                    terminal_global,
+                    team_reward,
+                    per_agent_reward,
+                    is_terminated,
+                    is_truncated,
+                    done,
+                    info,
+                ) = env.step_global(payload)
                 if done:
                     info = dict(info)
                     info["terminal_info"] = dict(info)
@@ -192,18 +224,15 @@ def _process_worker(connection, config: dict) -> None:
                         key: value.copy() for key, value in terminal_global.items()
                     }
                     env.reset()
-                current_global = env.get_global_state()
+                    current_global = env.get_global_state()
                 connection.send(
                     (
                         "ok",
                         (
                             current_global,
                             terminal_global if done else current_global,
-                            float(info.get("team_reward", 0.0)),
-                            np.asarray(
-                                info.get("per_agent_rewards", np.zeros(env.num_agents)),
-                                dtype=np.float32,
-                            ),
+                            float(team_reward),
+                            np.asarray(per_agent_reward, dtype=np.float32),
                             is_terminated,
                             is_truncated,
                             done,
@@ -348,6 +377,8 @@ def make_waypoint_env_batch(
     if backend == "process":
         return ProcessWaypointEnvBatch(configs)
     envs = [WaypointMultiUAVEnv(env_config) for env_config in configs]
+    if backend == "batched_fast":
+        return BatchedFastWaypointEnvBatch(envs, max_workers=max_workers)
     if backend == "sync":
         return SyncWaypointEnvBatch(envs)
     if backend == "thread":

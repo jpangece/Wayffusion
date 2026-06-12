@@ -213,11 +213,12 @@ def profile_process_batch(
     device: torch.device,
     num_envs: int,
     batch_steps: int,
+    env_backend: str,
 ) -> list[dict[str, Any]]:
     cfg = deepcopy(env_config)
     cfg["task_name"] = task_name
     cfg["task_names"] = [task_name]
-    batch = make_waypoint_env_batch(cfg, num_envs=num_envs, task_name=task_name, backend="process")
+    batch = make_waypoint_env_batch(cfg, num_envs=num_envs, task_name=task_name, backend=env_backend)
     try:
         obs, _ = batch.reset(seeds=[int(cfg.get("seed", 0)) + idx for idx in range(num_envs)])
         probe_env = WaypointMultiUAVEnv(cfg)
@@ -245,10 +246,10 @@ def profile_process_batch(
             obs = step_result.observations
         total_time = time.perf_counter() - total_start
         rows = [
-            make_row("process_batch_policy_action_B8", task_name, scale, batch_steps, policy_times, units="batch_step"),
-            make_row("process_batch_env_step_B8", task_name, scale, batch_steps, batch_step_times, units="batch_step"),
+            make_row(f"{env_backend}_batch_policy_action_B8", task_name, scale, batch_steps, policy_times, units="batch_step"),
+            make_row(f"{env_backend}_batch_env_step_B8", task_name, scale, batch_steps, batch_step_times, units="batch_step"),
             {
-                "component": "process_batch_collect_total_B8",
+                "component": f"{env_backend}_batch_collect_total_B8",
                 "task": task_name,
                 "scale": scale,
                 "count": batch_steps,
@@ -326,12 +327,12 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def summarize(rows: list[dict[str, Any]], output_dir: Path, benchmark_cfg: dict[str, Any]) -> dict[str, Any]:
+def summarize(rows: list[dict[str, Any]], output_dir: Path, benchmark_cfg: dict[str, Any], env_backend: str) -> dict[str, Any]:
     by_component = {row["component"]: row for row in rows if row.get("task") in {"area_coverage", "all_tasks"} and int(row.get("scale", -1)) == 30}
     single_step = by_component.get("single_env_loop_total", {})
-    process_collect = by_component.get("process_batch_collect_total_B8", {})
-    process_policy = by_component.get("process_batch_policy_action_B8", {})
-    process_env = by_component.get("process_batch_env_step_B8", {})
+    process_collect = by_component.get(f"{env_backend}_batch_collect_total_B8", {})
+    process_policy = by_component.get(f"{env_backend}_batch_policy_action_B8", {})
+    process_env = by_component.get(f"{env_backend}_batch_env_step_B8", {})
     render = by_component.get("render_rgb_array", {})
     gif = by_component.get("gif_write", {})
     backward = by_component.get("policy_backward_fake_minibatch64", {})
@@ -373,6 +374,7 @@ def summarize(rows: list[dict[str, Any]], output_dir: Path, benchmark_cfg: dict[
     summary = {
         "note": "Estimates use measured N=30 timing and benchmark swarm30_v1 defaults. PPO update is an approximate fake-minibatch backward timing.",
         "measured_reference": {
+            "env_backend": env_backend,
             "single_env_step_mean_sec": eval_step_sec,
             "process_batch_collect_mean_sec_per_8env_step": collect_step_sec,
             "process_batch_policy_mean_sec": float(process_policy.get("mean_sec", 0.0)),
@@ -407,12 +409,13 @@ def write_report(output_dir: Path, rows: list[dict[str, Any]], summary: dict[str
         "",
     ]
     measured = summary["measured_reference"]
+    env_backend = str(measured.get("env_backend", "process"))
     pct = summary["estimated_benchmark_period_100_updates_sec"]["percentages"]
     lines.extend(
         [
             f"- N=30 single-env step mean: `{measured['single_env_step_mean_sec']:.4f}s`.",
-            f"- N=30 process batch collect mean for 8 envs: `{measured['process_batch_collect_mean_sec_per_8env_step']:.4f}s` per batch step.",
-            f"- Policy forward within process batch: `{measured['process_batch_policy_mean_sec']:.4f}s`; env batch step: `{measured['process_batch_env_mean_sec']:.4f}s`.",
+            f"- N=30 {env_backend} batch collect mean for 8 envs: `{measured['process_batch_collect_mean_sec_per_8env_step']:.4f}s` per batch step.",
+            f"- Policy forward within {env_backend} batch: `{measured['process_batch_policy_mean_sec']:.4f}s`; env batch step: `{measured['process_batch_env_mean_sec']:.4f}s`.",
             f"- Approximate 100-update benchmark period: collect `{pct['collect']:.1f}%`, PPO update `{pct['ppo_update_approx']:.1f}%`, eval stepping `{pct['eval_step']:.1f}%`, render `{pct['eval_render']:.1f}%`, GIF write `{pct['eval_gif_write']:.1f}%`.",
             "",
             "## Component Table",
@@ -452,6 +455,7 @@ def main() -> int:
     parser.add_argument("--render-frames", type=int, default=60)
     parser.add_argument("--process-batch-steps", type=int, default=40)
     parser.add_argument("--num-envs", type=int, default=8)
+    parser.add_argument("--env-backend", choices=["process", "batched_fast", "thread", "sync"], default="process")
     parser.add_argument("--backward-repeats", type=int, default=8)
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
@@ -501,12 +505,13 @@ def main() -> int:
             device,
             num_envs=int(args.num_envs),
             batch_steps=int(args.process_batch_steps),
+            env_backend=str(args.env_backend),
         )
     )
     rows.extend(profile_backward(policy_config, scaled30, device, repeats=int(args.backward_repeats)))
 
     write_csv(output_dir / "component_timings.csv", rows)
-    summary = summarize(rows, output_dir, benchmark_cfg)
+    summary = summarize(rows, output_dir, benchmark_cfg, env_backend=str(args.env_backend))
     write_report(output_dir, rows, summary)
     print(json.dumps({"output_dir": str(output_dir), "summary": summary}, indent=2, sort_keys=True))
     return 0

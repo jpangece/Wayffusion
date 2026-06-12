@@ -119,46 +119,67 @@ def render_world(
     candidate_waypoints: np.ndarray | None = None,
     selected_waypoints: np.ndarray | None = None,
     metrics: dict | None = None,
+    render_detail: str = "full",
 ) -> np.ndarray:
     task_state = task_state or {}
     metrics = metrics or {}
-    fig, ax = plt.subplots(figsize=(6.0, 6.0), dpi=130)
+    detail = str(render_detail or "full").lower()
+    low_detail = detail == "low"
+    fig, ax = plt.subplots(figsize=(4.8, 4.8) if low_detail else (6.0, 6.0), dpi=90 if low_detail else 130)
     fig.patch.set_facecolor("#EFE7D2")
     extent = [0.0, world.map_size, 0.0, world.map_size]
     _draw_task_layer(ax, world, task_name, extent)
     _draw_no_fly_zones(ax, world)
 
     base = world.base_position
-    ax.scatter([base[0]], [base[1]], marker="h", c=WAYF_COLORS["blue"], s=190, edgecolors=WAYF_COLORS["white"], linewidths=1.6, label="base", zorder=9)
-    _with_outline(ax.text(base[0], base[1] - 0.035 * world.map_size, "BASE", fontsize=7, ha="center", va="top", color=WAYF_COLORS["blue"], weight="bold", zorder=10), 1.5)
+    ax.scatter([base[0]], [base[1]], marker="h", c=WAYF_COLORS["blue"], s=70 if low_detail else 190, edgecolors=WAYF_COLORS["white"], linewidths=1.0 if low_detail else 1.6, label="base", zorder=9)
+    if not low_detail:
+        _with_outline(ax.text(base[0], base[1] - 0.035 * world.map_size, "BASE", fontsize=7, ha="center", va="top", color=WAYF_COLORS["blue"], weight="bold", zorder=10), 1.5)
     positions = world.get_uav_positions()
     if len(positions):
         connected = world.connected_to_base_mask()
         colors = [UAV_PALETTE[idx % len(UAV_PALETTE)] if flag else WAYF_COLORS["red"] for idx, flag in enumerate(connected)]
-        for idx, uav in enumerate(world.uavs):
-            traj = np.asarray(uav.trajectory, dtype=np.float32)
-            if len(traj) > 1:
-                ax.plot(traj[:, 0], traj[:, 1], color=colors[idx], linewidth=1.65, alpha=0.74, zorder=5)
-            if np.linalg.norm(uav.velocity) > 1e-8:
-                heading = float(np.arctan2(uav.velocity[1], uav.velocity[0]))
-            elif selected_waypoints is not None:
-                target_delta = np.asarray(selected_waypoints, dtype=np.float32)[idx] - uav.position
-                heading = float(np.arctan2(target_delta[1], target_delta[0])) if np.linalg.norm(target_delta) > 1e-8 else float(idx) * 0.7
-            else:
-                heading = float(idx) * 0.7
-            _draw_drone_icon(ax, uav.position, heading, colors[idx], idx, bool(connected[idx]), 0.026 * world.map_size)
-            if np.linalg.norm(uav.velocity) > 1e-8:
-                ax.arrow(uav.position[0], uav.position[1], uav.velocity[0], uav.velocity[1], color=colors[idx], width=0.0006, head_width=0.012, alpha=0.52, length_includes_head=True, zorder=6)
+        if low_detail:
+            if any(len(uav.trajectory) > 1 for uav in world.uavs):
+                for idx, uav in enumerate(world.uavs):
+                    traj = np.asarray(uav.trajectory[-16:], dtype=np.float32)
+                    if len(traj) > 1:
+                        ax.plot(traj[:, 0], traj[:, 1], color=colors[idx], linewidth=0.8, alpha=0.45, zorder=5)
+            ax.scatter(
+                positions[:, 0],
+                positions[:, 1],
+                c=colors,
+                s=20,
+                edgecolors=WAYF_COLORS["white"],
+                linewidths=0.45,
+                zorder=10,
+            )
+        else:
+            for idx, uav in enumerate(world.uavs):
+                traj = np.asarray(uav.trajectory, dtype=np.float32)
+                if len(traj) > 1:
+                    ax.plot(traj[:, 0], traj[:, 1], color=colors[idx], linewidth=1.65, alpha=0.74, zorder=5)
+                if np.linalg.norm(uav.velocity) > 1e-8:
+                    heading = float(np.arctan2(uav.velocity[1], uav.velocity[0]))
+                elif selected_waypoints is not None:
+                    target_delta = np.asarray(selected_waypoints, dtype=np.float32)[idx] - uav.position
+                    heading = float(np.arctan2(target_delta[1], target_delta[0])) if np.linalg.norm(target_delta) > 1e-8 else float(idx) * 0.7
+                else:
+                    heading = float(idx) * 0.7
+                _draw_drone_icon(ax, uav.position, heading, colors[idx], idx, bool(connected[idx]), 0.026 * world.map_size)
+                if np.linalg.norm(uav.velocity) > 1e-8:
+                    ax.arrow(uav.position[0], uav.position[1], uav.velocity[0], uav.velocity[1], color=colors[idx], width=0.0006, head_width=0.012, alpha=0.52, length_includes_head=True, zorder=6)
 
-    if candidate_waypoints is not None:
+    if candidate_waypoints is not None and not low_detail:
         cand = np.asarray(candidate_waypoints)
         if cand.ndim == 3:
             ax.scatter(cand[..., 0].reshape(-1), cand[..., 1].reshape(-1), c=WAYF_COLORS["gray"], s=7, alpha=0.18, linewidths=0, label="candidates", zorder=4)
     if selected_waypoints is not None:
         sel = np.asarray(selected_waypoints)
-        ax.scatter(sel[:, 0], sel[:, 1], marker="D", c=WAYF_COLORS["orange"], s=44, edgecolors=WAYF_COLORS["white"], linewidths=0.9, label="waypoint", zorder=8)
-        for pos, target in zip(positions, sel):
-            ax.plot([pos[0], target[0]], [pos[1], target[1]], color=WAYF_COLORS["orange"], linewidth=1.1, alpha=0.62, linestyle=(0, (3, 2)), zorder=6)
+        ax.scatter(sel[:, 0], sel[:, 1], marker="D", c=WAYF_COLORS["orange"], s=14 if low_detail else 44, edgecolors=WAYF_COLORS["white"], linewidths=0.45 if low_detail else 0.9, label="waypoint", zorder=8)
+        if not low_detail:
+            for pos, target in zip(positions, sel):
+                ax.plot([pos[0], target[0]], [pos[1], target[1]], color=WAYF_COLORS["orange"], linewidth=1.1, alpha=0.62, linestyle=(0, (3, 2)), zorder=6)
 
     if "pois" in task_state:
         pois = np.asarray(task_state["pois"], dtype=np.float32)
@@ -183,10 +204,11 @@ def render_world(
             zorder=8,
         )
         for idx, target in enumerate(targets):
-            _with_outline(
-                ax.text(target[0], target[1] + 0.025 * world.map_size, f"T{idx}", fontsize=6.5, ha="center", color=WAYF_COLORS["red"], zorder=9),
-                1.3,
-            )
+            if not low_detail:
+                _with_outline(
+                    ax.text(target[0], target[1] + 0.025 * world.map_size, f"T{idx}", fontsize=6.5, ha="center", color=WAYF_COLORS["red"], zorder=9),
+                    1.3,
+                )
         routes = task_state.get("target_routes")
         if routes is None:
             routes = [task_state.get("target_route", [])]
@@ -196,7 +218,7 @@ def render_world(
                 ax.plot(route_array[:, 0], route_array[:, 1], color=WAYF_COLORS["red"], linestyle="--", linewidth=1.2, alpha=0.58, zorder=5)
 
     graph = world.communication_graph
-    if graph.shape[0] == len(world.uavs) + 1:
+    if graph.shape[0] == len(world.uavs) + 1 and not low_detail:
         nodes = np.vstack([world.base_position[None, :], positions]) if len(positions) else world.base_position[None, :]
         for i in range(graph.shape[0]):
             for j in range(i + 1, graph.shape[1]):
@@ -214,8 +236,12 @@ def render_world(
     for spine in ax.spines.values():
         spine.set_color("#A99F88")
         spine.set_linewidth(1.2)
-    ax.tick_params(labelsize=7, colors="#746B5C")
-    ax.legend(loc="upper right", fontsize=6, frameon=True, framealpha=0.86, facecolor=WAYF_COLORS["paper"], edgecolor="#C7BCA3")
+    ax.tick_params(labelsize=0 if low_detail else 7, colors="#746B5C")
+    if low_detail:
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+    else:
+        ax.legend(loc="upper right", fontsize=6, frameon=True, framealpha=0.86, facecolor=WAYF_COLORS["paper"], edgecolor="#C7BCA3")
     fig.tight_layout(pad=0.65)
     fig.canvas.draw()
     if hasattr(fig.canvas, "tostring_rgb"):

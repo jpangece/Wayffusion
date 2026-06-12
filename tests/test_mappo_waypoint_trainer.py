@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import yaml
 
 from algorithms.mappo_waypoint import MAPPOWaypointTrainer, compute_gae_returns
@@ -85,6 +86,43 @@ def test_mappo_waypoint_collect_update_uvfa_direct_waypoint():
     config["policy_class"] = "direct_waypoint_uvfa"
     config["reward_norm_scope"] = "task"
     _run_collect_update(_base_env_config(), config)
+
+
+def test_batched_fast_env_backend_collect_update_direct_waypoint():
+    env_config = _base_env_config()
+    env_config["dynamics_backend"] = {
+        "name": "waypoint_behavior_fast",
+        "dt": 1.0,
+        "max_speed": float(env_config.get("max_speed", 0.04)),
+        "acceptance_radius": 0.025,
+        "agent_size": 0.02,
+        "enable_boundary_projection": True,
+        "enable_no_fly_projection": True,
+    }
+    env_config["runtime_acceleration"] = {"sensor_footprint_mode": "disk_stamp"}
+    train_config = _train_config("configs/policy/direct_waypoint_debug.yaml")
+    train_config["map_size"] = env_config["map_size"]
+    train_config["grid_size"] = env_config["grid_size"]
+    train_config["max_waypoint_distance"] = env_config["max_waypoint_distance"]
+    train_config["base_position"] = env_config["base_position"]
+    train_config["no_fly_zones"] = env_config["no_fly_zones"]
+    batch_env = make_waypoint_env_batch(env_config, 2, backend="batched_fast")
+    policy = build_policy(train_config, batch_env.envs[0].global_observation_space, batch_env.envs[0].action_space_n)
+    trainer = MAPPOWaypointTrainer(batch_env, policy, train_config)
+    batch, stats = trainer.collect_rollout()
+    assert batch.old_logprobs.shape == (4, 2, 3)
+    assert batch.env_actions.shape == (4, 2, 3, 2)
+    assert np.isfinite(stats["mean_speed"])
+    assert stats["uses_real_mpe_core"] == 0.0
+    update_stats = trainer.update(batch)
+    assert np.isfinite(update_stats["policy_loss"])
+    batch_env.close()
+
+
+def test_batched_fast_env_backend_rejects_non_fast_dynamics():
+    env_config = _base_env_config()
+    with pytest.raises(ValueError, match="waypoint_behavior_fast"):
+        make_waypoint_env_batch(env_config, 2, backend="batched_fast")
 
 
 def test_gae_truncated_bootstraps_value_but_does_not_cross_episode():

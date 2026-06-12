@@ -29,6 +29,22 @@ from utils.swarm30_benchmark import (
 )
 
 
+TRACK_ALIASES = {
+    "standard_specialist": "standardized_specialists",
+    "standardized_specialist": "standardized_specialists",
+    "standardized_specialists": "standardized_specialists",
+    "tuned_specialist": "tuned_specialists",
+    "tuned_specialists": "tuned_specialists",
+    "generalist": "generalist",
+}
+
+TRACK_OUTPUT_NAMES = {
+    "standardized_specialists": "standard_specialist",
+    "tuned_specialists": "tuned_specialist",
+    "generalist": "generalist",
+}
+
+
 @dataclass
 class Job:
     job_id: str
@@ -65,6 +81,17 @@ def write_json(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def canonical_track(track: str) -> str:
+    if track not in TRACK_ALIASES:
+        supported = ", ".join(sorted(TRACK_ALIASES))
+        raise ValueError(f"Unsupported track {track!r}. Supported tracks: {supported}")
+    return TRACK_ALIASES[track]
+
+
+def track_output_name(track: str) -> str:
+    return TRACK_OUTPUT_NAMES[canonical_track(track)]
+
+
 def final_update(path: Path) -> int:
     metrics = path / "training_metrics.csv"
     if not metrics.exists():
@@ -84,6 +111,7 @@ class Swarm30Benchmark:
         self.args = args
         self.runtime = args.runtime or minute_runtime()
         self.protocol = read_yaml(ROOT / args.benchmark_config)
+        self._apply_protocol_overrides()
         self.base_env = read_yaml(ROOT / args.env_config)
         self.output_root = Path(args.output_root)
         if not self.output_root.is_absolute():
@@ -93,6 +121,62 @@ class Swarm30Benchmark:
         self.results: dict[str, dict[str, Any]] = {}
         self.email_events: list[dict[str, Any]] = []
         load_env_file(ROOT / args.smtp_env_file)
+
+    def _apply_protocol_overrides(self) -> None:
+        train_cfg = self.protocol.setdefault("train", {})
+        if self.args.seeds:
+            train_cfg["seeds"] = [int(seed) for seed in self.args.seeds]
+        if self.args.num_envs is not None:
+            train_cfg["num_envs"] = int(self.args.num_envs)
+        if self.args.rollout_steps is not None:
+            train_cfg["rollout_steps"] = int(self.args.rollout_steps)
+        if self.args.specialist_updates is not None:
+            train_cfg["specialist_updates"] = int(self.args.specialist_updates)
+        if self.args.generalist_updates is not None:
+            train_cfg["generalist_updates"] = int(self.args.generalist_updates)
+        if self.args.eval_interval is not None:
+            train_cfg["eval_interval"] = int(self.args.eval_interval)
+        if self.args.eval_episodes is not None:
+            train_cfg["eval_episodes"] = int(self.args.eval_episodes)
+        if self.args.record_eval_episodes is not None:
+            train_cfg["record_eval_episodes"] = int(self.args.record_eval_episodes)
+        if self.args.env_backend is not None:
+            train_cfg["env_backend"] = str(self.args.env_backend)
+        train_cfg["dynamics_backend"] = str(self.args.dynamics_backend)
+
+    def _apply_dynamics_backend(self, env_config: dict[str, Any]) -> None:
+        name = str(self.protocol.get("train", {}).get("dynamics_backend", self.args.dynamics_backend))
+        if name == "mpe_core":
+            env_config.setdefault("dynamics_backend", {})["name"] = "mpe_core"
+            env_config["dynamics_backend"].setdefault("source", "third_party_openai_mpe")
+            return
+        if name == "waypoint_behavior_fast":
+            env_config["dynamics_backend"] = {
+                "name": "waypoint_behavior_fast",
+                "dt": float(self.args.backend_dt),
+                "max_speed": float(env_config.get("max_speed", 0.04)),
+                "acceptance_radius": float(self.args.backend_acceptance_radius),
+                "agent_size": float(self.args.backend_agent_size),
+                "enable_boundary_projection": True,
+                "enable_no_fly_projection": True,
+            }
+            return
+        if name == "waypoint_behavior_realistic":
+            env_config["dynamics_backend"] = {
+                "name": "waypoint_behavior_realistic",
+                "dt": float(self.args.backend_dt),
+                "max_speed": float(env_config.get("max_speed", 0.04)),
+                "acceptance_radius": float(self.args.backend_acceptance_radius),
+                "agent_size": float(self.args.backend_agent_size),
+                "velocity_smoothing": 0.35,
+                "speed_scale_range": [0.85, 1.15],
+                "tracking_noise_std": 0.005,
+                "command_latency_steps": 1,
+                "enable_boundary_projection": True,
+                "enable_no_fly_projection": True,
+            }
+            return
+        raise ValueError(f"Unsupported dynamics backend: {name}")
 
     def notify(self, event: str, subject: str, body: str, attachments: list[str] | None = None) -> None:
         if self.args.skip_email:
@@ -122,7 +206,9 @@ class Swarm30Benchmark:
         jobs: list[Job] = []
         gpu_index = 0
 
-        for track in self.args.tracks:
+        requested_tracks = [canonical_track(track) for track in self.args.tracks]
+        for track in requested_tracks:
+            output_track = track_output_name(track)
             if track == "generalist":
                 task_sets = [list(SWARM30_TASKS)]
             else:
@@ -130,7 +216,7 @@ class Swarm30Benchmark:
             for tasks in task_sets:
                 for seed in seeds:
                     task_key = "all_tasks" if len(tasks) > 1 else tasks[0]
-                    output_dir = self.suite_root / track / task_key / f"s{seed}"
+                    output_dir = self.suite_root / output_track / task_key / f"s{seed}"
                     if track == "standardized_specialists":
                         policy_path = ROOT / tracks_cfg[track]["policy_config"]
                         updates = int(train_cfg["specialist_updates"])
@@ -144,6 +230,9 @@ class Swarm30Benchmark:
                         raise ValueError(f"Unsupported track: {track}")
 
                     env_config = build_scaled_env_config(self.base_env, 30, tasks, randomization=True)
+                    self._apply_dynamics_backend(env_config)
+                    env_config.setdefault("rendering", {})["render_detail"] = "low"
+                    env_config.setdefault("runtime_acceleration", {})["sensor_footprint_mode"] = "disk_stamp"
                     env_config["seed"] = seed
                     if track == "tuned_specialists":
                         env_config["tasks"][tasks[0]].update(
@@ -228,7 +317,7 @@ class Swarm30Benchmark:
                         Job(
                             job_id=f"train__{track}__{task_key}__s{seed}",
                             stage="train",
-                            track=track,
+                            track=output_track,
                             seed=seed,
                             tasks=tasks,
                             gpu=self.args.gpus[gpu_index % len(self.args.gpus)],
@@ -479,9 +568,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tracks",
         nargs="+",
-        choices=["standardized_specialists", "tuned_specialists", "generalist"],
-        default=["standardized_specialists", "tuned_specialists", "generalist"],
+        choices=sorted(TRACK_ALIASES),
+        default=["standard_specialist", "tuned_specialist", "generalist"],
     )
+    parser.add_argument(
+        "--dynamics-backend",
+        choices=["waypoint_behavior_fast", "waypoint_behavior_realistic", "mpe_core"],
+        default="waypoint_behavior_fast",
+    )
+    parser.add_argument("--backend-dt", type=float, default=1.0)
+    parser.add_argument("--backend-acceptance-radius", type=float, default=0.025)
+    parser.add_argument("--backend-agent-size", type=float, default=0.02)
+    parser.add_argument("--seeds", nargs="+", type=int, default=None)
+    parser.add_argument("--num-envs", type=int, default=None)
+    parser.add_argument("--rollout-steps", type=int, default=None)
+    parser.add_argument("--specialist-updates", type=int, default=None)
+    parser.add_argument("--generalist-updates", type=int, default=None)
+    parser.add_argument("--eval-interval", type=int, default=None)
+    parser.add_argument("--eval-episodes", type=int, default=None)
+    parser.add_argument("--record-eval-episodes", type=int, default=None)
+    parser.add_argument("--env-backend", choices=["sync", "thread", "process", "batched_fast"], default=None)
     parser.add_argument("--gpus", nargs="+", type=int, default=[0, 1, 2, 3])
     parser.add_argument("--max-parallel", type=int, default=4)
     parser.add_argument("--cpu-threads-per-job", type=int, default=4)

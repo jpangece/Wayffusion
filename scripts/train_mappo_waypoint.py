@@ -20,6 +20,7 @@ from algorithms.mappo_waypoint import MAPPOWaypointTrainer, write_metrics_csv
 from envs.waypoint_marl_env import WaypointMultiUAVEnv
 from policies import build_policy
 from utils.waypoint_vector_env import (
+    BatchedFastWaypointEnvBatch,
     ProcessWaypointEnvBatch,
     SyncWaypointEnvBatch,
     ThreadWaypointEnvBatch,
@@ -103,6 +104,8 @@ def build_env_batch(env_config: dict, train_config: dict, tasks: list[str], envs
     if backend == "process":
         return ProcessWaypointEnvBatch(env_configs)
     envs = [WaypointMultiUAVEnv(cfg) for cfg in env_configs]
+    if backend == "batched_fast":
+        return BatchedFastWaypointEnvBatch(envs, max_workers=workers)
     if backend == "sync":
         return SyncWaypointEnvBatch(envs)
     if backend == "thread":
@@ -166,7 +169,7 @@ def main() -> None:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--init-checkpoint", default=None)
     parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--env_backend", choices=["sync", "thread", "process"], default="sync")
+    parser.add_argument("--env_backend", choices=["sync", "thread", "process", "batched_fast"], default="process")
     parser.add_argument("--env_workers", type=int, default=None)
     args = parser.parse_args()
 

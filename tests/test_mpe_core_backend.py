@@ -75,9 +75,9 @@ def test_mpe_core_backend_step_calls_world_step_and_syncs_state(monkeypatch):
 def test_removed_self_written_backends_are_not_available():
     assert not hasattr(dynamics_module, "MPEParticleBackend")
     assert not hasattr(dynamics_module, "KinematicPointBackend")
-    with pytest.raises(ValueError, match="Use mpe_core"):
+    with pytest.raises(ValueError, match="waypoint_behavior_fast"):
         build_dynamics_backend({"name": "mpe_particle"})
-    with pytest.raises(ValueError, match="Use mpe_core"):
+    with pytest.raises(ValueError, match="waypoint_behavior_fast"):
         build_dynamics_backend({"name": "kinematic_point"})
 
 

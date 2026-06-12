@@ -84,3 +84,64 @@ def test_waypoint_parallel_api_reset_step_and_global_state():
     assert 0.0 <= info["command_update_rate"] <= 1.0
     assert 0.0 <= info["command_reject_rate"] <= 1.0
     assert env.state()["all_uav_states"].shape == (3, 8)
+
+
+def test_step_info_reuses_reward_metrics_instead_of_recomputing_per_agent(monkeypatch):
+    config = _config("area_coverage")
+    config["num_agents"] = 6
+    env = WaypointMultiUAVEnv(config)
+    env.reset(seed=7)
+    calls = {"count": 0}
+    original = env.current_scenario.get_metrics
+
+    def counted_get_metrics(world, task_state):
+        calls["count"] += 1
+        return original(world, task_state)
+
+    monkeypatch.setattr(env.current_scenario, "get_metrics", counted_get_metrics)
+    positions = env.world.get_uav_positions()
+    actions = {agent: positions[idx].astype(np.float32) for idx, agent in enumerate(env.possible_agents)}
+    env.step(actions)
+
+    assert calls["count"] == 1
+
+
+def test_connected_mask_uses_cached_graph_until_positions_change(monkeypatch):
+    env = WaypointMultiUAVEnv(_config("connectivity_expansion"))
+    env.reset(seed=11)
+    world = env.world
+    calls = {"count": 0}
+    original = world.communication_graph_for_positions
+
+    def counted_graph(positions):
+        calls["count"] += 1
+        return original(positions)
+
+    monkeypatch.setattr(world, "communication_graph_for_positions", counted_graph)
+    world.connected_to_base_mask()
+    world.connected_to_base_mask()
+    assert calls["count"] == 0
+
+    world.uavs[0].position = (world.uavs[0].position + np.asarray([0.001, 0.0], dtype=np.float32)).astype(np.float32)
+    world.connected_to_base_mask()
+    world.connected_to_base_mask()
+    assert calls["count"] == 1
+
+
+def test_torch_cpu_geometry_runtime_acceleration_reset_step():
+    config = _config("area_coverage")
+    config["runtime_acceleration"] = {
+        "sensor_footprint_mode": "exact",
+        "geometry_backend": "torch_cpu",
+        "geometry_device": "cpu",
+    }
+    env = WaypointMultiUAVEnv(config)
+    env.reset(seed=31)
+    assert env.world.geometry_backend == "torch_cpu"
+    positions = env.world.get_uav_positions()
+    actions = {agent: positions[idx].astype(np.float32) for idx, agent in enumerate(env.possible_agents)}
+    _, _, _, _, infos = env.step(actions)
+    info = infos["uav_0"]
+    assert np.isfinite(info["mean_speed"])
+    assert env.world.communication_graph.shape == (config["num_agents"] + 1, config["num_agents"] + 1)
+    assert env.world.coverage_grid.sum() > 0.0

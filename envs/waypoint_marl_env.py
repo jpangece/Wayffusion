@@ -65,7 +65,13 @@ class WaypointMultiUAVEnv:
         self.last_transition_info: dict[str, Any] = {}
         self.episode_config = deepcopy(self.config)
         self.episode_randomization_info: dict[str, Any] = {"enabled": False}
+        self._global_state_cache: dict[str, np.ndarray] | None = None
+        self._shared_info_cache: dict[str, Any] | None = None
         self._build_spaces()
+
+    def _invalidate_runtime_caches(self) -> None:
+        self._global_state_cache = None
+        self._shared_info_cache = None
 
     def _action_adapter_config(self) -> dict[str, Any]:
         physical_scale = dict(self.config.get("physical_scale", {}))
@@ -195,6 +201,7 @@ class WaypointMultiUAVEnv:
             raise KeyError(f"Unknown agent_id: {agent_id}")
 
     def reset(self, seed: int | None = None, options: dict | None = None):
+        self._invalidate_runtime_caches()
         if seed is not None:
             self.seed_value = int(seed)
             self.rng = np.random.default_rng(self.seed_value)
@@ -237,6 +244,7 @@ class WaypointMultiUAVEnv:
         self.last_transition_info = {}
         if self._exposes_candidates():
             self._refresh_candidates()
+        self._invalidate_runtime_caches()
         observations = self._build_agent_observations()
         infos = {agent: self._build_agent_info(agent_idx) for agent_idx, agent in enumerate(self.possible_agents)}
         return observations, infos
@@ -285,6 +293,7 @@ class WaypointMultiUAVEnv:
             metadata["target_count"] = int(len(self.task_state.get("target_positions", [])))
 
     def step(self, actions: dict[str, np.ndarray | int]):
+        self._invalidate_runtime_caches()
         if self.current_scenario is None:
             raise RuntimeError("reset() must be called before step().")
 
@@ -342,6 +351,7 @@ class WaypointMultiUAVEnv:
         self.last_reward_result = reward_result
         if self._exposes_candidates():
             self._refresh_candidates()
+        self._invalidate_runtime_caches()
 
         success = bool(reward_result.get("success", False))
         failure = bool(reward_result.get("failure", False))
@@ -362,6 +372,95 @@ class WaypointMultiUAVEnv:
                 infos[agent]["terminal_info"] = deepcopy(infos[agent])
             self.agents = []
         return observations, rewards, terminations, truncations, infos
+
+    def step_global(self, actions: dict[str, np.ndarray | int]):
+        """Trainer fast path that avoids building per-agent observations.
+
+        The public PettingZoo-style ``step`` API remains unchanged. Rollout
+        collection only consumes centralized global observations and one info
+        dictionary per environment, so this path skips the expensive
+        per-agent observation/info expansion used by external callers.
+        """
+        self._invalidate_runtime_caches()
+        if self.current_scenario is None:
+            raise RuntimeError("reset() must be called before step().")
+
+        if self.action_mode == "candidate_index_legacy":
+            raw_waypoints, validity, safety_info = self._legacy_actions_to_waypoints(actions)
+            safety_result = self.safety.validate_waypoints(
+                self.world,
+                raw_waypoints,
+                config=self._action_adapter_config(),
+                require_connectivity=self.current_scenario.name == "connectivity_expansion" and bool(self.config.get("connectivity_action_filter", False)),
+            )
+            validity &= safety_result.valid_mask
+            action_connectivity_info = self._action_connectivity_diagnostics(raw_waypoints[..., :2].astype(np.float32))
+        else:
+            raw_waypoints, action_shape_valid = self._actions_to_waypoints(actions)
+            if self.action_mode == "waypoint_delta":
+                raw_waypoints = self.world.get_uav_positions() + raw_waypoints
+            require_connectivity = self.current_scenario.name == "connectivity_expansion" and bool(self.config.get("connectivity_action_filter", False))
+            raw_waypoints_2d = raw_waypoints[..., :2].astype(np.float32)
+            action_connectivity_info = self._action_connectivity_diagnostics(raw_waypoints_2d)
+            safety_result = self.safety.validate_waypoints(
+                self.world,
+                raw_waypoints_2d,
+                config=self._action_adapter_config(),
+                require_connectivity=require_connectivity,
+            )
+            validity = safety_result.valid_mask & action_shape_valid
+            raw_waypoints = raw_waypoints_2d
+            raw_waypoints[~action_shape_valid] = self.world.get_uav_positions()[~action_shape_valid]
+            if not np.all(validity) and bool(self.config.get("strict_action_validation", False)):
+                raise ValueError(f"Illegal waypoint action: {safety_result.to_info()}")
+
+        safety_result.valid_mask &= validity
+        safety_result.rejected_mask |= ~validity
+        safety_info = safety_result.to_info()
+        adapter_output = self.action_adapter.adapt(self.world, safety_result.safe_waypoints, safety_result)
+        self.last_raw_waypoints = raw_waypoints[..., :2].copy()
+        self.last_selected_waypoints = safety_result.safe_waypoints.copy()
+        prev_world = self.world.snapshot()
+        self.current_scenario.step_update(self.world, self.task_state)
+        dynamics_info = self.dynamics_backend.step(self.world, adapter_output.controls, adapter_output, safety_result)
+        transition_info = self._merge_transition_info(safety_result, adapter_output, dynamics_info)
+        transition_info["invalid_action_count"] = int((~validity).sum())
+        transition_info["connectivity_action_filter_enabled"] = bool(
+            self.current_scenario.name == "connectivity_expansion"
+            and bool(self.config.get("connectivity_action_filter", False))
+        )
+        transition_info["connectivity_filter_replacement_count"] = int(
+            safety_info.get("connectivity_action_rejected_count", 0)
+        )
+        transition_info.update(action_connectivity_info)
+        reward_result = self.current_scenario.compute_rewards(prev_world, self.world, self.task_state, transition_info)
+        self.last_transition_info = transition_info
+        self.last_reward_result = reward_result
+        if self._exposes_candidates():
+            self._refresh_candidates()
+        self._invalidate_runtime_caches()
+
+        success = bool(reward_result.get("success", False))
+        failure = bool(reward_result.get("failure", False))
+        terminated = success or failure
+        truncated = bool(self.world.step_count >= self.world.max_steps)
+        current_global = self.get_global_state()
+        info = self._build_shared_info()
+        if terminated or truncated:
+            info = dict(info)
+            info["terminal_info"] = dict(info)
+            info["terminal_global_state"] = {key: value.copy() for key, value in current_global.items()}
+            self.agents = []
+        return (
+            current_global,
+            current_global,
+            float(reward_result.get("team_reward", 0.0)),
+            np.asarray(reward_result.get("per_agent_rewards", np.zeros(self.num_agents)), dtype=np.float32),
+            terminated,
+            truncated,
+            terminated or truncated,
+            info,
+        )
 
     def _merge_transition_info(self, safety_result, adapter_output, dynamics_info) -> dict[str, Any]:
         transition = dynamics_info.to_transition_info()
@@ -522,8 +621,21 @@ class WaypointMultiUAVEnv:
         return observations
 
     def _build_agent_info(self, agent_idx: int) -> dict[str, Any]:
+        shared = self._build_shared_info()
+        info = dict(shared)
+        info["action_validity"] = bool(self.world.uavs[agent_idx].last_action_valid)
+        if self._exposes_candidates():
+            info["candidate_mask"] = self.last_candidate_mask[agent_idx].copy()
+        return info
+
+    def _build_shared_info(self) -> dict[str, Any]:
+        if self._shared_info_cache is not None:
+            return self._shared_info_cache
         reward_result = self.last_reward_result or {}
-        metrics = dict(reward_result.get("metrics", self.current_scenario.get_metrics(self.world, self.task_state)))
+        if "metrics" in reward_result:
+            metrics = dict(reward_result["metrics"])
+        else:
+            metrics = dict(self.current_scenario.get_metrics(self.world, self.task_state))
         progress = goal_progress(
             self.current_scenario.name,
             self.current_mission_goal,
@@ -540,7 +652,7 @@ class WaypointMultiUAVEnv:
             "selected_waypoints": None if self.last_selected_waypoints is None else self.last_selected_waypoints.copy(),
             "safe_waypoints": None if self.last_selected_waypoints is None else self.last_selected_waypoints.copy(),
             "raw_waypoints": None if self.last_raw_waypoints is None else self.last_raw_waypoints.copy(),
-            "action_validity": bool(self.world.uavs[agent_idx].last_action_valid),
+            "action_validity": True,
             "action_interface": self.action_interface,
             "action_mode": self.action_mode,
             "action_adapter": str(self._action_adapter_config().get("name", "waypoint_velocity_tracker")),
@@ -581,12 +693,13 @@ class WaypointMultiUAVEnv:
             "episode_base_position": self.world.base_position.copy(),
             "no_fly_zone_count": len(self.world.no_fly_zones),
         }
-        if self._exposes_candidates():
-            info["candidate_mask"] = self.last_candidate_mask[agent_idx].copy()
         info.update(metrics)
+        self._shared_info_cache = info
         return info
 
     def get_global_state(self) -> dict[str, np.ndarray]:
+        if self._global_state_cache is not None:
+            return self._global_state_cache
         if self.current_scenario is None:
             task_field = np.zeros((5, self.world.grid_size, self.world.grid_size), dtype=np.float32)
             task_id = np.zeros(len(WAYPOINT_TASKS), dtype=np.float32)
@@ -612,6 +725,7 @@ class WaypointMultiUAVEnv:
                     "candidate_mask": self.last_candidate_mask.astype(np.int8),
                 }
             )
+        self._global_state_cache = state
         return state
 
     state = get_global_state
@@ -624,6 +738,7 @@ class WaypointMultiUAVEnv:
             candidate_waypoints=self.last_candidate_waypoints if (self._exposes_candidates() and bool(self.config.get("render_candidates", True))) else None,
             selected_waypoints=self.last_selected_waypoints,
             metrics=(self.last_reward_result or {}).get("metrics", {}),
+            render_detail=str(self.config.get("rendering", {}).get("render_detail", "full")),
         )
         if mode == "rgb_array":
             return image

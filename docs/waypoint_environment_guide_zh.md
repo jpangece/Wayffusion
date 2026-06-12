@@ -173,7 +173,13 @@ a_cmd_i = kp * (w_i - p_i) - kd * v_i
 ||a_cmd_i|| <= max_accel
 ```
 
-`MPECoreBackend` 是唯一主线动力学后端。它不在 Wayffusion wrapper 内重写粒子积分，而是：
+当前可手动选择三套动力学后端：
+
+- `waypoint_behavior_fast`：大规模训练主线，不依赖 MPE，按上层航点行为快速推进。
+- `waypoint_behavior_realistic`：中等真实度验证主线，不依赖 MPE，加入速度平滑、速度扰动、追踪噪声和命令延迟。
+- `mpe_core`：高保真部署前校验主线，调用真实 MPE `World.step()`。
+
+`MPECoreBackend` 不在 Wayffusion wrapper 内重写粒子积分，而是：
 
 ```text
 Wayffusion UAVState
@@ -185,7 +191,7 @@ Wayffusion UAVState
 
 速度积分、damping、contact/collision force、max-speed clipping 来自真实 MPE core。Wayffusion 仍负责任务层 safety correction 记录、path length、trajectory、通信图和 coverage footprint 更新。
 
-旧的自写 particle backend 和 kinematic waypoint backend 已从主线删除。`mpe_particle`、`kinematic_point` 等名字只会触发错误提示，不能作为可运行配置使用。
+旧的自写 particle backend 和 kinematic waypoint backend 已从主线删除。`mpe_particle`、`kinematic_point` 等名字只会触发错误提示，不能作为可运行配置使用。新训练/验证后端详见 `docs/dynamics_backend_modes_zh.md`。
 
 `WaypointExecutionModel` 仍存在，但主线 env 默认使用 `DynamicsBackend`。
 
