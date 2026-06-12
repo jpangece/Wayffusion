@@ -2252,3 +2252,10 @@ phase:
    launching an ablation benchmark version.
 
 Reference doc: `docs/swarm30_runtime_profile_zh.md`.
+
+### New-agent startup rule
+
+For any fresh handoff, read
+`agent_memory/cards/08_current_handoff_20260612.md` first. It is the current
+trusted snapshot for the waypoint-level MARL branch and supersedes old
+centralized-Gymnasium assumptions in earlier memory cards.

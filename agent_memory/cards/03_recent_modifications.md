@@ -7376,3 +7376,20 @@ Interpretation:
   frequency, and lower benchmark `max_parallel`;
 - changing MPE `substeps` or collision force would change environment
   semantics and must be tracked as an ablation.
+
+### Current handoff snapshot
+
+Date: 2026-06-12.
+
+Added `agent_memory/cards/08_current_handoff_20260612.md` and registered it in
+`agent_memory/manifest.yaml`.
+
+Purpose:
+
+- provide a compact but complete handoff for new agents;
+- mark old centralized memory cards as historical when they conflict with the
+  current waypoint-level MARL mainline;
+- consolidate architecture, experiment history, output rules, profiling
+  conclusions, completed work, and known unfinished work.
+
+Future agents should read this card first before relying on older memory cards.

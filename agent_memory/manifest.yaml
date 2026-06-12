@@ -50,3 +50,9 @@ cards:
     trust: trusted
     tags: [type:process-rule, state:trusted]
     summary: "Defines the mandatory rule that every repo change must be mirrored into agent_memory before the task is considered complete."
+  - id: current_handoff_20260612
+    title: "Current Handoff Snapshot 2026-06-12"
+    file: cards/08_current_handoff_20260612.md
+    trust: trusted
+    tags: [type:handoff, state:trusted, project:waypoint-marl]
+    summary: "Current high-priority project handoff covering architecture, experiments, output rules, profiling conclusions, completed work, and unfinished work."
