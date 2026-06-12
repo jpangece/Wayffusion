@@ -393,6 +393,88 @@ Semantic-changing speedups must be separate ablations:
 - disabling collision/contact force during training;
 - reducing N=30 grid/horizon/eval episodes.
 
+## Live Swarm30 Fast-Backend Training Speed Snapshot
+
+Date: 2026-06-12.
+
+Active run:
+
+`outputs/training/benchmarks/swarm30_2000_direct/20260612_1133/`
+
+Session:
+
+```bash
+tmux attach -t wf_swarm30_2000_20260612_1133
+```
+
+This run uses:
+
+- `tuned_specialist` plus `generalist`;
+- seed `0`;
+- `num_agents=30`, `num_envs=8`, `rollout_steps=256`;
+- `total_updates=2000` for specialists and generalist;
+- `env_backend=process`;
+- `dynamics_backend=waypoint_behavior_fast`;
+- `runtime_acceleration.sensor_footprint_mode=disk_stamp`;
+- low-detail rendering;
+- train/eval randomization both `random`;
+- periodic eval every `100` updates with `20` episodes and `2` GIFs;
+- final benchmark evaluation skipped via `--skip-evaluation`.
+
+Do not terminate this run for diagnostics unless the user explicitly permits
+termination. Recent speed analysis was done with side probes only.
+
+Resource diagnosis:
+
+- CPU: 64 cores, load around `53` while four training jobs are active.
+- Process layout: four trainer jobs, each with eight process env workers.
+- GPU: low utilization (`~2%-23%`) and low memory use (`~1.2-1.8GB` per GPU).
+- Conclusion: the live run is CPU rollout / environment bound, not GPU/PPO bound.
+
+Live update rates after roughly 86 minutes:
+
+| Run | Update | Rate | Estimated 2000-update total |
+|---|---:|---:|---:|
+| `priority_inspection` | `356` | `~248 updates/hour` | `~8.1h` |
+| `belief_search` | `248` | `~173 updates/hour` | `~11.6h` |
+| `area_coverage` | `239` | `~166 updates/hour` | `~12.0h` |
+| `connectivity_expansion` | `180` | `~125 updates/hour` | `~16.0h` |
+
+Side-probe rollout timing under live load:
+
+| Task | Batch rollout step | Env batch step | Policy forward | Rollout/update |
+|---|---:|---:|---:|---:|
+| `area_coverage` | `0.1546s` | `0.0704s` | `0.0841s` | `~39.6s` |
+| `priority_inspection` | `0.0338s` | `0.0270s` | `0.0068s` | `~8.7s` |
+
+Important interpretation:
+
+- `area_coverage` and `target_interception` remain the most expensive families.
+- Under fast backend, `dynamics_step` is not the dominant cost; task
+  reward/metric geometry is.
+- `area_coverage.compute_rewards` is dominated by uncovered-approach and repeat
+  footprint geometry.
+- `target_interception.compute_rewards` is dominated by future-route belief and
+  containment geometry.
+- Periodic eval is blocking and contributes visible delay every 100 updates.
+- Some live `area_coverage` policy-forward time appears inflated by concurrent
+  resource scheduling / CUDA synchronization, not by model size alone.
+
+Recommended non-terminating diagnostics:
+
+- read `training_metrics.csv` and `suite_state.json`;
+- use side probes in `outputs/debug/perf_profile/`;
+- avoid `kill`, `pkill`, tmux stop, or deleting active output directories unless
+  the user explicitly asks.
+
+Next speed work:
+
+1. Vectorize or cache reward/metric geometry for area/interception/belief.
+2. Consider async or less frequent periodic eval for long formal runs.
+3. Benchmark `MAX_PARALLEL=2/3/4` separately; do not assume 4 concurrent jobs is
+   fastest overall.
+4. Do not chase PPO/GPU optimization first; it is not the current bottleneck.
+
 ## Current Important Files
 
 Architecture:

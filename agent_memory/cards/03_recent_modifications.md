@@ -7393,3 +7393,85 @@ Purpose:
   conclusions, completed work, and known unfinished work.
 
 Future agents should read this card first before relying on older memory cards.
+
+### Live Swarm30 2000-update training speed diagnosis
+
+Date: 2026-06-12.
+
+Active run:
+
+`outputs/training/benchmarks/swarm30_2000_direct/20260612_1133/`
+
+Launcher:
+
+```bash
+tmux attach -t wf_swarm30_2000_20260612_1133
+```
+
+Protocol:
+
+- tracks: `tuned_specialist` plus `generalist`;
+- seed: `0`;
+- `num_agents=30`, `num_envs=8`, `rollout_steps=256`;
+- specialists and generalist use `total_updates=2000`;
+- `env_backend=process`;
+- `dynamics_backend=waypoint_behavior_fast`;
+- train/eval randomization: `random`;
+- periodic eval: every `100` updates, `20` episodes, `2` GIFs;
+- final benchmark evaluation was skipped via `--skip-evaluation`.
+
+Do not terminate this run for profiling unless the user explicitly permits it.
+The latest speed analysis was done with side probes only and did not stop any
+training process.
+
+Observed live resource state:
+
+- 64 CPU cores, load around `53`;
+- four jobs running concurrently;
+- each job launches 8 process env workers, so about 32 env workers plus 4 trainer
+  processes;
+- GPU utilization is low (`~2%-23%`) and memory use is low (`~1.2-1.8GB` per GPU);
+- therefore the bottleneck is CPU rollout / environment computation, not GPU
+  training.
+
+Observed update rates after about 86 minutes:
+
+- `priority_inspection`: update `356`, about `248 updates/hour`, estimated
+  `~8.1h` for 2000 updates;
+- `belief_search`: update `248`, about `173 updates/hour`, estimated `~11.6h`;
+- `area_coverage`: update `239`, about `166 updates/hour`, estimated `~12.0h`;
+- `connectivity_expansion`: update `180`, about `125 updates/hour`, estimated
+  `~16.0h`.
+
+Side probe under the live training load:
+
+- `area_coverage`: batch rollout step `0.1546s`, env batch step `0.0704s`,
+  policy forward `0.0841s`, about `39.6s/update`;
+- `priority_inspection`: batch rollout step `0.0338s`, env batch step `0.0270s`,
+  policy forward `0.0068s`, about `8.7s/update`.
+
+Interpretation:
+
+- The main persistent bottleneck is still CPU-side env rollout, especially
+  task reward/metric geometry.
+- `area_coverage` can also show large policy/CUDA synchronization time under
+  concurrent load; this appears to be resource scheduling/feeding pressure, not
+  neural network complexity.
+- Periodic eval at every 100 updates is blocking and adds visible wall-clock
+  delay.
+- Lowering `max_parallel` may improve per-job stability but may or may not
+  improve total throughput; test it explicitly in a separate run before
+  changing formal launch defaults.
+
+Known expensive env internals from N=30 fast-backend instrumentation:
+
+- `area_coverage.compute_rewards`: dominated by uncovered approach and repeat
+  footprint geometry;
+- `belief_search.compute_rewards`: belief/search mass reward geometry;
+- `target_interception.compute_rewards`: future-route belief and containment
+  geometry;
+- `dynamics_step`, `get_global_state`, `world_snapshot`, and safety/adapter are
+  secondary costs under `waypoint_behavior_fast`.
+
+Next speed work should prioritize reward/metric vectorization or cached
+approximations for area/interception/belief before changing policy or PPO.
