@@ -6,10 +6,12 @@ cd "${ROOT}"
 
 PYTHON="${PYTHON:-/opt/conda/bin/python}"
 RUNTIME="${RUNTIME:-rewardopt_$(date -u +%Y%m%d_%H%M)}"
+SESSION="${SESSION:-wf_swarm30_reward_${RUNTIME}}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/debug/benchmarks/swarm30_reward_optimized_training}"
 LAUNCHER_DIR="${ROOT}/${OUTPUT_ROOT}/${RUNTIME}/launcher"
 LOG_PATH="${LAUNCHER_DIR}/one_click_launcher.log"
-PID_PATH="${LAUNCHER_DIR}/one_click_launcher.pid"
+SESSION_PATH="${LAUNCHER_DIR}/one_click_launcher.session"
+RUNNER_PATH="${LAUNCHER_DIR}/one_click_runner.sh"
 
 # Defaults are intentionally conservative and match the current N=30 reward-optimized training plan.
 WAIT_SESSION="${WAIT_SESSION:-auto}"
@@ -43,6 +45,12 @@ mkdir -p "${LAUNCHER_DIR}"
 read -r -a TRACK_ARGS <<< "${TRACKS}"
 read -r -a SEED_ARGS <<< "${SEEDS}"
 read -r -a GPU_ARGS <<< "${GPUS}"
+
+if tmux has-session -t "${SESSION}" 2>/dev/null; then
+  echo "tmux session already exists: ${SESSION}" >&2
+  echo "Attach with: tmux attach -t ${SESSION}" >&2
+  exit 1
+fi
 
 command=(
   "${PYTHON}" scripts/benchmarks/swarm30/wait_for_resources_and_launch_reward_training.py
@@ -85,22 +93,40 @@ fi
 
 printf '%q ' "${command[@]}" > "${LAUNCHER_DIR}/one_click_command.sh"
 printf '\n' >> "${LAUNCHER_DIR}/one_click_command.sh"
+printf '%s\n' "${SESSION}" > "${SESSION_PATH}"
 
-nohup "${command[@]}" > "${LOG_PATH}" 2>&1 &
-pid="$!"
-echo "${pid}" > "${PID_PATH}"
+cat > "${RUNNER_PATH}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd '${ROOT}'
+mkdir -p '${LAUNCHER_DIR}'
+echo '[one-click] session=${SESSION}' | tee -a '${LOG_PATH}'
+echo '[one-click] runtime=${RUNTIME}' | tee -a '${LOG_PATH}'
+echo '[one-click] started_at='"\$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a '${LOG_PATH}'
+source '${LAUNCHER_DIR}/one_click_command.sh' 2>&1 | tee -a '${LOG_PATH}'
+status=\\${PIPESTATUS[0]}
+echo '[one-click] finished_at='"\$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a '${LOG_PATH}'
+echo "[one-click] exit_status=\\${status}" | tee -a '${LOG_PATH}'
+exit "\\${status}"
+EOF
+chmod +x "${RUNNER_PATH}"
+
+tmux new-session -d -s "${SESSION}" "bash '${RUNNER_PATH}'"
 
 cat <<EOF
-Reward-optimized Swarm30 one-click launcher started.
+Reward-optimized Swarm30 one-click launcher started in tmux.
 Runtime: ${RUNTIME}
-PID: ${pid}
+Session: ${SESSION}
 Output: ${ROOT}/${OUTPUT_ROOT}/${RUNTIME}
 Log: ${LOG_PATH}
 State: ${ROOT}/${OUTPUT_ROOT}/${RUNTIME}/launcher/resource_wait_state.json
 Monitor: ${ROOT}/${OUTPUT_ROOT}/${RUNTIME}/launcher/monitor_state.json
 Command: ${ROOT}/${OUTPUT_ROOT}/${RUNTIME}/launcher/one_click_command.sh
+Runner: ${RUNNER_PATH}
 
 Useful commands:
+  tmux attach -t ${SESSION}
+  tmux capture-pane -pt ${SESSION} -S -80
   tail -f ${LOG_PATH}
   cat ${ROOT}/${OUTPUT_ROOT}/${RUNTIME}/launcher/resource_wait_state.json
   cat ${ROOT}/${OUTPUT_ROOT}/${RUNTIME}/launcher/monitor_state.json
