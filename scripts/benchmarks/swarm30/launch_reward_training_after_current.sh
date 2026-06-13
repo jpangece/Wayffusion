@@ -52,11 +52,35 @@ if tmux has-session -t "${SESSION}" 2>/dev/null; then
   exit 1
 fi
 
+resolve_wait_session() {
+  local requested="$1"
+  if [[ "${requested}" == "none" || "${requested}" == "off" || "${requested}" == "false" || "${requested}" == "0" ]]; then
+    printf ''
+    return 0
+  fi
+  if [[ "${requested}" != "auto" ]]; then
+    printf '%s' "${requested}"
+    return 0
+  fi
+  if ! command -v tmux >/dev/null 2>&1; then
+    printf ''
+    return 0
+  fi
+  tmux list-sessions -F '#{session_name}' 2>/dev/null \
+    | grep -E '^(wf_swarm30_backend_|wf_swarm30_reward_|wf_swarm30_)' \
+    | grep -v -x "${SESSION}" \
+    | sort \
+    | tail -n 1 || true
+}
+
+WAIT_SESSION_RESOLVED="$(resolve_wait_session "${WAIT_SESSION}")"
+
 command=(
   "${PYTHON}" scripts/benchmarks/swarm30/wait_for_resources_and_launch_reward_training.py
   --runtime "${RUNTIME}"
   --output-root "${OUTPUT_ROOT}"
-  --wait-session "${WAIT_SESSION}"
+  --wait-session "${WAIT_SESSION_RESOLVED:-none}"
+  --exclude-wait-session "${SESSION}"
   --wait-pattern "${WAIT_PATTERN}"
   --poll-seconds "${POLL_SECONDS}"
   --max-wait-hours "${MAX_WAIT_HOURS}"
@@ -94,6 +118,7 @@ fi
 printf '%q ' "${command[@]}" > "${LAUNCHER_DIR}/one_click_command.sh"
 printf '\n' >> "${LAUNCHER_DIR}/one_click_command.sh"
 printf '%s\n' "${SESSION}" > "${SESSION_PATH}"
+printf '%s\n' "${WAIT_SESSION_RESOLVED:-none}" > "${LAUNCHER_DIR}/wait_session.resolved"
 
 cat > "${RUNNER_PATH}" <<EOF
 #!/usr/bin/env bash
@@ -101,6 +126,7 @@ set -euo pipefail
 cd '${ROOT}'
 mkdir -p '${LAUNCHER_DIR}'
 echo '[one-click] session=${SESSION}' | tee -a '${LOG_PATH}'
+echo '[one-click] wait_session_resolved=${WAIT_SESSION_RESOLVED:-none}' | tee -a '${LOG_PATH}'
 echo '[one-click] runtime=${RUNTIME}' | tee -a '${LOG_PATH}'
 echo '[one-click] started_at='"\$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a '${LOG_PATH}'
 set +e
@@ -119,6 +145,7 @@ cat <<EOF
 Reward-optimized Swarm30 one-click launcher started in tmux.
 Runtime: ${RUNTIME}
 Session: ${SESSION}
+Waiting for previous session: ${WAIT_SESSION_RESOLVED:-none}
 Output: ${ROOT}/${OUTPUT_ROOT}/${RUNTIME}
 Log: ${LOG_PATH}
 State: ${ROOT}/${OUTPUT_ROOT}/${RUNTIME}/launcher/resource_wait_state.json
