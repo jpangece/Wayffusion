@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+from scipy.spatial import cKDTree
 
 from envs.waypoint.world import MissionWorld
 
@@ -33,20 +34,7 @@ class WaypointScenario:
         belief = np.asarray(world.belief_grid, dtype=np.float32)
         if belief.max() > 1e-8:
             belief = belief / float(belief.max())
-        risk = np.zeros_like(coverage, dtype=np.float32)
-        centers = world.grid_cell_centers()
-        for zone in world.no_fly_zones:
-            if "center" in zone and "radius" in zone:
-                dist = np.linalg.norm(centers - np.asarray(zone["center"], dtype=np.float32), axis=-1)
-                risk = np.maximum(risk, (dist <= float(zone["radius"])).astype(np.float32))
-            elif {"x_min", "x_max", "y_min", "y_max"}.issubset(zone):
-                inside = (
-                    (centers[..., 0] >= float(zone["x_min"]))
-                    & (centers[..., 0] <= float(zone["x_max"]))
-                    & (centers[..., 1] >= float(zone["y_min"]))
-                    & (centers[..., 1] <= float(zone["y_max"]))
-                )
-                risk = np.maximum(risk, inside.astype(np.float32))
+        risk = world.risk_grid()
         target = np.zeros_like(coverage, dtype=np.float32)
         target_positions = task_state.get("target_positions")
         if target_positions is None and "target_position" in task_state:
@@ -114,16 +102,33 @@ class WaypointScenario:
 
 
 def per_agent_new_coverage(prev_world: MissionWorld, world: MissionWorld) -> np.ndarray:
-    before = prev_world.coverage_grid > 0.0
+    return world.coverage_transition_stats(prev_world).per_agent_new_coverage.copy()
+
+
+def uncovered_approach_gain(
+    prev_world: MissionWorld,
+    world: MissionWorld,
+    scale: float,
+) -> float:
     navigable = world.navigable_grid_mask()
-    denominator = max(float(navigable.sum()), 1.0)
-    if not world.uavs:
-        return np.zeros(0, dtype=np.float32)
-    positions = world.get_uav_positions()
-    radii = np.asarray([uav.sensor_radius for uav in world.uavs], dtype=np.float32)
-    masks = world.sensor_masks_for_positions(positions, radii) & navigable[None, :, :]
-    gains = np.logical_and(masks, ~before[None, :, :]).sum(axis=(1, 2)) / denominator
-    return np.asarray(gains, dtype=np.float32)
+    uncovered = (prev_world.coverage_grid <= 0.0) & navigable
+    if not bool(uncovered.any()) or not world.uavs:
+        return 0.0
+    points = world.grid_cell_centers()[uncovered]
+    scale = max(float(scale), 1e-6)
+
+    def score(positions: np.ndarray) -> float:
+        nearest_distances, _ = cKDTree(np.asarray(positions, dtype=np.float32)).query(
+            points,
+            k=1,
+            workers=1,
+        )
+        nearest_distances = np.asarray(nearest_distances, dtype=np.float32)
+        return float(np.exp(-nearest_distances / scale).mean())
+
+    before = score(prev_world.get_uav_positions())
+    after = score(world.get_uav_positions())
+    return max(after - before, 0.0)
 
 
 def path_length_delta(transition_info: dict) -> float:

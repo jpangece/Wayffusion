@@ -173,25 +173,6 @@ class ThreadWaypointEnvBatch(SyncWaypointEnvBatch):
         super().close()
 
 
-class BatchedFastWaypointEnvBatch(ThreadWaypointEnvBatch):
-    """Fast-backend-only batch wrapper using the trainer global-state fast path.
-
-    This keeps the public WaypointBatchStep contract while avoiding per-agent
-    PettingZoo observation expansion and process Pipe serialization. It is the
-    compatibility shell for future true BxNxgrid batched kernels.
-    """
-
-    def __init__(self, envs: list[WaypointMultiUAVEnv], max_workers: int | None = None):
-        for env in envs:
-            backend_name = str(env.config.get("dynamics_backend", {}).get("name", "mpe_core"))
-            if backend_name != "waypoint_behavior_fast":
-                raise ValueError(
-                    "batched_fast env backend requires dynamics_backend.name='waypoint_behavior_fast'; "
-                    f"got {backend_name!r}"
-                )
-        super().__init__(envs, max_workers=max_workers or len(envs))
-
-
 def _process_worker(connection, config: dict) -> None:
     env = None
     try:
@@ -377,8 +358,6 @@ def make_waypoint_env_batch(
     if backend == "process":
         return ProcessWaypointEnvBatch(configs)
     envs = [WaypointMultiUAVEnv(env_config) for env_config in configs]
-    if backend == "batched_fast":
-        return BatchedFastWaypointEnvBatch(envs, max_workers=max_workers)
     if backend == "sync":
         return SyncWaypointEnvBatch(envs)
     if backend == "thread":

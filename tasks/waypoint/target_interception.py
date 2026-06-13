@@ -70,14 +70,14 @@ class TargetInterceptionScenario(WaypointScenario):
             task_state["target_branch_probs"],
             task_state["target_indices"],
         ):
-            for branch, probability in zip(branches, probs):
-                future = branch[int(current_idx) :]
-                if not len(future):
-                    continue
-                indices = world.world_to_grid(future)
-                point_mass = float(probability) / len(future)
-                for x_idx, y_idx in indices:
-                    future_belief[y_idx, x_idx] += point_mass
+            points, weights = self._future_route_points_and_weights(
+                branches,
+                probs,
+                int(current_idx),
+            )
+            if len(points):
+                indices = world.world_to_grid(points)
+                np.add.at(future_belief, (indices[:, 1], indices[:, 0]), weights)
         future_belief[~world.navigable_grid_mask()] = 0.0
         if future_belief.max() > 1e-8:
             future_belief /= float(future_belief.max())
@@ -178,22 +178,60 @@ class TargetInterceptionScenario(WaypointScenario):
 
     def _covered_future_belief(self, world: MissionWorld, task_state: dict) -> float:
         masses = []
+        positions = world.get_uav_positions()
+        radii = np.asarray([uav.sensor_radius for uav in world.uavs], dtype=np.float32)
         for branches, probs, current_idx in zip(
             task_state["target_branches"],
             task_state["target_branch_probs"],
             task_state["target_indices"],
         ):
-            covered = 0.0
-            total = 0.0
-            for branch, prob in zip(branches, probs):
-                future = branch[int(current_idx) :]
-                point_mass = float(prob) / max(len(future), 1)
-                total += point_mass * len(future)
-                for point in future:
-                    if any(np.linalg.norm(uav.position - point) <= uav.sensor_radius for uav in world.uavs):
-                        covered += point_mass
+            points, weights = self._future_route_points_and_weights(
+                branches,
+                probs,
+                int(current_idx),
+            )
+            total = float(sum(float(weight) for weight in weights))
+            if len(points) and len(positions):
+                distances = np.linalg.norm(
+                    positions[:, None, :] - points[None, :, :],
+                    axis=-1,
+                )
+                covered_mask = (distances <= radii[:, None]).any(axis=0)
+                covered = float(
+                    sum(
+                        float(weight)
+                        for weight, is_covered in zip(weights, covered_mask)
+                        if bool(is_covered)
+                    )
+                )
+            else:
+                covered = 0.0
             masses.append(covered / max(total, 1e-8))
         return float(np.mean(masses)) if masses else 0.0
+
+    @staticmethod
+    def _future_route_points_and_weights(
+        branches: list[np.ndarray],
+        probs: np.ndarray,
+        current_idx: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        points = []
+        weights = []
+        for branch, probability in zip(branches, probs):
+            future = np.asarray(branch[int(current_idx) :], dtype=np.float32)
+            if not len(future):
+                continue
+            points.append(future)
+            weights.append(
+                np.full(
+                    len(future),
+                    float(probability) / len(future),
+                    dtype=np.float64,
+                )
+            )
+        if not points:
+            return np.zeros((0, 2), dtype=np.float32), np.zeros(0, dtype=np.float64)
+        return np.concatenate(points, axis=0), np.concatenate(weights, axis=0)
 
     def _containment_score(self, world: MissionWorld, target: np.ndarray) -> float:
         positions = world.get_uav_positions()

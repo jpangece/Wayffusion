@@ -4,7 +4,13 @@ import numpy as np
 
 from envs.waypoint.world import MissionWorld
 from planners.waypoint_candidates import coverage_candidates
-from tasks.waypoint.base import WaypointScenario, path_length_delta, per_agent_new_coverage, safety_penalty_count
+from tasks.waypoint.base import (
+    WaypointScenario,
+    path_length_delta,
+    per_agent_new_coverage,
+    safety_penalty_count,
+    uncovered_approach_gain,
+)
 
 
 class AreaCoverageScenario(WaypointScenario):
@@ -69,33 +75,11 @@ class AreaCoverageScenario(WaypointScenario):
         return {"time_to_80_coverage": None}
 
     def _uncovered_approach_gain(self, prev_world: MissionWorld, world: MissionWorld) -> float:
-        """Dense potential: reward moving closer to still-uncovered navigable cells."""
-        navigable = world.navigable_grid_mask()
-        uncovered = (prev_world.coverage_grid <= 0.0) & navigable
-        if not bool(uncovered.any()) or not world.uavs:
-            return 0.0
-        points = world.grid_cell_centers()[uncovered]
         scale = max(self.distance_cfg("uncovered_approach_scale", 0.20, world), 1e-6)
-
-        def score(positions: np.ndarray) -> float:
-            distances = np.linalg.norm(positions[:, None, :] - points[None, :, :], axis=-1)
-            proximity = np.exp(-distances / scale).max(axis=0)
-            return float(proximity.mean())
-
-        before = score(prev_world.get_uav_positions())
-        after = score(world.get_uav_positions())
-        return max(after - before, 0.0)
+        return uncovered_approach_gain(prev_world, world, scale)
 
     def _repeat_footprint_ratio(self, prev_world: MissionWorld, world: MissionWorld) -> float:
-        if not world.uavs:
-            return 0.0
-        navigable = world.navigable_grid_mask()
-        previously_seen = prev_world.visit_count_grid > 0.0
-        positions = world.get_uav_positions()
-        radii = np.asarray([uav.sensor_radius for uav in world.uavs], dtype=np.float32)
-        masks = world.sensor_masks_for_positions(positions, radii) & navigable[None, :, :]
-        denom = np.maximum(masks.sum(axis=(1, 2)).astype(np.float32), 1.0)
-        ratios = (masks & previously_seen[None, :, :]).sum(axis=(1, 2)) / denom
+        ratios = world.coverage_transition_stats(prev_world).repeat_footprint_ratios
         return float(np.mean(ratios)) if ratios.size else 0.0
 
     def get_metrics(self, world: MissionWorld, task_state: dict) -> dict:

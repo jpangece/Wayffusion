@@ -46,16 +46,26 @@ class BeliefSearchScenario(WaypointScenario):
 
     def compute_rewards(self, prev_world: MissionWorld, world: MissionWorld, task_state: dict, transition_info: dict) -> dict:
         prev_belief = prev_world.belief_grid.copy()
-        newly_mass = 0.0
-        repeated_mass = 0.0
-        for uav in world.uavs:
-            mask = world.sensor_mask_for_position(uav.position, uav.sensor_radius)
-            newly_mass += float(prev_belief[mask].sum())
-            repeated_mass += float((prev_world.visit_count_grid[mask] > 0.0).mean()) * 0.01
-            world.belief_grid[mask] = 0.0
+        positions = world.get_uav_positions()
+        radii = np.asarray([uav.sensor_radius for uav in world.uavs], dtype=np.float32)
+        masks = world.exact_sensor_masks_for_positions(positions, radii)
+        belief_mass_by_agent = np.asarray(
+            [float(prev_belief[mask].sum()) for mask in masks],
+            dtype=np.float32,
+        )
+        repeat_mass_by_agent = np.asarray(
+            [float((prev_world.visit_count_grid[mask] > 0.0).mean()) * 0.01 for mask in masks],
+            dtype=np.float64,
+        )
+        newly_mass = float(sum(float(value) for value in belief_mass_by_agent))
+        repeated_mass = float(sum(float(value) for value in repeat_mass_by_agent))
+        if len(masks):
+            world.belief_grid[masks.any(axis=0)] = 0.0
         remaining = float(world.belief_grid.sum())
         target = np.asarray(task_state["target_position"], dtype=np.float32)
-        detected_now = any(np.linalg.norm(uav.position - target) <= uav.sensor_radius for uav in world.uavs)
+        detected_now = bool(
+            np.any(np.linalg.norm(positions - target[None, :], axis=-1) <= radii)
+        ) if len(positions) else False
         detect_bonus = 0.0
         if detected_now and not task_state.get("detected", False):
             task_state["detected"] = True
@@ -70,10 +80,7 @@ class BeliefSearchScenario(WaypointScenario):
             - float(self.cfg("w_distance", 0.15)) * distance
             - float(self.cfg("w_safety", 2.0)) * safety
         )
-        per_agent = np.zeros(len(world.uavs), dtype=np.float32)
-        for i, uav in enumerate(world.uavs):
-            mask = prev_world.sensor_mask_for_position(uav.position, uav.sensor_radius)
-            per_agent[i] = float(self.cfg("w_prob", 120.0)) * float(prev_belief[mask].sum())
+        per_agent = float(self.cfg("w_prob", 120.0)) * belief_mass_by_agent
         success_mass = self.goal_value(task_state, 0, "success_mass", 0.55)
         metrics = {
             "searched_probability_mass": float(1.0 - remaining),

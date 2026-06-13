@@ -124,28 +124,35 @@ class Swarm30Benchmark:
 
     def _apply_protocol_overrides(self) -> None:
         train_cfg = self.protocol.setdefault("train", {})
-        if self.args.seeds:
-            train_cfg["seeds"] = [int(seed) for seed in self.args.seeds]
-        if self.args.num_envs is not None:
-            train_cfg["num_envs"] = int(self.args.num_envs)
-        if self.args.rollout_steps is not None:
-            train_cfg["rollout_steps"] = int(self.args.rollout_steps)
-        if self.args.specialist_updates is not None:
-            train_cfg["specialist_updates"] = int(self.args.specialist_updates)
-        if self.args.generalist_updates is not None:
-            train_cfg["generalist_updates"] = int(self.args.generalist_updates)
-        if self.args.eval_interval is not None:
-            train_cfg["eval_interval"] = int(self.args.eval_interval)
-        if self.args.eval_episodes is not None:
-            train_cfg["eval_episodes"] = int(self.args.eval_episodes)
-        if self.args.record_eval_episodes is not None:
-            train_cfg["record_eval_episodes"] = int(self.args.record_eval_episodes)
-        if self.args.env_backend is not None:
-            train_cfg["env_backend"] = str(self.args.env_backend)
-        train_cfg["dynamics_backend"] = str(self.args.dynamics_backend)
+        seeds = getattr(self.args, "seeds", None)
+        if seeds:
+            train_cfg["seeds"] = [int(seed) for seed in seeds]
+        for arg_name in (
+            "num_envs",
+            "rollout_steps",
+            "specialist_updates",
+            "generalist_updates",
+            "eval_interval",
+            "eval_episodes",
+            "record_eval_episodes",
+        ):
+            value = getattr(self.args, arg_name, None)
+            if value is not None:
+                train_cfg[arg_name] = int(value)
+        env_backend = getattr(self.args, "env_backend", None)
+        if env_backend is not None:
+            train_cfg["env_backend"] = str(env_backend)
+        dynamics_backend = getattr(self.args, "dynamics_backend", None)
+        if dynamics_backend is not None:
+            train_cfg["dynamics_backend"] = str(dynamics_backend)
 
     def _apply_dynamics_backend(self, env_config: dict[str, Any]) -> None:
-        name = str(self.protocol.get("train", {}).get("dynamics_backend", self.args.dynamics_backend))
+        name = str(
+            self.protocol.get("train", {}).get(
+                "dynamics_backend",
+                getattr(self.args, "dynamics_backend", "waypoint_behavior_fast"),
+            )
+        )
         if name == "mpe_core":
             env_config.setdefault("dynamics_backend", {})["name"] = "mpe_core"
             env_config["dynamics_backend"].setdefault("source", "third_party_openai_mpe")
@@ -153,10 +160,10 @@ class Swarm30Benchmark:
         if name == "waypoint_behavior_fast":
             env_config["dynamics_backend"] = {
                 "name": "waypoint_behavior_fast",
-                "dt": float(self.args.backend_dt),
+                "dt": float(getattr(self.args, "backend_dt", 1.0)),
                 "max_speed": float(env_config.get("max_speed", 0.04)),
-                "acceptance_radius": float(self.args.backend_acceptance_radius),
-                "agent_size": float(self.args.backend_agent_size),
+                "acceptance_radius": float(getattr(self.args, "backend_acceptance_radius", 0.025)),
+                "agent_size": float(getattr(self.args, "backend_agent_size", 0.02)),
                 "enable_boundary_projection": True,
                 "enable_no_fly_projection": True,
             }
@@ -164,10 +171,10 @@ class Swarm30Benchmark:
         if name == "waypoint_behavior_realistic":
             env_config["dynamics_backend"] = {
                 "name": "waypoint_behavior_realistic",
-                "dt": float(self.args.backend_dt),
+                "dt": float(getattr(self.args, "backend_dt", 1.0)),
                 "max_speed": float(env_config.get("max_speed", 0.04)),
-                "acceptance_radius": float(self.args.backend_acceptance_radius),
-                "agent_size": float(self.args.backend_agent_size),
+                "acceptance_radius": float(getattr(self.args, "backend_acceptance_radius", 0.025)),
+                "agent_size": float(getattr(self.args, "backend_agent_size", 0.02)),
                 "velocity_smoothing": 0.35,
                 "speed_scale_range": [0.85, 1.15],
                 "tracking_noise_std": 0.005,
@@ -317,7 +324,7 @@ class Swarm30Benchmark:
                         Job(
                             job_id=f"train__{track}__{task_key}__s{seed}",
                             stage="train",
-                            track=output_track,
+                            track=track,
                             seed=seed,
                             tasks=tasks,
                             gpu=self.args.gpus[gpu_index % len(self.args.gpus)],
@@ -335,7 +342,7 @@ class Swarm30Benchmark:
         gpu_index = 0
         for train_job in training_jobs:
             checkpoint = train_job.output_dir / "checkpoints" / "checkpoint_best_eval.pt"
-            output_dir = self.suite_root / "evaluations" / train_job.track / (
+            output_dir = self.suite_root / "evaluations" / track_output_name(train_job.track) / (
                 "all_tasks" if len(train_job.tasks) > 1 else train_job.tasks[0]
             ) / f"s{train_job.seed}"
             command = [
@@ -587,7 +594,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-interval", type=int, default=None)
     parser.add_argument("--eval-episodes", type=int, default=None)
     parser.add_argument("--record-eval-episodes", type=int, default=None)
-    parser.add_argument("--env-backend", choices=["sync", "thread", "process", "batched_fast"], default=None)
+    parser.add_argument("--env-backend", choices=["sync", "thread", "process"], default=None)
     parser.add_argument("--gpus", nargs="+", type=int, default=[0, 1, 2, 3])
     parser.add_argument("--max-parallel", type=int, default=4)
     parser.add_argument("--cpu-threads-per-job", type=int, default=4)

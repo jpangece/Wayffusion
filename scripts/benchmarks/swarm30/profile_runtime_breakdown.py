@@ -455,7 +455,7 @@ def main() -> int:
     parser.add_argument("--render-frames", type=int, default=60)
     parser.add_argument("--process-batch-steps", type=int, default=40)
     parser.add_argument("--num-envs", type=int, default=8)
-    parser.add_argument("--env-backend", choices=["process", "batched_fast", "thread", "sync"], default="process")
+    parser.add_argument("--env-backend", choices=["process", "thread", "sync"], default="process")
     parser.add_argument("--backward-repeats", type=int, default=8)
     parser.add_argument("--device", default=None)
     args = parser.parse_args()

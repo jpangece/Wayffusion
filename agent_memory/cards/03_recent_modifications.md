@@ -219,6 +219,31 @@ Reason:
 - server users need one direct command for long all-task PPO training that preserves the existing artifact contract
 - checkpoints, TensorBoard logs, evaluation CSVs, and GIFs continue to live under `outputs/training/ppo/<timestamp>/<run_name>/`
 
+## Theme P: Removed `batched_fast` env backend interface after profiling
+
+Date: 2026-06-12.
+
+Implemented:
+
+- removed `BatchedFastWaypointEnvBatch` from `utils/waypoint_vector_env.py`
+- removed `batched_fast` from `make_waypoint_env_batch(...)`
+- removed `batched_fast` from `scripts/train_mappo_waypoint.py --env_backend`
+- removed `batched_fast` from swarm30 benchmark/profile/debug script CLI choices
+- removed `BatchedFastWaypointEnvBatch` from `utils/__init__.py`
+- removed the dedicated `batched_fast` tests
+
+Reason:
+
+- N=30 profiling showed `batched_fast` did not outperform `process`
+- the real bottleneck is task reward/metric geometry and CPU rollout work, not the wrapper dispatch alone
+- keeping `batched_fast` as a public option was misleading and could cause future long runs to use a slower experimental path
+
+Current rule:
+
+- large N training should use `env_backend=process`
+- `batched_fast` is no longer a supported user-facing backend
+- keep the experiment result as historical memory, but do not resurrect the interface unless a true batched reward/metric kernel is implemented and benchmarked
+
 ## Theme S: goal_nav remaining-goal observability and conservative PPO diagnostics
 
 Implemented:
@@ -7475,3 +7500,49 @@ Known expensive env internals from N=30 fast-backend instrumentation:
 
 Next speed work should prioritize reward/metric vectorization or cached
 approximations for area/interception/belief before changing policy or PPO.
+
+### Strict-equivalent reward and rollout optimization
+
+Date: 2026-06-12.
+
+Implemented the first CPU reward-hotspot optimization pass without changing
+task formulas, termination rules, public APIs, grid resolution, or logging
+frequency.
+
+Main changes:
+
+- `MissionWorld.accumulate_sensor_footprints()` now records reusable
+  per-transition coverage masks, per-agent new coverage, and repeated-footprint
+  ratios.
+- Area coverage and connectivity rewards reuse those masks instead of rebuilding
+  `[N,H,W]` geometry several times per step.
+- Dense uncovered-grid distance tensors were replaced by exact nearest-neighbor
+  queries using `scipy.spatial.cKDTree`; queried distances are cast back to
+  `float32` to match the previous NumPy path.
+- Belief search batches exact sensor masks while preserving per-agent overlap
+  counting and float accumulation semantics.
+- Connectivity relay credit was algebraically simplified, with the old
+  remove-node DFS retained as a test reference.
+- Target interception future-route belief and coverage checks were vectorized.
+- No-fly risk fields, POI Gaussian kernels, and pairwise distances are cached.
+- Reward snapshots no longer copy full UAV trajectory histories.
+
+Added:
+
+- `tests/test_reward_geometry_equivalence.py`
+- `docs/swarm30_reward_efficiency_optimization_zh.md`
+
+Validation completed at this point:
+
+- strict formula-reference tests: `7 passed`;
+- reward/scenario/env/trainer/Swarm30 regression group: `41 passed`;
+- dynamics/process-vector/randomization/policy/rendering group: `25 passed`;
+- `git diff --check`: passed.
+
+Important:
+
+- these edits do not affect already-running Python training workers;
+- the active N=30 formal run continues with the code loaded at its start;
+- no post-change speed ratio has been claimed yet because running a heavy
+  benchmark beside the active formal training would distort timing and consume
+  its CPU resources.

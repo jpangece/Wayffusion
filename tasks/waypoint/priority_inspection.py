@@ -37,18 +37,47 @@ class PriorityInspectionScenario(WaypointScenario):
         weights = np.asarray(task_state.get("weights", np.ones(len(pois), dtype=np.float32)), dtype=np.float32)
         target = np.zeros_like(field[4], dtype=np.float32)
         if len(pois):
-            centers = world.grid_cell_centers()
             sigma = max(self.distance_cfg("poi_target_sigma", 0.08, world), 1e-6)
-            for point, weight, is_visited in zip(pois, weights, visited):
+            kernels = self._poi_kernels(world, task_state, pois, sigma)
+            for kernel, weight, is_visited in zip(kernels, weights, visited):
                 if is_visited:
                     continue
-                distance = np.linalg.norm(centers - point[None, None, :], axis=-1)
-                target += float(weight) * np.exp(-0.5 * (distance / sigma) ** 2).astype(np.float32)
+                target += float(weight) * kernel
         target[~world.navigable_grid_mask()] = 0.0
         if target.max() > 1e-8:
             target /= float(target.max())
         field[4] = target
         return field
+
+    @staticmethod
+    def _poi_kernels(
+        world: MissionWorld,
+        task_state: dict,
+        pois: np.ndarray,
+        sigma: float,
+    ) -> np.ndarray:
+        cached_points = task_state.get("_poi_kernel_points")
+        cached_sigma = task_state.get("_poi_kernel_sigma")
+        cached_kernels = task_state.get("_poi_kernels")
+        if (
+            cached_kernels is not None
+            and cached_points is not None
+            and np.asarray(cached_points).shape == pois.shape
+            and np.array_equal(np.asarray(cached_points, dtype=np.float32), pois)
+            and cached_sigma is not None
+            and float(cached_sigma) == float(sigma)
+        ):
+            return np.asarray(cached_kernels, dtype=np.float32)
+        centers = world.grid_cell_centers()
+        distances = np.linalg.norm(
+            centers[None, :, :, :] - pois[:, None, None, :],
+            axis=-1,
+        )
+        kernels = np.exp(-0.5 * (distances / sigma) ** 2).astype(np.float32)
+        task_state["_poi_kernel_points"] = pois.copy()
+        task_state["_poi_kernel_sigma"] = float(sigma)
+        task_state["_poi_kernels"] = kernels
+        return kernels
 
     def compute_rewards(self, prev_world: MissionWorld, world: MissionWorld, task_state: dict, transition_info: dict) -> dict:
         pois = np.asarray(task_state["pois"], dtype=np.float32)

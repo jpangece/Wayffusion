@@ -522,7 +522,7 @@ def main() -> None:
     parser.add_argument("--record-format", choices=["gif", "mp4"], default="gif")
     parser.add_argument("--record-fps", type=int, default=8)
     parser.add_argument("--record-interval", type=int, default=1)
-    parser.add_argument("--env-backend", choices=["sync", "thread", "process", "batched_fast"], default="process")
+    parser.add_argument("--env-backend", choices=["sync", "thread", "process"], default="process")
     parser.add_argument("--env-workers", type=int, default=None)
     parser.add_argument("--tensorboard", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--send-email", action="store_true")

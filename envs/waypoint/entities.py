@@ -44,7 +44,7 @@ class UAVState:
         if not self.trajectory:
             self.trajectory.append(self.position.copy())
 
-    def snapshot(self) -> "UAVState":
+    def snapshot(self, include_trajectory: bool = True) -> "UAVState":
         return UAVState(
             position=self.position.copy(),
             velocity=self.velocity.copy(),
@@ -61,5 +61,5 @@ class UAVState:
             path_length=float(self.path_length),
             connected_to_base=bool(self.connected_to_base),
             last_action_valid=bool(self.last_action_valid),
-            trajectory=[point.copy() for point in self.trajectory],
+            trajectory=[point.copy() for point in self.trajectory] if include_trajectory else [self.position.copy()],
         )

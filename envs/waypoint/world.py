@@ -8,6 +8,20 @@ import numpy as np
 from envs.waypoint.entities import UAVState
 
 
+@dataclass
+class CoverageTransitionStats:
+    positions: np.ndarray
+    radii: np.ndarray
+    sensor_masks: np.ndarray
+    navigable_mask: np.ndarray
+    before_covered: np.ndarray
+    before_visited: np.ndarray
+    newly_covered_mask: np.ndarray
+    per_agent_new_masks: np.ndarray
+    per_agent_new_coverage: np.ndarray
+    repeat_footprint_ratios: np.ndarray
+
+
 def _zone_center_radius(zone: dict[str, Any]) -> tuple[np.ndarray, float] | None:
     if "center" in zone and "radius" in zone:
         return np.asarray(zone["center"], dtype=np.float32), float(zone["radius"])
@@ -64,11 +78,18 @@ class MissionWorld:
         self.communication_graph = np.zeros((1, 1), dtype=bool)
         self._grid_centers_cache: np.ndarray | None = None
         self._navigable_grid_mask_cache: np.ndarray | None = None
+        self._risk_grid_cache: np.ndarray | None = None
         self._communication_positions_cache: np.ndarray | None = None
         self._connected_mask_cache: np.ndarray | None = None
+        self._pairwise_positions_cache: np.ndarray | None = None
+        self._pairwise_distances_cache: np.ndarray | None = None
         self._sensor_mask_positions_cache: np.ndarray | None = None
         self._sensor_mask_radii_cache: np.ndarray | None = None
         self._sensor_masks_cache: np.ndarray | None = None
+        self._exact_sensor_mask_positions_cache: np.ndarray | None = None
+        self._exact_sensor_mask_radii_cache: np.ndarray | None = None
+        self._exact_sensor_masks_cache: np.ndarray | None = None
+        self._last_coverage_transition_stats: CoverageTransitionStats | None = None
         self._disk_offsets_cache: dict[float, np.ndarray] = {}
 
     @classmethod
@@ -111,6 +132,7 @@ class MissionWorld:
         if not bool(self.check_no_fly(self.base_position[None, :])[0]):
             raise ValueError(f"Base position {self.base_position.tolist()} lies inside a no-fly zone")
         self.step_count = 0
+        self._last_coverage_transition_stats = None
         self.coverage_grid.fill(0.0)
         self.visit_count_grid.fill(0.0)
         safe_mask = self.navigable_grid_mask()
@@ -140,11 +162,16 @@ class MissionWorld:
     def _invalidate_communication_cache(self) -> None:
         self._communication_positions_cache = None
         self._connected_mask_cache = None
+        self._pairwise_positions_cache = None
+        self._pairwise_distances_cache = None
 
     def _invalidate_sensor_mask_cache(self) -> None:
         self._sensor_mask_positions_cache = None
         self._sensor_mask_radii_cache = None
         self._sensor_masks_cache = None
+        self._exact_sensor_mask_positions_cache = None
+        self._exact_sensor_mask_radii_cache = None
+        self._exact_sensor_masks_cache = None
 
     def _sample_safe_initial_positions(self, num_agents: int) -> np.ndarray:
         cfg = self.spawn_randomization
@@ -193,7 +220,7 @@ class MissionWorld:
             return self.base_position.copy()
         return self.sample_safe_points(1)[0]
 
-    def clone(self) -> "MissionWorld":
+    def clone(self, include_trajectory: bool = True) -> "MissionWorld":
         new = MissionWorld(
             map_size=self.map_size,
             world_dim=self.world_dim,
@@ -219,16 +246,23 @@ class MissionWorld:
             geometry_device=str(self.geometry_device),
             rng=self.rng,
         )
-        new.uavs = [uav.snapshot() for uav in self.uavs]
+        new.uavs = [uav.snapshot(include_trajectory=include_trajectory) for uav in self.uavs]
         new.coverage_grid = self.coverage_grid.copy()
         new.visit_count_grid = self.visit_count_grid.copy()
         new.probability_grid = self.probability_grid.copy()
         new.belief_grid = self.belief_grid.copy()
         new.communication_graph = self.communication_graph.copy()
         new.step_count = int(self.step_count)
+        new._grid_centers_cache = self._grid_centers_cache
+        new._navigable_grid_mask_cache = self._navigable_grid_mask_cache
+        new._risk_grid_cache = self._risk_grid_cache
+        new._disk_offsets_cache = dict(self._disk_offsets_cache)
         return new
 
     snapshot = clone
+
+    def snapshot_for_reward(self) -> "MissionWorld":
+        return self.clone(include_trajectory=False)
 
     def check_geofence(self, points: np.ndarray) -> np.ndarray:
         points = np.asarray(points, dtype=np.float32)
@@ -289,6 +323,29 @@ class MissionWorld:
             self._navigable_grid_mask_cache = self.check_geofence(centers) & self.check_no_fly(centers)
         return self._navigable_grid_mask_cache
 
+    def risk_grid(self) -> np.ndarray:
+        if self._risk_grid_cache is None:
+            risk = np.zeros((self.grid_size, self.grid_size), dtype=np.float32)
+            centers = self.grid_cell_centers()
+            for zone in self.no_fly_zones:
+                circle = _zone_center_radius(zone)
+                rect = _zone_rect(zone)
+                if circle is not None:
+                    center, radius = circle
+                    distance = np.linalg.norm(centers - center[:2], axis=-1)
+                    risk = np.maximum(risk, (distance <= radius).astype(np.float32))
+                elif rect is not None:
+                    x_min, x_max, y_min, y_max = rect
+                    inside = (
+                        (centers[..., 0] >= x_min)
+                        & (centers[..., 0] <= x_max)
+                        & (centers[..., 1] >= y_min)
+                        & (centers[..., 1] <= y_max)
+                    )
+                    risk = np.maximum(risk, inside.astype(np.float32))
+            self._risk_grid_cache = risk
+        return self._risk_grid_cache
+
     def coverage_ratio(self) -> float:
         navigable = self.navigable_grid_mask()
         return float(np.count_nonzero((self.coverage_grid > 0.0) & navigable) / max(float(navigable.sum()), 1.0))
@@ -347,6 +404,47 @@ class MissionWorld:
         centers = self.grid_cell_centers()
         dist = np.linalg.norm(centers - np.asarray(position, dtype=np.float32), axis=-1)
         return dist <= radius
+
+    def exact_sensor_masks_for_positions(
+        self,
+        positions: np.ndarray,
+        radii: np.ndarray | float | None = None,
+    ) -> np.ndarray:
+        positions = np.asarray(positions, dtype=np.float32)
+        if positions.size == 0:
+            return np.zeros((0, self.grid_size, self.grid_size), dtype=bool)
+        if radii is None:
+            radii_arr = np.asarray(
+                [uav.sensor_radius for uav in self.uavs[: len(positions)]],
+                dtype=np.float32,
+            )
+            if len(radii_arr) != len(positions):
+                default_radius = self.uavs[0].sensor_radius if self.uavs else 0.12
+                radii_arr = np.full(len(positions), default_radius, dtype=np.float32)
+        else:
+            radii_arr = np.asarray(radii, dtype=np.float32)
+            if radii_arr.ndim == 0:
+                radii_arr = np.full(len(positions), float(radii_arr), dtype=np.float32)
+        if (
+            self._exact_sensor_masks_cache is not None
+            and self._exact_sensor_mask_positions_cache is not None
+            and self._exact_sensor_mask_radii_cache is not None
+            and self._exact_sensor_mask_positions_cache.shape == positions.shape
+            and self._exact_sensor_mask_radii_cache.shape == radii_arr.shape
+            and np.array_equal(self._exact_sensor_mask_positions_cache, positions)
+            and np.array_equal(self._exact_sensor_mask_radii_cache, radii_arr)
+        ):
+            return self._exact_sensor_masks_cache
+        centers = self.grid_cell_centers()
+        distances = np.linalg.norm(
+            positions[:, None, None, :] - centers[None, :, :, :],
+            axis=-1,
+        )
+        masks = distances <= radii_arr[:, None, None]
+        self._exact_sensor_mask_positions_cache = positions.copy()
+        self._exact_sensor_mask_radii_cache = radii_arr.copy()
+        self._exact_sensor_masks_cache = masks
+        return masks
 
     def sensor_masks_for_positions(self, positions: np.ndarray, radii: np.ndarray | float | None = None) -> np.ndarray:
         positions = np.asarray(positions, dtype=np.float32)
@@ -442,8 +540,87 @@ class MissionWorld:
             masks[idx, rows[valid], cols[valid]] = True
         return masks
 
+    def _build_coverage_transition_stats(
+        self,
+        before_covered: np.ndarray,
+        before_visited: np.ndarray,
+        masks: np.ndarray,
+        navigable: np.ndarray,
+        positions: np.ndarray | None = None,
+        radii: np.ndarray | None = None,
+    ) -> CoverageTransitionStats:
+        before_covered = np.asarray(before_covered, dtype=bool)
+        before_visited = np.asarray(before_visited, dtype=bool)
+        masks = np.asarray(masks, dtype=bool)
+        navigable = np.asarray(navigable, dtype=bool)
+        per_agent_new_masks = masks & ~before_covered[None, :, :]
+        denominator = max(float(navigable.sum()), 1.0)
+        per_agent_new_coverage = (
+            per_agent_new_masks.sum(axis=(1, 2)).astype(np.float32) / denominator
+            if len(masks)
+            else np.zeros(0, dtype=np.float32)
+        )
+        footprint_sizes = (
+            np.maximum(masks.sum(axis=(1, 2)).astype(np.float32), 1.0)
+            if len(masks)
+            else np.zeros(0, dtype=np.float32)
+        )
+        repeat_ratios = (
+            (masks & before_visited[None, :, :]).sum(axis=(1, 2)) / footprint_sizes
+            if len(masks)
+            else np.zeros(0, dtype=np.float64)
+        )
+        newly_covered = masks.any(axis=0) & ~before_covered if len(masks) else np.zeros_like(navigable)
+        return CoverageTransitionStats(
+            positions=np.asarray(
+                positions if positions is not None else np.zeros((len(masks), 2)),
+                dtype=np.float32,
+            ).copy(),
+            radii=np.asarray(
+                radii if radii is not None else np.zeros(len(masks)),
+                dtype=np.float32,
+            ).copy(),
+            sensor_masks=masks,
+            navigable_mask=navigable,
+            before_covered=before_covered,
+            before_visited=before_visited,
+            newly_covered_mask=newly_covered,
+            per_agent_new_masks=per_agent_new_masks,
+            per_agent_new_coverage=np.asarray(per_agent_new_coverage, dtype=np.float32),
+            repeat_footprint_ratios=np.asarray(repeat_ratios),
+        )
+
+    def coverage_transition_stats(self, prev_world: "MissionWorld") -> CoverageTransitionStats:
+        before_covered = np.asarray(prev_world.coverage_grid > 0.0, dtype=bool)
+        before_visited = np.asarray(prev_world.visit_count_grid > 0.0, dtype=bool)
+        positions = self.get_uav_positions()
+        radii = np.asarray([uav.sensor_radius for uav in self.uavs], dtype=np.float32)
+        cached = self._last_coverage_transition_stats
+        if (
+            cached is not None
+            and np.array_equal(cached.before_covered, before_covered)
+            and np.array_equal(cached.before_visited, before_visited)
+            and np.array_equal(cached.positions, positions)
+            and np.array_equal(cached.radii, radii)
+        ):
+            return cached
+        navigable = self.navigable_grid_mask()
+        if self.uavs:
+            masks = self.sensor_masks_for_positions(positions, radii) & navigable[None, :, :]
+        else:
+            masks = np.zeros((0, self.grid_size, self.grid_size), dtype=bool)
+        return self._build_coverage_transition_stats(
+            before_covered,
+            before_visited,
+            masks,
+            navigable,
+            positions,
+            radii,
+        )
+
     def accumulate_sensor_footprints(self) -> dict[str, float]:
-        before = self.coverage_grid.copy()
+        before_covered = self.coverage_grid > 0.0
+        before_visited = self.visit_count_grid > 0.0
         navigable = self.navigable_grid_mask()
         if self.uavs:
             positions = self.get_uav_positions()
@@ -452,7 +629,17 @@ class MissionWorld:
             footprint = masks.any(axis=0)
             self.coverage_grid[footprint] = 1.0
             self.visit_count_grid += masks.sum(axis=0).astype(np.float32)
-        new_cells = np.logical_and(self.coverage_grid > 0.0, before <= 0.0)
+        else:
+            masks = np.zeros((0, self.grid_size, self.grid_size), dtype=bool)
+        self._last_coverage_transition_stats = self._build_coverage_transition_stats(
+            before_covered,
+            before_visited,
+            masks,
+            navigable,
+            positions if self.uavs else np.zeros((0, 2), dtype=np.float32),
+            radii if self.uavs else np.zeros(0, dtype=np.float32),
+        )
+        new_cells = self._last_coverage_transition_stats.newly_covered_mask
         repeated_cells = self.visit_count_grid > 1.0
         return {
             "new_coverage_cells": float(new_cells.sum()),
@@ -464,14 +651,25 @@ class MissionWorld:
         positions = self.get_uav_positions() if positions is None else np.asarray(positions, dtype=np.float32)
         if len(positions) == 0:
             return np.zeros((0, 0), dtype=np.float32)
+        if (
+            self._pairwise_positions_cache is not None
+            and self._pairwise_distances_cache is not None
+            and self._pairwise_positions_cache.shape == positions.shape
+            and np.array_equal(self._pairwise_positions_cache, positions)
+        ):
+            return self._pairwise_distances_cache
         if self._use_torch_geometry():
             import torch
 
             pos_t = torch.as_tensor(positions, dtype=torch.float32, device=self._torch_device())
             diff_t = pos_t[:, None, :] - pos_t[None, :, :]
-            return torch.linalg.norm(diff_t, dim=-1).detach().cpu().numpy().astype(np.float32)
-        diff = positions[:, None, :] - positions[None, :, :]
-        return np.linalg.norm(diff, axis=-1).astype(np.float32)
+            distances = torch.linalg.norm(diff_t, dim=-1).detach().cpu().numpy().astype(np.float32)
+        else:
+            diff = positions[:, None, :] - positions[None, :, :]
+            distances = np.linalg.norm(diff, axis=-1).astype(np.float32)
+        self._pairwise_positions_cache = positions.copy()
+        self._pairwise_distances_cache = distances
+        return distances
 
     def get_uav_positions(self) -> np.ndarray:
         return np.asarray([uav.position for uav in self.uavs], dtype=np.float32)
@@ -548,18 +746,26 @@ class MissionWorld:
             }
         graph = self.communication_graph_for_positions(positions)
         connected_nodes = self.base_connected_nodes_for_graph(graph)
-        margins = np.full(n, -float(self.map_size), dtype=np.float32)
-        for i, pos in enumerate(positions):
-            best_margin = float(self.base_comm_radius - np.linalg.norm(pos - self.base_position))
-            for node_idx in np.where(connected_nodes[1:])[0]:
-                if int(node_idx) == i:
-                    continue
-                peer = positions[int(node_idx)]
-                radius_i = self.uavs[i].comm_radius if i < len(self.uavs) else float(getattr(self, "comm_radius", self.base_comm_radius))
-                radius_j = self.uavs[int(node_idx)].comm_radius if int(node_idx) < len(self.uavs) else float(getattr(self, "comm_radius", self.base_comm_radius))
-                peer_margin = float(min(radius_i, radius_j) - np.linalg.norm(pos - peer))
-                best_margin = max(best_margin, peer_margin)
-            margins[i] = float(best_margin)
+        base_margins = self.base_comm_radius - np.linalg.norm(
+            positions - self.base_position[None, :],
+            axis=-1,
+        )
+        radii = np.asarray(
+            [
+                self.uavs[idx].comm_radius
+                if idx < len(self.uavs)
+                else float(getattr(self, "comm_radius", self.base_comm_radius))
+                for idx in range(n)
+            ],
+            dtype=np.float32,
+        )
+        pairwise = self.compute_pairwise_distances(positions)
+        peer_margins = np.minimum(radii[:, None], radii[None, :]) - pairwise
+        valid_peers = np.broadcast_to(connected_nodes[None, 1:], (n, n)).copy()
+        np.fill_diagonal(valid_peers, False)
+        peer_margins = np.where(valid_peers, peer_margins, -np.inf)
+        best_peer_margins = peer_margins.max(axis=1)
+        margins = np.maximum(base_margins, best_peer_margins).astype(np.float32)
         threshold = max(float(threshold), 1e-6)
         penalties = np.maximum(0.0, threshold - margins) / threshold
         return {

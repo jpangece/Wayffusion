@@ -474,6 +474,8 @@ Next speed work:
 3. Benchmark `MAX_PARALLEL=2/3/4` separately; do not assume 4 concurrent jobs is
    fastest overall.
 4. Do not chase PPO/GPU optimization first; it is not the current bottleneck.
+5. Do not use `batched_fast`: it was profiled, did not beat `process`, and has
+   been removed from the public env backend interface.
 
 ## Current Important Files
 
@@ -534,7 +536,20 @@ Scripts:
 - Connectivity reproducibility conclusion should only be trusted if Phase31 aggregate results are complete and verified.
 - Area / priority / belief / connectivity Direct specialists still need robust multi-seed final validation if the goal is to freeze them.
 - Dynamic escort and target interception need more specialist tuning; current benchmark configs are scaffolds, not final proven specialists.
-- Speed optimizations have been diagnosed but not implemented.
+- The first strict-equivalent reward/metric optimization pass is implemented;
+  clean post-change timing under low contention is still pending.
+
+Update on 2026-06-12:
+
+- the first strict-equivalent reward/metric optimization pass is now
+  implemented;
+- see `docs/swarm30_reward_efficiency_optimization_zh.md`;
+- new formula-reference tests verify coverage, belief, connectivity,
+  interception, POI field, risk-grid, pairwise-cache, and snapshot semantics;
+- already-running training workers are unaffected and still use their
+  startup-loaded code;
+- a clean post-change timing benchmark is still pending until CPU contention
+  from the current formal run is removed.
 
 ## Recommended Next Agent Route
 
