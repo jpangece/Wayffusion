@@ -5,9 +5,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "${ROOT}"
 
 PYTHON="${PYTHON:-/opt/conda/bin/python}"
-RUNTIME="${RUNTIME:-rewardopt_$(date -u +%Y%m%d_%H%M)}"
+RUNTIME="${RUNTIME:-$(date -u +%Y%m%d_%H%M)_rewardopt}"
 SESSION="${SESSION:-wf_swarm30_reward_${RUNTIME}}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/debug/benchmarks/swarm30_reward_optimized_training}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/training/benchmarks/swarm30_2000_direct}"
 LAUNCHER_DIR="${ROOT}/${OUTPUT_ROOT}/${RUNTIME}/launcher"
 LOG_PATH="${LAUNCHER_DIR}/one_click_launcher.log"
 SESSION_PATH="${LAUNCHER_DIR}/one_click_launcher.session"
@@ -103,11 +103,13 @@ mkdir -p '${LAUNCHER_DIR}'
 echo '[one-click] session=${SESSION}' | tee -a '${LOG_PATH}'
 echo '[one-click] runtime=${RUNTIME}' | tee -a '${LOG_PATH}'
 echo '[one-click] started_at='"\$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a '${LOG_PATH}'
-source '${LAUNCHER_DIR}/one_click_command.sh' 2>&1 | tee -a '${LOG_PATH}'
-status=\\${PIPESTATUS[0]}
+set +e
+bash '${LAUNCHER_DIR}/one_click_command.sh' 2>&1 | tee -a '${LOG_PATH}'
+status=\${PIPESTATUS[0]}
+set -e
 echo '[one-click] finished_at='"\$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a '${LOG_PATH}'
-echo "[one-click] exit_status=\\${status}" | tee -a '${LOG_PATH}'
-exit "\\${status}"
+echo "[one-click] exit_status=\${status}" | tee -a '${LOG_PATH}'
+exit "\${status}"
 EOF
 chmod +x "${RUNNER_PATH}"
 
