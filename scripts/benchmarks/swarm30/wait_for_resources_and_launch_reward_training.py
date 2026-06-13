@@ -21,6 +21,13 @@ from scripts.formal_mappo_specialists.run_formal_specialists import load_env_fil
 from utils.email_notify import send_tuning_email
 
 
+DEFAULT_WAIT_SESSION_PREFIXES = (
+    "wf_swarm30_backend_",
+    "wf_swarm30_reward_",
+    "wf_swarm30_",
+)
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -57,6 +64,19 @@ def tmux_session_exists(session: str) -> bool:
         return False
     code, _ = run_command(["tmux", "has-session", "-t", session], timeout=5)
     return code == 0
+
+
+def list_tmux_sessions() -> list[str]:
+    code, out = run_command(["tmux", "list-sessions", "-F", "#{session_name}"], timeout=5)
+    if code != 0:
+        return []
+    return sorted({line.strip() for line in out.splitlines() if line.strip()})
+
+
+def autodetect_wait_session(prefixes: tuple[str, ...] = DEFAULT_WAIT_SESSION_PREFIXES) -> str:
+    sessions = list_tmux_sessions()
+    candidates = [name for name in sessions if any(name.startswith(prefix) for prefix in prefixes)]
+    return sorted(candidates)[-1] if candidates else ""
 
 
 def process_count(pattern: str) -> int:
@@ -224,18 +244,19 @@ def send_email(enabled: bool, subject: str, body: str, attachments: list[str] | 
     return asdict(send_tuning_email(subject, body, attachments))
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description=(
-            "Wait for the previous Swarm30 training resources to be released, "
-            "then launch reward-optimized Swarm30 training and monitor it lightly."
-        )
+def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--wait-session",
+        default="auto",
+        help=(
+            "Old tmux session to wait for. Use 'auto' to detect latest wf_swarm30_* session, "
+            "or 'none' to disable tmux-session waiting."
+        ),
     )
-    parser.add_argument("--wait-session", default="", help="Old tmux session to wait for. Empty disables tmux-session waiting.")
     parser.add_argument(
         "--wait-pattern",
         default="scripts/benchmarks/swarm30/run_benchmark.py",
-        help="pgrep -af pattern that must disappear before launch. Empty disables process-pattern waiting.",
+        help="pgrep -af pattern that must disappear before launch. Use 'none' to disable process-pattern waiting.",
     )
     parser.add_argument("--poll-seconds", type=int, default=120)
     parser.add_argument("--max-wait-hours", type=float, default=72.0)
@@ -249,7 +270,11 @@ def main() -> int:
     parser.add_argument("--runtime", default=None)
     parser.add_argument("--tracks", nargs="+", default=["tuned_specialist", "generalist"])
     parser.add_argument("--seeds", nargs="+", type=int, default=[0])
-    parser.add_argument("--dynamics-backend", choices=["waypoint_behavior_fast", "waypoint_behavior_realistic", "mpe_core"], default="waypoint_behavior_fast")
+    parser.add_argument(
+        "--dynamics-backend",
+        choices=["waypoint_behavior_fast", "waypoint_behavior_realistic", "mpe_core"],
+        default="waypoint_behavior_fast",
+    )
     parser.add_argument("--env-backend", choices=["sync", "thread", "process"], default="process")
     parser.add_argument("--num-envs", type=int, default=8)
     parser.add_argument("--rollout-steps", type=int, default=128)
@@ -268,7 +293,27 @@ def main() -> int:
     parser.add_argument("--monitor-seconds", type=int, default=300)
     parser.add_argument("--monitor-max-hours", type=float, default=240.0)
     parser.add_argument("--status-email-interval-hours", type=float, default=6.0)
+
+
+def normalize_wait_inputs(args: argparse.Namespace) -> None:
+    if str(args.wait_session).lower() in {"none", "off", "false", "0"}:
+        args.wait_session = ""
+    elif str(args.wait_session).lower() == "auto":
+        args.wait_session = autodetect_wait_session()
+    if str(args.wait_pattern).lower() in {"none", "off", "false", "0"}:
+        args.wait_pattern = ""
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "One-command launcher: wait for current Swarm30 training resources to be released, "
+            "then launch reward-optimized Swarm30 training and monitor it lightly."
+        )
+    )
+    add_arguments(parser)
     args = parser.parse_args()
+    normalize_wait_inputs(args)
 
     load_env_file(ROOT / args.smtp_env_file)
     email_enabled = not bool(args.disable_email)
@@ -285,6 +330,9 @@ def main() -> int:
     log_path = launcher_dir / f"queue_{runtime}.log"
 
     start_wait = time.time()
+    auto_note = ""
+    if not args.wait_session:
+        auto_note = "No matching wf_swarm30_* tmux session was detected; waiting only by process pattern/resource thresholds.\n"
     send_email(
         email_enabled,
         "[Wayffusion] Reward-optimized Swarm30 launcher waiting for resources",
@@ -294,6 +342,7 @@ def main() -> int:
             f"Wait session: {args.wait_session or '<disabled>'}\n"
             f"Wait pattern: {args.wait_pattern or '<disabled>'}\n"
             f"Poll seconds: {args.poll_seconds}\n"
+            f"{auto_note}"
         ),
     )
 
