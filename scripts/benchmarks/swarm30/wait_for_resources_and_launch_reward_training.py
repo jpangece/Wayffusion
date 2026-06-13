@@ -26,6 +26,11 @@ DEFAULT_WAIT_SESSION_PREFIXES = (
     "wf_swarm30_reward_",
     "wf_swarm30_",
 )
+SELF_PROCESS_MARKERS = (
+    "wait_for_resources_and_launch_reward_training.py",
+    "one_click_runner.sh",
+    "one_click_command.sh",
+)
 
 
 def utc_now() -> str:
@@ -73,9 +78,17 @@ def list_tmux_sessions() -> list[str]:
     return sorted({line.strip() for line in out.splitlines() if line.strip()})
 
 
-def autodetect_wait_session(prefixes: tuple[str, ...] = DEFAULT_WAIT_SESSION_PREFIXES) -> str:
+def autodetect_wait_session(
+    prefixes: tuple[str, ...] = DEFAULT_WAIT_SESSION_PREFIXES,
+    exclude_sessions: set[str] | None = None,
+) -> str:
+    excluded = exclude_sessions or set()
     sessions = list_tmux_sessions()
-    candidates = [name for name in sessions if any(name.startswith(prefix) for prefix in prefixes)]
+    candidates = [
+        name
+        for name in sessions
+        if name not in excluded and any(name.startswith(prefix) for prefix in prefixes)
+    ]
     return sorted(candidates)[-1] if candidates else ""
 
 
@@ -94,8 +107,11 @@ def process_count(pattern: str) -> int:
             pid = int(head)
         except ValueError:
             continue
-        if pid != self_pid:
-            filtered.append(line)
+        if pid == self_pid:
+            continue
+        if any(marker in line for marker in SELF_PROCESS_MARKERS):
+            continue
+        filtered.append(line)
     return len(filtered)
 
 
@@ -254,6 +270,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--exclude-wait-session",
+        default="",
+        help="Tmux session name that must not be treated as the previous run, usually the new launcher session itself.",
+    )
+    parser.add_argument(
         "--wait-pattern",
         default="scripts/benchmarks/swarm30/run_benchmark.py",
         help="pgrep -af pattern that must disappear before launch. Use 'none' to disable process-pattern waiting.",
@@ -266,7 +287,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--smtp-env-file", default=".secrets/wayffusion_mail.env")
     parser.add_argument("--disable-email", action="store_true")
 
-    parser.add_argument("--output-root", default="outputs/debug/benchmarks/swarm30_reward_optimized_training")
+    parser.add_argument("--output-root", default="outputs/training/benchmarks/swarm30_2000_direct")
     parser.add_argument("--runtime", default=None)
     parser.add_argument("--tracks", nargs="+", default=["tuned_specialist", "generalist"])
     parser.add_argument("--seeds", nargs="+", type=int, default=[0])
@@ -296,10 +317,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def normalize_wait_inputs(args: argparse.Namespace) -> None:
+    exclude_sessions = {args.exclude_wait_session} if args.exclude_wait_session else set()
     if str(args.wait_session).lower() in {"none", "off", "false", "0"}:
         args.wait_session = ""
     elif str(args.wait_session).lower() == "auto":
-        args.wait_session = autodetect_wait_session()
+        args.wait_session = autodetect_wait_session(exclude_sessions=exclude_sessions)
     if str(args.wait_pattern).lower() in {"none", "off", "false", "0"}:
         args.wait_pattern = ""
 
@@ -320,7 +342,7 @@ def main() -> int:
     output_root = Path(args.output_root)
     if not output_root.is_absolute():
         output_root = ROOT / output_root
-    runtime = args.runtime or f"rewardopt_{minute_runtime()}"
+    runtime = args.runtime or f"{minute_runtime()}_rewardopt"
     suite_root = output_root / runtime
     launcher_dir = suite_root / "launcher"
     launcher_dir.mkdir(parents=True, exist_ok=True)
@@ -340,6 +362,7 @@ def main() -> int:
             f"Runtime: {runtime}\n"
             f"Output root: {suite_root}\n"
             f"Wait session: {args.wait_session or '<disabled>'}\n"
+            f"Excluded session: {args.exclude_wait_session or '<none>'}\n"
             f"Wait pattern: {args.wait_pattern or '<disabled>'}\n"
             f"Poll seconds: {args.poll_seconds}\n"
             f"{auto_note}"
