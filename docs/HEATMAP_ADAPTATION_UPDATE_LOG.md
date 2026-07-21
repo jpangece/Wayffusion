@@ -144,10 +144,16 @@ This document records incremental design, implementation, testing, and evaluatio
 
 ### Validation
 
-- `git diff --check` — passed.
-- `PYTHONPATH=/tmp/wayffusion-test-deps /opt/anaconda3/envs/ml-env/bin/python -m pytest -q tests/test_heatmap_observation_contract.py tests/test_heatmap_baseline_contracts.py` — 8 passed.
-- `PYTHONPATH=/tmp/wayffusion-test-deps /opt/anaconda3/envs/ml-env/bin/python -m pytest -q` — 114 passed.
-- Missing test-only packages were installed under `/tmp/wayffusion-test-deps`; no repository or Python environment dependencies were changed.
+- Server: `admin1-Super-Server`.
+- Container: `pjs_wayffusion`.
+- Base image: `yejun-cu128-snapshot:with-tools`.
+- Python: `3.10.12`.
+- PyTorch: `2.7.1+cu128`.
+- CUDA runtime used by PyTorch: `12.8`.
+- GPU: `NVIDIA GeForce RTX 5090`.
+- `git diff --check` — passed with no output.
+- `CUDA_VISIBLE_DEVICES=0 python3 -m pytest -q tests/test_heatmap_observation_contract.py tests/test_heatmap_baseline_contracts.py` — 8 passed in 2.12s.
+- `CUDA_VISIBLE_DEVICES=0 python3 -m pytest -q` — 114 passed in 8.49s.
 
 ### Known limitations
 
