@@ -78,3 +78,46 @@ This document records incremental design, implementation, testing, and evaluatio
 ### Related commit
 
 - Pending commit: `docs: document Wayffusion architecture for heatmap adaptation`
+
+## 2026-07-21 — Baseline observation, action, and rollout contract tests
+
+### Objective
+
+- Lock down current Wayffusion interfaces before adding heatmap and adapter functionality.
+- Protect baseline behavior from accidental regression.
+
+### Changes
+
+- Created `tests/test_heatmap_baseline_contracts.py` with focused global observation, per-agent observation, direct-policy, candidate-policy, default compatibility, and synthetic rollout-buffer contract tests.
+- Updated `docs/HEATMAP_ADAPTATION_UPDATE_LOG.md` with this validation record.
+- No production code or configuration was changed.
+
+### Design decisions
+
+- Test current contracts before adding new observation keys.
+- Preserve the existing five-channel task field.
+- Keep tests CPU-only, deterministic, and small.
+- Focus on keys, shapes, types, and baseline compatibility.
+- Avoid changing production code for test convenience.
+
+### Validation
+
+- `pytest -q tests/test_heatmap_baseline_contracts.py` — collection failed with one error because `/opt/anaconda3/bin/python3` could not import `torch` (`ModuleNotFoundError: No module named 'torch'`).
+- `/Users/a...../.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 -m pytest -q tests/test_heatmap_baseline_contracts.py` — command failed because the bundled Python does not contain the `pytest` module.
+- `/opt/anaconda3/envs/ml-env/bin/python -m pytest -q tests/test_heatmap_baseline_contracts.py` — command failed because the ML environment does not contain the `pytest` module.
+- `PYTHONPATH=/opt/anaconda3/lib/python3.12/site-packages /opt/anaconda3/envs/ml-env/bin/python -m pytest -q tests/test_heatmap_baseline_contracts.py` — collection failed with one error because Python 3.10 attempted to load the Python 3.12 NumPy binary extension and could not import `numpy.core._multiarray_umath`.
+- `/opt/anaconda3/envs/ml-env/bin/python -c "import sys; sys.path.append('/opt/anaconda3/lib/python3.12/site-packages'); import pytest; raise SystemExit(pytest.main(['-q','tests/test_heatmap_baseline_contracts.py']))"` — collection failed with one error because the ML environment could not import `gymnasium`.
+
+### Known limitations
+
+- No requested contract required a production change, so no implementation limitations were identified in this step.
+- The tests could not be executed successfully in the available local Python environments: the pytest-enabled environment lacks PyTorch, while the PyTorch-enabled environment lacks pytest and Gymnasium. Dependencies were not installed because this task prohibits dependency changes.
+
+### Next step
+
+- Define the optional task-element heatmap observation contract while keeping it disabled by default.
+
+### Related commit
+
+- Pending commit: `test: lock down baseline waypoint contracts`
+- Pending commit: `docs: record baseline contract validation`
