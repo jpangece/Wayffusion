@@ -121,3 +121,42 @@ This document records incremental design, implementation, testing, and evaluatio
 
 - Pending commit: `test: lock down baseline waypoint contracts`
 - Pending commit: `docs: record baseline contract validation`
+
+## 2026-07-21 — Optional heatmap observation contract
+
+### Objective
+
+- Add only the optional task-element heatmap observation contract.
+- Preserve all default observation, reward, policy, and training behavior.
+
+### Changes
+
+- Added the optional `heatmap_observation` environment configuration with `enabled: false` by default and a configurable positive `channels` count (default `1`).
+- When enabled, global and per-agent observations expose `task_element_heatmap [C,G,G]` as a `float32` tensor bounded to `[0,1]`.
+- Added focused observation-contract tests for default absence, enabled spaces and values, step persistence, and channel validation.
+
+### Design decisions
+
+- The existing five-channel `task_field` is unchanged.
+- The new observation is absent unless explicitly enabled, preserving exact default keys and spaces.
+- This increment initializes the heatmap to zeros. Scenario-specific generation and semantic channel definitions are intentionally deferred.
+- No reward, policy, rollout, optimization, or training code was changed.
+
+### Validation
+
+- `git diff --check` — passed.
+- `PYTHONPATH=/tmp/wayffusion-test-deps /opt/anaconda3/envs/ml-env/bin/python -m pytest -q tests/test_heatmap_observation_contract.py tests/test_heatmap_baseline_contracts.py` — 8 passed.
+- `PYTHONPATH=/tmp/wayffusion-test-deps /opt/anaconda3/envs/ml-env/bin/python -m pytest -q` — 114 passed.
+- Missing test-only packages were installed under `/tmp/wayffusion-test-deps`; no repository or Python environment dependencies were changed.
+
+### Known limitations
+
+- The heatmap carries no task-element semantics yet; this increment defines only its optional fixed-shape observation boundary.
+
+### Next step
+
+- Define task-element channel semantics and generation in a separate reviewed increment.
+
+### Related commit
+
+- None; changes intentionally left uncommitted.
