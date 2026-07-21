@@ -37,6 +37,11 @@ class WaypointMultiUAVEnv:
         self.waypoint_dim = 3 if self.waypoint_dim == 3 else 2
         self.candidate_count = int(self.config.get("candidate_count", self.config.get("tasks", {}).get("candidate_count", 12)))
         self.expose_candidates_for_debug = bool(self.config.get("expose_candidates_for_debug", False))
+        heatmap_config = dict(self.config.get("heatmap_observation", {}))
+        self.heatmap_observation_enabled = bool(heatmap_config.get("enabled", False))
+        self.heatmap_observation_channels = int(heatmap_config.get("channels", 1))
+        if self.heatmap_observation_channels < 1:
+            raise ValueError("heatmap_observation.channels must be at least 1")
         self.seed_value = int(self.config.get("seed", 0))
         self.rng = np.random.default_rng(self.seed_value)
         self.task_names = list(self.config.get("task_names", ["area_coverage", "belief_search", "priority_inspection", "connectivity_expansion"]))
@@ -147,6 +152,15 @@ class WaypointMultiUAVEnv:
             "comm_adjacency": spaces.MultiBinary((n + 1, n + 1)),
             "agent_mask": spaces.MultiBinary(n),
         }
+        if self.heatmap_observation_enabled:
+            heatmap_space = spaces.Box(
+                low=0.0,
+                high=1.0,
+                shape=(self.heatmap_observation_channels, g, g),
+                dtype=np.float32,
+            )
+            obs_items["task_element_heatmap"] = heatmap_space
+            global_items["task_element_heatmap"] = heatmap_space
         if self._exposes_candidates():
             k = self.candidate_count
             obs_items.update(
@@ -608,6 +622,8 @@ class WaypointMultiUAVEnv:
                 "all_uav_states": all_states.astype(np.float32),
                 "comm_adjacency": self.world.communication_graph.astype(np.int8),
             }
+            if self.heatmap_observation_enabled:
+                obs["task_element_heatmap"] = global_state["task_element_heatmap"].astype(np.float32)
             if self._exposes_candidates():
                 features = global_state["candidate_features"]
                 obs.update(
@@ -717,6 +733,11 @@ class WaypointMultiUAVEnv:
             "comm_adjacency": self.world.communication_graph.astype(np.int8),
             "agent_mask": np.ones(self.num_agents, dtype=np.int8),
         }
+        if self.heatmap_observation_enabled:
+            state["task_element_heatmap"] = np.zeros(
+                (self.heatmap_observation_channels, self.world.grid_size, self.world.grid_size),
+                dtype=np.float32,
+            )
         if self._exposes_candidates():
             state.update(
                 {
