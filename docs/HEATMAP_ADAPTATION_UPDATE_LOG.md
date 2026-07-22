@@ -536,3 +536,76 @@ This document records incremental design, implementation, testing, and evaluatio
 - Equivalent IRMV-applied test commit: `42257f8 test: specify priority inspection provider registration`.
 - Equivalent IRMV-applied production commit: `6ee7c85 feat: register priority inspection task element provider`.
 - Equivalent IRMV-applied fixture correction: `e846921 test: fix priority inspection integration fixture`.
+
+## 2026-07-22 — Optional dynamic provider heatmap refresh
+
+### Objective
+
+- Add optional step-time refresh for provider-derived task-element heatmaps.
+- Preserve the existing reset-only behavior unless dynamic refresh is explicitly enabled.
+
+### Changes
+
+- Added the focused specification `tests/test_task_element_provider_dynamic_refresh.py`.
+- Updated `envs/waypoint_marl_env.py` to parse `heatmap_observation.provider.refresh_on_step`, which defaults to `false`.
+- Extracted the existing provider-resolution and heatmap-generation sequence into `_refresh_task_element_heatmap()` so reset and step-time refresh share the same construction path.
+- Reset continues to use the shared helper without changing its existing resolution semantics.
+- `step` and `step_global` each refresh exactly once after task-state mutation and reward computation, before constructing or returning same-transition observations and global states.
+
+### Design decisions
+
+- Step-time refresh occurs only when heatmap observation, provider resolution, and `refresh_on_step` are all enabled.
+- With `refresh_on_step` absent or `false`, provider-derived heatmaps remain reset-only and existing configurations retain their prior behavior.
+- `step` and `step_global` each contain one guarded refresh at the corresponding transition point and do not delegate refresh to observation accessors, preventing duplicate provider calls.
+- `get_global_state` and per-agent observation construction do not invoke provider resolution.
+- Provider instances are not cached; reset performs one provider construction and build, and each dynamically refreshed step performs one additional construction and build under the resolver contract.
+- Terminal and truncated transitions refresh before final observations are assembled, so returned observations and `infos[agent]["terminal_observation"]` reflect final task state.
+- Scenarios own task-state mutation, providers own task-state-to-element conversion, the resolver owns provider-versus-static source selection, the generator owns accumulation, normalization, shape, and dtype, and `WaypointMultiUAVEnv` owns refresh timing and observation exposure.
+- No provider, registry, generator, scenario, configuration, reward, policy, rollout-buffer, or training file was changed.
+
+### Validation
+
+- Before implementation, IRMV Docker execution of the test-first specification produced 5 passed and 5 failed tests in 1.13s.
+- The passing cases confirmed that an absent `refresh_on_step` defaults to `false`, explicit `false` preserves reset-only behavior, disabled heatmap observation and disabled provider resolution prevent provider invocation, and unregistered tasks preserve static fallback.
+- The expected failures showed that `step` and `step_global` performed no additional provider resolution, terminal observations retained the reset-only heatmap, and `priority_inspection` visited-state changes were not reflected. These failures demonstrated that dynamic environment refresh was still missing.
+- Before the production commit, local `git diff --check` passed.
+- Local environment-test collection was blocked because the local interpreter lacked `gymnasium`; this was a local dependency limitation, not a production failure.
+- No dependencies were installed locally, and `PYTHONPATH` was not changed.
+- The IRMV server could not pull from GitHub directly. Equivalent patches were transferred and applied with `git am`; no successful server-side GitHub pull is claimed.
+- The Mac/GitHub commits were `bd7defe test: specify provider heatmap dynamic refresh` and `fbe049a feat: refresh provider heatmap after steps`.
+- Applying equivalent patch content on the IRMV server created commits `e524457 test: specify provider heatmap dynamic refresh` and `d58b577 feat: refresh provider heatmap after steps`.
+- IRMV Docker validation used container `pjs_wayffusion`, set `CUDA_VISIBLE_DEVICES=0`, and executed tests with the numeric `pjs` UID/GID.
+- IRMV focused validation passed: 80 tests in 3.25s.
+- IRMV full regression validation passed: 186 tests in 8.50s.
+
+### Verified environment behavior
+
+- Reset performs one provider resolution.
+- Each step performs exactly one additional resolution only when dynamic refresh is enabled; `step` and `step_global` do not double-refresh.
+- Terminal and truncated observations contain the refreshed heatmap.
+- Visited `priority_inspection` POIs disappear from the refreshed heatmap, and remaining POIs are accumulated and normalized again.
+- Global and all per-agent observations contain equal refreshed values.
+- Calling `get_global_state` does not cause additional provider calls.
+- Default, disabled, unregistered-task, and static-fallback behavior remains compatible.
+
+### Known limitations
+
+- Dynamic refresh is opt-in and disabled by default.
+- Only `priority_inspection` currently has a real semantic provider.
+- Deadline and repeat-visit semantics are excluded.
+- Semantic provider output remains single-channel.
+- Policy, encoder, rollout-buffer, critic, and MAPPO training consumption of `task_element_heatmap` has not yet been verified; the validation above establishes environment behavior only.
+- No performance improvement has been measured.
+
+### Next step
+
+- Perform a read-only audit of the complete observation-to-policy path.
+- Trace `task_element_heatmap` through wrappers, preprocessing, rollout collection, buffers, actor input, critic/global-state input, encoders, and MAPPO training.
+- Determine whether the key is consumed, ignored, rejected, or automatically flattened without modifying code during the audit.
+
+### Related commit
+
+- Test-first specification: `bd7defe test: specify provider heatmap dynamic refresh`.
+- Production implementation: `fbe049a feat: refresh provider heatmap after steps`.
+- Equivalent IRMV-applied test commit: `e524457 test: specify provider heatmap dynamic refresh`.
+- Equivalent IRMV-applied production commit: `d58b577 feat: refresh provider heatmap after steps`.
