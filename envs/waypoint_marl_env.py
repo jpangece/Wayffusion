@@ -13,6 +13,7 @@ from envs.waypoint.randomization import build_episode_config
 from envs.waypoint.rendering import render_world
 from envs.waypoint.safety import SafetyLayer
 from envs.waypoint.task_element_heatmap import generate_task_element_heatmap
+from envs.waypoint.task_element_provider import resolve_task_elements
 from envs.waypoint.world import MissionWorld
 from tasks.waypoint import WAYPOINT_TASKS, build_waypoint_scenario
 from tasks.waypoint.base import normalized_positions
@@ -39,7 +40,9 @@ class WaypointMultiUAVEnv:
         self.candidate_count = int(self.config.get("candidate_count", self.config.get("tasks", {}).get("candidate_count", 12)))
         self.expose_candidates_for_debug = bool(self.config.get("expose_candidates_for_debug", False))
         heatmap_config = dict(self.config.get("heatmap_observation", {}))
+        heatmap_provider_config = dict(heatmap_config.get("provider", {}))
         self.heatmap_observation_enabled = bool(heatmap_config.get("enabled", False))
+        self.heatmap_provider_enabled = bool(heatmap_provider_config.get("enabled", False))
         self.heatmap_observation_channels = int(heatmap_config.get("channels", 1))
         self.heatmap_task_elements = deepcopy(heatmap_config.get("task_elements", []))
         if self.heatmap_observation_channels < 1:
@@ -262,12 +265,21 @@ class WaypointMultiUAVEnv:
         self.last_raw_waypoints = None
         self.last_reward_result = {}
         self.last_transition_info = {}
+        resolved_task_elements = resolve_task_elements(
+            heatmap_enabled=self.heatmap_observation_enabled,
+            provider_enabled=self.heatmap_provider_enabled,
+            task_name=self.current_scenario.name,
+            static_task_elements=self.heatmap_task_elements,
+            scenario=self.current_scenario,
+            world=self.world,
+            task_state=self.task_state,
+        )
         if self.heatmap_observation_enabled and (
-            self.heatmap_task_elements or self.heatmap_observation_channels == 1
+            resolved_task_elements or self.heatmap_observation_channels == 1
         ):
             self.task_element_heatmap = generate_task_element_heatmap(
                 grid_size=self.world.grid_size,
-                task_elements=self.heatmap_task_elements,
+                task_elements=resolved_task_elements,
                 channels=self.heatmap_observation_channels,
             )
         if self._exposes_candidates():
