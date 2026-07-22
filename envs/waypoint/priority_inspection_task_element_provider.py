@@ -70,4 +70,20 @@ class PriorityInspectionTaskElementProvider:
         return elements
 
 
-__all__ = ["PriorityInspectionTaskElementProvider"]
+def register_priority_inspection_task_element_provider() -> None:
+    """Register the priority-inspection provider if it is not registered."""
+    from envs.waypoint.task_element_provider import register_task_element_provider
+
+    task_name = "priority_inspection"
+    try:
+        register_task_element_provider(task_name, PriorityInspectionTaskElementProvider)
+    except ValueError as exc:
+        duplicate_error = f"task-element provider already registered for {task_name!r}"
+        if str(exc) != duplicate_error:
+            raise
+
+
+__all__ = [
+    "PriorityInspectionTaskElementProvider",
+    "register_priority_inspection_task_element_provider",
+]
