@@ -464,3 +464,75 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `09ef582 feat: add priority inspection task element provider`.
 - Equivalent IRMV-applied test commit: `2276a6b test: specify priority inspection task element provider`.
 - Equivalent IRMV-applied production commit: `d5ff9ad feat: add priority inspection task element provider`.
+
+## 2026-07-22 — Priority-inspection provider registration and real-environment integration
+
+### Objective
+
+- Add the explicit production registration mechanism for the real `priority_inspection` task-element provider.
+- Verify automatic provider selection through a real `WaypointMultiUAVEnv` episode and real `MissionWorld`.
+
+### Changes
+
+- Added `register_priority_inspection_task_element_provider()` to `envs/waypoint/priority_inspection_task_element_provider.py`.
+- Added the real-environment integration specification `tests/test_priority_inspection_provider_registration_integration.py`.
+- The registration function registers `PriorityInspectionTaskElementProvider` for the exact task name `priority_inspection` through `register_task_element_provider`.
+- The provider class itself is the factory, creating a fresh provider instance for every resolver call.
+- Registration is explicit and does not occur as an import side effect.
+
+### Design decisions
+
+- Repeated task-specific registration calls are idempotent, while direct duplicate calls to the generic provider registry still raise `ValueError`.
+- No permanent module-level registration flag is used, so registration succeeds again after `clear_task_element_provider_registry()`.
+- Only the exact duplicate-registration `ValueError` for `priority_inspection` is suppressed; unrelated `ValueError` exceptions propagate.
+- Existing configurations are unchanged unless both heatmap observation and provider resolution are enabled.
+- `PriorityInspectionTaskElementProvider` owns POI filtering, weight mapping, and world-to-grid conversion.
+- `resolve_task_elements` owns provider-versus-static source selection.
+- `generate_task_element_heatmap` owns accumulation, normalization, output shape, dtype, and generator validation.
+- `WaypointMultiUAVEnv` owns reset lifecycle and observation exposure.
+- No scenario, generic registry, environment, configuration, reward, policy, rollout-buffer, or training file was changed by the registration implementation.
+
+### Validation
+
+- Before implementation, the new integration test failed during collection because `register_priority_inspection_task_element_provider` did not exist; this was the expected test-first failure.
+- The real-environment tests used `task_name` and `task_names` set to `priority_inspection`, a deterministic seed, disabled domain randomization, and `heatmap_observation.provider.enabled: true`.
+- Expected heatmaps were independently constructed with NumPy from live `task_state["pois"]`, `task_state["weights"]`, `task_state["visited"]`, and `world.world_to_grid`, without calling `generate_task_element_heatmap`.
+- Validation covered `[1,G,G]` shape, `float32` dtype, unvisited-weight placement at `[0,y,x]`, same-cell accumulation, maximum normalization, global/per-agent equality, provider precedence over static elements, default and explicit-disabled static behavior, re-registration after clearing, and non-transposed coordinate orientation.
+- Initial IRMV execution after registration produced five failures before provider resolution because the test fixture used `max_steps=2`.
+- `PriorityInspectionScenario` computes deadlines with `rng.integers(max(8, world.max_steps // 4), world.max_steps + 1, ...)`; with `max_steps=2`, this produced `low=8`, `high=3`, and `ValueError: low >= high`.
+- This was a malformed test fixture, not a provider or environment product failure. The fixture was corrected from `max_steps=2` to `max_steps=16`, with no production-code change.
+- Local `git diff --check` passed.
+- Local dependency-light provider and registry validation passed: 33 tests in 0.17s.
+- Real-environment tests could not collect locally because `gymnasium` was missing; this was a local dependency limitation, not a product failure.
+- No dependencies were installed locally, and `PYTHONPATH` was not changed.
+- The IRMV server could not pull from GitHub directly. Equivalent patch content was transferred and applied with `git am`; no successful server-side GitHub pull is claimed.
+- The Mac/GitHub commits were `6601f34 test: specify priority inspection provider registration`, `c38215c feat: register priority inspection task element provider`, and `4fa0e6a test: fix priority inspection integration fixture`.
+- Applying equivalent patch content on the IRMV server created commits `42257f8 test: specify priority inspection provider registration`, `6ee7c85 feat: register priority inspection task element provider`, and `e846921 test: fix priority inspection integration fixture`.
+- IRMV Docker validation used container `pjs_wayffusion`, set `CUDA_VISIBLE_DEVICES=0`, and executed tests as the numeric `pjs` UID/GID.
+- After the fixture correction, IRMV focused validation passed: 70 tests in 3.11s.
+- After the fixture correction, IRMV full regression validation passed: 176 tests in 8.28s.
+
+### Known limitations
+
+- The `priority_inspection` heatmap is generated only during reset and does not refresh when POIs become visited during an episode.
+- Deadline and repeat-visit semantics are not represented.
+- Only `priority_inspection` has a real task-specific provider.
+- Static configured elements remain the fallback for unregistered tasks.
+- Non-empty semantic provider output remains single-channel.
+
+### Next step
+
+- Define a test-first dynamic refresh lifecycle contract for provider-derived heatmaps, focused only on `priority_inspection` visited-state changes.
+- Decide and verify whether refresh occurs after `scenario.step_update` and before the next observation is built.
+- Ensure provider resolution occurs once per step only when dynamic refresh is explicitly enabled.
+- Preserve reset-only static behavior by default.
+- Do not add another task adapter in the same increment.
+
+### Related commit
+
+- Test-first specification: `6601f34 test: specify priority inspection provider registration`.
+- Production implementation: `c38215c feat: register priority inspection task element provider`.
+- Test fixture correction: `4fa0e6a test: fix priority inspection integration fixture`.
+- Equivalent IRMV-applied test commit: `42257f8 test: specify priority inspection provider registration`.
+- Equivalent IRMV-applied production commit: `6ee7c85 feat: register priority inspection task element provider`.
+- Equivalent IRMV-applied fixture correction: `e846921 test: fix priority inspection integration fixture`.
