@@ -166,3 +166,56 @@ This document records incremental design, implementation, testing, and evaluatio
 ### Related commit
 
 - None; changes intentionally left uncommitted.
+
+## 2026-07-22 — Deterministic task-element priority heatmap generator
+
+### Objective
+
+- Specify and implement the first deterministic task-element heatmap generator.
+- Keep generation standalone and leave the existing optional observation integration unchanged.
+
+### Changes
+
+- Added the production utility `envs/waypoint/task_element_heatmap.py`.
+- Added the focused test specification `tests/test_task_element_heatmap_generator.py`.
+- Added `generate_task_element_heatmap(grid_size, task_elements, channels=1)` for a single normalized spatial-priority channel.
+
+### Design decisions
+
+- The output contract is `[1,G,G]`, with grid coordinates written as `output[0,y,x]`.
+- Each valid task element contributes its non-negative priority to its grid cell; priorities in the same cell accumulate.
+- The completed channel is normalized by its maximum accumulated value.
+- Empty input and all-zero priorities produce an all-zero `float32` heatmap.
+- Output is deterministic, input-order independent, `float32`, and bounded to `[0,1]`.
+- Invalid coordinates, negative priorities, invalid grid sizes, and unsupported channel counts are rejected instead of clipped or ignored.
+- This increment supports exactly one normalized priority channel and does not integrate the generator into `WaypointMultiUAVEnv`.
+
+### Validation
+
+- Local `git diff --check` passed.
+- Local generator-focused validation passed: 11 tests in 0.26s.
+- The existing compatibility tests could not collect locally because the local interpreter lacked `gymnasium` and `torch`; this was a local dependency limitation, not a product test failure.
+- No dependencies were installed locally, and `PYTHONPATH` was not changed.
+- The IRMV server could not reach GitHub directly over HTTPS. The two commits were transferred as a git format-patch file and applied with `git am`; no successful server-side GitHub pull is claimed.
+- The Mac/GitHub commits were `dfead2c test: specify task element heatmap generator` and `6ad5ad0 feat: add deterministic task element heatmap generator`.
+- Applying the same patch content on the IRMV server created equivalent local commits `570e201 test: specify task element heatmap generator` and `2409602 feat: add deterministic task element heatmap generator`.
+- IRMV Docker validation used container `pjs_wayffusion`, constrained GPU visibility with `CUDA_VISIBLE_DEVICES=0`, and executed tests as the numeric `pjs` UID/GID to avoid root-owned files in the bind-mounted repository.
+- IRMV focused validation passed: 19 tests in 2.81s.
+- IRMV full regression validation passed: 125 tests in 8.27s.
+
+### Known limitations
+
+- The generator exists as a standalone utility only.
+- No task-element source or environment observation update currently invokes it.
+- The current semantic model supports exactly one normalized priority channel.
+
+### Next step
+
+- Define and test the environment integration contract that supplies task elements to the generator and writes the generated result into the optional `task_element_heatmap` observation without changing disabled-mode behavior.
+
+### Related commit
+
+- Test-first specification: `dfead2c test: specify task element heatmap generator`.
+- Production implementation: `6ad5ad0 feat: add deterministic task element heatmap generator`.
+- Equivalent IRMV-applied test commit: `570e201 test: specify task element heatmap generator`.
+- Equivalent IRMV-applied production commit: `2409602 feat: add deterministic task element heatmap generator`.
