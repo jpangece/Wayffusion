@@ -12,6 +12,7 @@ from envs.waypoint.mission_goals import GOAL_DIM, goal_progress, resolve_episode
 from envs.waypoint.randomization import build_episode_config
 from envs.waypoint.rendering import render_world
 from envs.waypoint.safety import SafetyLayer
+from envs.waypoint.task_element_heatmap import generate_task_element_heatmap
 from envs.waypoint.world import MissionWorld
 from tasks.waypoint import WAYPOINT_TASKS, build_waypoint_scenario
 from tasks.waypoint.base import normalized_positions
@@ -40,6 +41,7 @@ class WaypointMultiUAVEnv:
         heatmap_config = dict(self.config.get("heatmap_observation", {}))
         self.heatmap_observation_enabled = bool(heatmap_config.get("enabled", False))
         self.heatmap_observation_channels = int(heatmap_config.get("channels", 1))
+        self.heatmap_task_elements = deepcopy(heatmap_config.get("task_elements", []))
         if self.heatmap_observation_channels < 1:
             raise ValueError("heatmap_observation.channels must be at least 1")
         self.seed_value = int(self.config.get("seed", 0))
@@ -70,6 +72,10 @@ class WaypointMultiUAVEnv:
         self.last_transition_info: dict[str, Any] = {}
         self.episode_config = deepcopy(self.config)
         self.episode_randomization_info: dict[str, Any] = {"enabled": False}
+        self.task_element_heatmap = np.zeros(
+            (self.heatmap_observation_channels, self.world.grid_size, self.world.grid_size),
+            dtype=np.float32,
+        )
         self._global_state_cache: dict[str, np.ndarray] | None = None
         self._shared_info_cache: dict[str, Any] | None = None
         self._build_spaces()
@@ -256,6 +262,14 @@ class WaypointMultiUAVEnv:
         self.last_raw_waypoints = None
         self.last_reward_result = {}
         self.last_transition_info = {}
+        if self.heatmap_observation_enabled and (
+            self.heatmap_task_elements or self.heatmap_observation_channels == 1
+        ):
+            self.task_element_heatmap = generate_task_element_heatmap(
+                grid_size=self.world.grid_size,
+                task_elements=self.heatmap_task_elements,
+                channels=self.heatmap_observation_channels,
+            )
         if self._exposes_candidates():
             self._refresh_candidates()
         self._invalidate_runtime_caches()
@@ -734,10 +748,7 @@ class WaypointMultiUAVEnv:
             "agent_mask": np.ones(self.num_agents, dtype=np.int8),
         }
         if self.heatmap_observation_enabled:
-            state["task_element_heatmap"] = np.zeros(
-                (self.heatmap_observation_channels, self.world.grid_size, self.world.grid_size),
-                dtype=np.float32,
-            )
+            state["task_element_heatmap"] = self.task_element_heatmap.astype(np.float32)
         if self._exposes_candidates():
             state.update(
                 {
