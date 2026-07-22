@@ -43,6 +43,9 @@ class WaypointMultiUAVEnv:
         heatmap_provider_config = dict(heatmap_config.get("provider", {}))
         self.heatmap_observation_enabled = bool(heatmap_config.get("enabled", False))
         self.heatmap_provider_enabled = bool(heatmap_provider_config.get("enabled", False))
+        self.heatmap_provider_refresh_on_step = bool(
+            heatmap_provider_config.get("refresh_on_step", False)
+        )
         self.heatmap_observation_channels = int(heatmap_config.get("channels", 1))
         self.heatmap_task_elements = deepcopy(heatmap_config.get("task_elements", []))
         if self.heatmap_observation_channels < 1:
@@ -86,6 +89,25 @@ class WaypointMultiUAVEnv:
     def _invalidate_runtime_caches(self) -> None:
         self._global_state_cache = None
         self._shared_info_cache = None
+
+    def _refresh_task_element_heatmap(self) -> None:
+        resolved_task_elements = resolve_task_elements(
+            heatmap_enabled=self.heatmap_observation_enabled,
+            provider_enabled=self.heatmap_provider_enabled,
+            task_name=self.current_scenario.name,
+            static_task_elements=self.heatmap_task_elements,
+            scenario=self.current_scenario,
+            world=self.world,
+            task_state=self.task_state,
+        )
+        if self.heatmap_observation_enabled and (
+            resolved_task_elements or self.heatmap_observation_channels == 1
+        ):
+            self.task_element_heatmap = generate_task_element_heatmap(
+                grid_size=self.world.grid_size,
+                task_elements=resolved_task_elements,
+                channels=self.heatmap_observation_channels,
+            )
 
     def _action_adapter_config(self) -> dict[str, Any]:
         physical_scale = dict(self.config.get("physical_scale", {}))
@@ -265,23 +287,7 @@ class WaypointMultiUAVEnv:
         self.last_raw_waypoints = None
         self.last_reward_result = {}
         self.last_transition_info = {}
-        resolved_task_elements = resolve_task_elements(
-            heatmap_enabled=self.heatmap_observation_enabled,
-            provider_enabled=self.heatmap_provider_enabled,
-            task_name=self.current_scenario.name,
-            static_task_elements=self.heatmap_task_elements,
-            scenario=self.current_scenario,
-            world=self.world,
-            task_state=self.task_state,
-        )
-        if self.heatmap_observation_enabled and (
-            resolved_task_elements or self.heatmap_observation_channels == 1
-        ):
-            self.task_element_heatmap = generate_task_element_heatmap(
-                grid_size=self.world.grid_size,
-                task_elements=resolved_task_elements,
-                channels=self.heatmap_observation_channels,
-            )
+        self._refresh_task_element_heatmap()
         if self._exposes_candidates():
             self._refresh_candidates()
         self._invalidate_runtime_caches()
@@ -389,6 +395,12 @@ class WaypointMultiUAVEnv:
         reward_result = self.current_scenario.compute_rewards(prev_world, self.world, self.task_state, transition_info)
         self.last_transition_info = transition_info
         self.last_reward_result = reward_result
+        if (
+            self.heatmap_observation_enabled
+            and self.heatmap_provider_enabled
+            and self.heatmap_provider_refresh_on_step
+        ):
+            self._refresh_task_element_heatmap()
         if self._exposes_candidates():
             self._refresh_candidates()
         self._invalidate_runtime_caches()
@@ -476,6 +488,12 @@ class WaypointMultiUAVEnv:
         reward_result = self.current_scenario.compute_rewards(prev_world, self.world, self.task_state, transition_info)
         self.last_transition_info = transition_info
         self.last_reward_result = reward_result
+        if (
+            self.heatmap_observation_enabled
+            and self.heatmap_provider_enabled
+            and self.heatmap_provider_refresh_on_step
+        ):
+            self._refresh_task_element_heatmap()
         if self._exposes_candidates():
             self._refresh_candidates()
         self._invalidate_runtime_caches()
