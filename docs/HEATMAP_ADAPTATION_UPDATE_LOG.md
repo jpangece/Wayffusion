@@ -399,3 +399,68 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `eb262d6 feat: integrate task element provider resolution`.
 - Equivalent IRMV-applied test commit: `4698025 test: specify provider environment integration`.
 - Equivalent IRMV-applied production commit: `937de3a feat: integrate task element provider resolution`.
+
+## 2026-07-22 — Priority-inspection task-element provider
+
+### Objective
+
+- Add the first real task-specific task-element provider for `priority_inspection`.
+- Keep provider registration and environment selection outside this increment.
+
+### Changes
+
+- Added `envs/waypoint/priority_inspection_task_element_provider.py` with `PriorityInspectionTaskElementProvider`.
+- Added the focused test specification `tests/test_priority_inspection_task_element_provider.py`.
+- The provider reads `task_state["pois"]`, `task_state["weights"]`, and `task_state["visited"]`; deadlines and repeat-visit counts are intentionally ignored.
+- Each unvisited POI produces one raw element of the form `{"x": grid_x, "y": grid_y, "priority": weight}`.
+
+### Design decisions
+
+- Visited POIs produce no elements, all-visited input returns an empty sequence, and source order is preserved.
+- Multiple POIs mapping to one grid cell remain separate raw elements in source order; the provider does not accumulate or normalize priorities.
+- Missing required keys raise `ValueError`.
+- POIs must have shape `[N,2]`, while weights and visited flags must have shape `[N]`; inconsistent lengths raise `ValueError`.
+- POI coordinates must be finite, and weights must be finite and non-negative.
+- World-space bounds are validated before calling `world.world_to_grid`, preventing that method's clipping behavior from silently accepting invalid physical positions.
+- Valid POIs are converted through `world.world_to_grid`, preserving grid XY orientation.
+- The provider does not generate a heatmap or mutate `task_state`, the scenario, or the world.
+- Task-specific filtering and world-to-grid conversion belong to the provider. Same-cell accumulation, normalization, output shape, dtype, and grid-coordinate bounds validation remain owned by the standalone generator.
+- The provider is not registered yet, and `WaypointMultiUAVEnv` was not modified.
+- No scenario, configuration, reward, policy, rollout-buffer, or training file was changed.
+
+### Validation
+
+- Before implementation, the new test failed during collection because `envs.waypoint.priority_inspection_task_element_provider` did not exist; this was the expected test-first failure.
+- After implementation, local `git diff --check` passed.
+- Local provider-focused validation passed: 23 tests in 0.17s.
+- Local provider-selection and heatmap-generator compatibility validation passed: 21 tests in 0.12s.
+- No dependencies were installed locally, and `PYTHONPATH` was not changed.
+- The IRMV server could not pull from GitHub directly. Equivalent patch content was transferred and applied with `git am`; no successful server-side GitHub pull is claimed.
+- The Mac/GitHub commits were `3918908 test: specify priority inspection task element provider` and `09ef582 feat: add priority inspection task element provider`.
+- Applying equivalent patch content on the IRMV server created commits `2276a6b test: specify priority inspection task element provider` and `d5ff9ad feat: add priority inspection task element provider`.
+- IRMV Docker validation used container `pjs_wayffusion`, set `CUDA_VISIBLE_DEVICES=0`, and executed tests as the numeric `pjs` UID/GID.
+- IRMV focused validation passed: 65 tests in 3.24s.
+- IRMV full regression validation passed: 171 tests in 9.00s.
+
+### Known limitations
+
+- The provider is not yet registered for `priority_inspection`, so the environment cannot automatically select it.
+- Provider output will be generated only during reset once registration is added.
+- Dynamic step-time refresh after POIs become visited is not implemented.
+- Deadline and repeat-visit semantics are not represented.
+- The semantic heatmap remains single-channel for non-empty elements.
+- Current unit tests use a dependency-light `GridWorld` stand-in rather than a full `MissionWorld` instance.
+
+### Next step
+
+- Add a test-first registration and real-environment integration contract for `priority_inspection`.
+- Verify that enabling provider resolution for `priority_inspection` automatically selects the new provider.
+- Use a real `MissionWorld` or real `WaypointMultiUAVEnv` episode to verify coordinate orientation and generated heatmap values.
+- Do not add dynamic step-time refresh in the same increment.
+
+### Related commit
+
+- Test-first specification: `3918908 test: specify priority inspection task element provider`.
+- Production implementation: `09ef582 feat: add priority inspection task element provider`.
+- Equivalent IRMV-applied test commit: `2276a6b test: specify priority inspection task element provider`.
+- Equivalent IRMV-applied production commit: `d5ff9ad feat: add priority inspection task element provider`.
