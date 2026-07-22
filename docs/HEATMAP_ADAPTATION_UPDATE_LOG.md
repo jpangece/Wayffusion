@@ -337,3 +337,65 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `4142f4d feat: add task element provider registry`.
 - Equivalent IRMV-applied test commit: `bdf9aa5 test: specify task element provider selection`.
 - Equivalent IRMV-applied production commit: `afd090b feat: add task element provider registry`.
+
+## 2026-07-22 — Task-element provider environment integration
+
+### Objective
+
+- Integrate the existing task-element provider resolver into the `WaypointMultiUAVEnv` reset lifecycle.
+- Preserve static source behavior and disabled-mode compatibility by default.
+
+### Changes
+
+- Added the focused environment integration specification `tests/test_task_element_provider_environment_integration.py`.
+- Updated `envs/waypoint_marl_env.py` to parse the optional `heatmap_observation.provider.enabled` setting.
+- Provider use defaults to `false` when either the provider section or its `enabled` field is absent, so existing configurations remain backward-compatible.
+- Reset now resolves the task-element source and passes the resulting raw elements to the existing heatmap generator.
+
+### Design decisions
+
+- Resolution occurs exactly once per reset after active scenario construction, `scenario.reset`, task-state initialization, and mission-goal metadata injection.
+- The active task name comes from `self.current_scenario.name`, reflecting the scenario selected for the current episode.
+- The resolver receives `self.current_scenario`, `self.world`, and `self.task_state` by identity.
+- A second reset performs one new resolution; neither `step` nor `step_global` resolves or invokes a provider.
+- When heatmap observation is disabled, providers are not constructed or invoked.
+- When provider use is disabled, static configured task elements remain the source.
+- When an enabled registered provider exists, its result replaces static elements.
+- An empty registered-provider result produces a zero heatmap without static fallback, while an unregistered task uses static configured elements.
+- `resolve_task_elements` owns source selection only. `generate_task_element_heatmap` retains ownership of validation, accumulation, normalization, shape, and dtype.
+- The environment does not modify, normalize, sort, clip, or grid-convert provider output.
+- No scenario, reward, policy, rollout-buffer, training, or configuration file was changed.
+
+### Validation
+
+- Before production integration, IRMV Docker execution of the new integration specification produced 4 passed and 3 failed tests. The expected failures showed provider construction counts remaining zero, proving that the environment was not yet calling the resolver.
+- After implementation, local `git diff --check` passed.
+- Local test collection was blocked because the local interpreter lacked `gymnasium` and `torch`; this was a local dependency limitation, not a product failure.
+- No dependencies were installed locally, and `PYTHONPATH` was not changed.
+- The IRMV server could not pull from GitHub directly. The two commits were transferred as the same patch content and applied with `git am`; no successful server-side GitHub pull is claimed.
+- The Mac/GitHub commits were `a2b9c86 test: specify provider environment integration` and `eb262d6 feat: integrate task element provider resolution`.
+- Applying that same patch content on the IRMV server created equivalent commits `4698025 test: specify provider environment integration` and `937de3a feat: integrate task element provider resolution`.
+- IRMV Docker validation used container `pjs_wayffusion`, set `CUDA_VISIBLE_DEVICES=0`, and executed tests as the numeric `pjs` UID/GID to avoid root-owned files in the bind-mounted repository.
+- IRMV focused validation passed: 42 tests in 3.30s.
+- IRMV full regression validation passed: 148 tests in 8.29s.
+
+### Known limitations
+
+- No real task-specific provider is registered yet.
+- Provider-derived task elements are generated only during reset.
+- Dynamic step-time refresh is not implemented.
+- Static configuration remains the fallback for unregistered tasks.
+- The semantic generator supports one channel for non-empty task elements.
+
+### Next step
+
+- Implement the first real task-specific provider for `priority_inspection` using a test-first increment.
+- Map unvisited POIs and their weights from `task_state` into raw grid-space task elements.
+- Do not add dynamic step-time refresh in the same increment.
+
+### Related commit
+
+- Test-first specification: `a2b9c86 test: specify provider environment integration`.
+- Production implementation: `eb262d6 feat: integrate task element provider resolution`.
+- Equivalent IRMV-applied test commit: `4698025 test: specify provider environment integration`.
+- Equivalent IRMV-applied production commit: `937de3a feat: integrate task element provider resolution`.
