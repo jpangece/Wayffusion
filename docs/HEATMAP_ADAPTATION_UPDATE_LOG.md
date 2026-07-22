@@ -276,3 +276,64 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `3b0108f feat: integrate task element heatmap observation`.
 - Equivalent IRMV-applied test commit: `c7a8ebf test: specify heatmap environment integration`.
 - Equivalent IRMV-applied production commit: `995bbf6 feat: integrate task element heatmap observation`.
+
+## 2026-07-22 — Task-element provider selection and static fallback
+
+### Objective
+
+- Define a test-first task-element provider selection and static fallback contract.
+- Add a small provider registry and resolver without integrating it into the environment yet.
+
+### Changes
+
+- Added `envs/waypoint/task_element_provider.py` with the provider protocol, registry operations, and source resolver.
+- Added the focused specification `tests/test_task_element_provider_selection.py`.
+- Defined `TaskElement` as a mapping containing raw task-element fields.
+- Defined `TaskElementProvider.build_task_elements` with `scenario`, `world`, and `task_state` inputs.
+- Added `register_task_element_provider`, `clear_task_element_provider_registry`, and `resolve_task_elements`.
+
+### Design decisions
+
+- If heatmap observation is disabled, resolution returns the configured static elements unchanged and neither constructs nor invokes a provider.
+- If provider use is disabled, resolution returns the static elements unchanged.
+- If both flags are enabled and the task is registered, the resolver constructs the provider once, invokes it once, and returns its result unchanged.
+- An empty registered-provider result means there are no live elements and does not trigger static fallback.
+- An unregistered task falls back to configured static elements without error.
+- The resolver does not validate, copy, sort, normalize, clip, mutate, or grid-convert task elements, and it does not call the heatmap generator.
+- Coordinate and priority validation, same-cell accumulation, and normalization remain owned by the standalone generator.
+- The registry rejects empty task names and duplicate registrations.
+- No environment, scenario, configuration, reward, policy, rollout-buffer, or training file was changed.
+
+### Validation
+
+- Local `git diff --check` passed.
+- Local provider-selection validation passed: 10 tests in 0.01s.
+- Local standalone-generator compatibility validation passed: 11 tests in 0.19s.
+- These focused tests required neither `gymnasium` nor `torch`; no dependencies were installed, and `PYTHONPATH` was not changed.
+- The IRMV server could not pull from GitHub directly. The two commits were transferred as the same patch content and applied with `git am`; no successful server-side GitHub pull is claimed.
+- The Mac/GitHub commits were `2d2582f test: specify task element provider selection` and `4142f4d feat: add task element provider registry`.
+- Applying that same patch content on the IRMV server created equivalent commits `bdf9aa5 test: specify task element provider selection` and `afd090b feat: add task element provider registry`.
+- IRMV Docker validation used container `pjs_wayffusion`, set `CUDA_VISIBLE_DEVICES=0`, and executed tests as the numeric `pjs` UID/GID to avoid root-owned files in the bind-mounted repository.
+- IRMV focused validation passed: 35 tests in 2.85s.
+- IRMV full regression validation passed: 141 tests in 8.62s.
+
+### Known limitations
+
+- The provider registry is not yet integrated into `WaypointMultiUAVEnv`.
+- No real task-specific provider is registered.
+- Static configured task elements remain the only source used by the environment.
+- Provider construction occurs per resolver call by contract; the environment lifecycle has not yet fixed whether resolution occurs once per reset.
+- Dynamic step-time task-element refresh is not implemented.
+
+### Next step
+
+- Add a test-first environment integration contract for the provider resolver.
+- The environment should parse an optional provider-enabled flag, call the resolver once during reset after scenario and task-state initialization, preserve static fallback, and remain unchanged when provider support is disabled.
+- Do not implement the `priority_inspection` adapter in that same increment.
+
+### Related commit
+
+- Test-first specification: `2d2582f test: specify task element provider selection`.
+- Production implementation: `4142f4d feat: add task element provider registry`.
+- Equivalent IRMV-applied test commit: `bdf9aa5 test: specify task element provider selection`.
+- Equivalent IRMV-applied production commit: `afd090b feat: add task element provider registry`.
