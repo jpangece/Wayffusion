@@ -49,7 +49,7 @@ def base_config() -> dict:
         {
             "num_agents": 2,
             "grid_size": 8,
-            "max_steps": 2,
+            "max_steps": 16,
             "task_name": "priority_inspection",
             "task_names": ["priority_inspection"],
         }
