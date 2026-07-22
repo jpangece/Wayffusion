@@ -219,3 +219,60 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `6ad5ad0 feat: add deterministic task element heatmap generator`.
 - Equivalent IRMV-applied test commit: `570e201 test: specify task element heatmap generator`.
 - Equivalent IRMV-applied production commit: `2409602 feat: add deterministic task element heatmap generator`.
+
+## 2026-07-22 — Task-element heatmap environment integration
+
+### Objective
+
+- Integrate the existing deterministic task-element heatmap generator into `WaypointMultiUAVEnv`.
+- Preserve disabled-mode observations and all existing compatibility behavior.
+
+### Changes
+
+- Added the focused integration specification `tests/test_heatmap_environment_integration.py`.
+- Updated `envs/waypoint_marl_env.py` to parse `heatmap_observation.task_elements`, defaulting to an empty list while retaining the existing `channels` default of `1`.
+- In enabled mode, reset calls `generate_task_element_heatmap` with the environment grid size, configured task elements, and channel count, then stores the result in `self.task_element_heatmap`.
+- Global and every per-agent observation expose the same stored values under `task_element_heatmap`.
+- The configured heatmap remains static throughout the episode; it is not regenerated, decayed, or mutated during a step.
+
+### Design decisions
+
+- Invalid configured task elements propagate `ValueError` from the standalone generator without environment-side clipping or repair.
+- Disabled mode preserves the exact legacy global and per-agent observation keys and does not invoke the generator.
+- Empty enabled task-element input preserves the existing all-zero `float32` behavior.
+- Existing enabled multi-channel zero-placeholder behavior remains unchanged when no task elements are configured.
+- Non-empty task elements use the generator's current single-channel semantic contract.
+- No reward, policy, rollout-buffer, training, task-logic, or configuration file was changed.
+
+### Validation
+
+- Before production integration, IRMV Docker execution of the new integration file produced 4 passed and 2 failed tests. The expected failures showed that configured heatmap values remained zero and that an invalid coordinate did not raise `ValueError`, confirming that environment integration was still missing.
+- After implementation, local `git diff --check` passed.
+- Local test collection was blocked because the local interpreter lacked `gymnasium` and `torch`; this was a local dependency limitation, not a product failure.
+- No dependencies were installed locally, and `PYTHONPATH` was not changed.
+- The IRMV server could not pull from GitHub directly. The two commits were transferred as the same patch content and applied with `git am`; no successful server-side GitHub pull is claimed.
+- The Mac/GitHub commits were `cadd1d7 test: specify heatmap environment integration` and `3b0108f feat: integrate task element heatmap observation`.
+- Applying that same patch content on the IRMV server created equivalent commits `c7a8ebf test: specify heatmap environment integration` and `995bbf6 feat: integrate task element heatmap observation`.
+- IRMV Docker validation used container `pjs_wayffusion`, set `CUDA_VISIBLE_DEVICES=0`, and executed tests as the numeric `pjs` UID/GID to avoid root-owned files in the bind-mounted repository.
+- IRMV focused validation passed: 25 tests in 2.35s.
+- IRMV full regression validation passed: 131 tests in 8.03s.
+
+### Known limitations
+
+- Task elements are currently static configuration data.
+- The heatmap is generated only on reset and does not mutate during an episode.
+- No task-specific adapter currently derives task elements from live mission state.
+- The generator supports one semantic priority channel for non-empty task elements.
+- Existing empty multi-channel placeholder behavior is compatibility-only and is not yet a semantic multi-channel implementation.
+
+### Next step
+
+- Define a task-element provider or adapter interface that derives normalized task elements from live task state without coupling task-specific semantics directly into `WaypointMultiUAVEnv`.
+- Keep the next increment test-first and backward-compatible.
+
+### Related commit
+
+- Test-first specification: `cadd1d7 test: specify heatmap environment integration`.
+- Production implementation: `3b0108f feat: integrate task element heatmap observation`.
+- Equivalent IRMV-applied test commit: `c7a8ebf test: specify heatmap environment integration`.
+- Equivalent IRMV-applied production commit: `995bbf6 feat: integrate task element heatmap observation`.
