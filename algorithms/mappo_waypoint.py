@@ -670,6 +670,7 @@ class MAPPOWaypointTrainer:
         record_fps: int = 8,
         randomization_mode: str = "inherit",
         goal_splits: list[str] | None = None,
+        evaluation_episode_seeds: list[int] | None = None,
     ) -> dict:
         from utils.waypoint_evaluation import (
             env_config_for_randomization_mode,
@@ -695,6 +696,7 @@ class MAPPOWaypointTrainer:
                 record_fps=record_fps,
                 env_config_fn=env_config_for_randomization_mode,
                 evaluate_fn=evaluate_waypoint_policy_per_task,
+                evaluation_episode_seeds=evaluation_episode_seeds,
             )
         results: dict[str, dict] = {}
         for current_mode in modes:
@@ -711,6 +713,7 @@ class MAPPOWaypointTrainer:
                 record_fps=record_fps,
                 randomization_mode=current_mode,
                 evaluate_fn=evaluate_waypoint_policy_per_task,
+                evaluation_episode_seeds=evaluation_episode_seeds,
             )
 
         if mode == "inherit":
@@ -752,6 +755,7 @@ class MAPPOWaypointTrainer:
         record_fps: int,
         env_config_fn,
         evaluate_fn,
+        evaluation_episode_seeds: list[int] | None = None,
     ) -> dict:
         normalized_splits = [str(split).lower() for split in goal_splits]
         results: dict[tuple[str, str], dict] = {}
@@ -771,6 +775,7 @@ class MAPPOWaypointTrainer:
                     randomization_mode=current_mode,
                     evaluate_fn=evaluate_fn,
                     goal_split=goal_split,
+                    evaluation_episode_seeds=evaluation_episode_seeds,
                 )
 
         combined: dict[str, float | str] = {
@@ -821,6 +826,7 @@ class MAPPOWaypointTrainer:
         randomization_mode: str,
         evaluate_fn,
         goal_split: str | None = None,
+        evaluation_episode_seeds: list[int] | None = None,
     ) -> dict:
         record_dir = None
         if output_dir is not None and int(record_episodes) > 0:
@@ -842,6 +848,7 @@ class MAPPOWaypointTrainer:
             record_format=record_format,
             record_fps=record_fps,
             record_prefix=f"update_{update_idx:04d}_{randomization_mode}",
+            evaluation_episode_seeds=evaluation_episode_seeds,
             **evaluate_kwargs,
         )
         if output_dir is not None and records:
@@ -903,6 +910,7 @@ class MAPPOWaypointTrainer:
         eval_goal_splits: list[str] | None = None,
         log_callback: Callable[[dict], None] | None = None,
         evaluation_enabled: bool = True,
+        evaluation_episode_seeds: list[int] | None = None,
     ) -> list[dict]:
         output_dir = Path(output_dir)
         checkpoints = output_dir / "checkpoints"
@@ -938,6 +946,7 @@ class MAPPOWaypointTrainer:
                     record_fps=record_fps,
                     randomization_mode=eval_randomization_mode,
                     goal_splits=eval_goal_splits,
+                    evaluation_episode_seeds=evaluation_episode_seeds,
                 )
                 record.update(evaluation_result)
             if update_idx % eval_interval == 0 or update_idx == total_updates:

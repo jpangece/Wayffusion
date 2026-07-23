@@ -86,6 +86,7 @@ def evaluate_waypoint_policy_episodes(
     record_fps: int = 8,
     record_prefix: str = "episode",
     goal_split: str | None = None,
+    evaluation_episode_seeds: list[int] | None = None,
 ) -> list[dict]:
     config = deepcopy(env_config)
     if task_name is not None:
@@ -102,7 +103,12 @@ def evaluate_waypoint_policy_episodes(
                 "goal_split": goal_split,
                 "mission_goal": split_goals[episode_idx % len(split_goals)],
             }
-        env.reset(seed=int(config.get("seed", 0)) + 1000 + episode_idx, options=reset_options)
+        episode_seed = (
+            int(evaluation_episode_seeds[episode_idx])
+            if evaluation_episode_seeds is not None
+            else int(config.get("seed", 0)) + 1000 + episode_idx
+        )
+        env.reset(seed=episode_seed, options=reset_options)
         done = False
         total_reward = 0.0
         steps = 0
@@ -194,6 +200,7 @@ def evaluate_waypoint_policy_per_task(
     record_fps: int = 8,
     record_prefix: str = "eval",
     goal_split: str | None = None,
+    evaluation_episode_seeds: list[int] | None = None,
 ) -> tuple[list[dict], dict[str, dict], dict]:
     all_records = []
     summaries = {}
@@ -213,6 +220,7 @@ def evaluate_waypoint_policy_per_task(
             record_fps=record_fps,
             record_prefix=f"{record_prefix}_{task_name}",
             goal_split=goal_split,
+            evaluation_episode_seeds=evaluation_episode_seeds,
         )
         all_records.extend(records)
         summaries[task_name] = _aggregate(records)

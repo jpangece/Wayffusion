@@ -20,6 +20,10 @@ from algorithms.mappo_waypoint import MAPPOWaypointTrainer, write_metrics_csv
 from envs.waypoint.priority_inspection_task_element_provider import (
     register_priority_inspection_task_element_provider,
 )
+from envs.waypoint.task_element_provider import clear_task_element_provider_registry
+from envs.waypoint.zero_task_element_provider import (
+    register_zero_task_element_provider,
+)
 from envs.waypoint_marl_env import WaypointMultiUAVEnv
 from policies import build_policy
 from utils.waypoint_vector_env import (
@@ -126,6 +130,31 @@ def resolve_experiment_evaluation_settings(
     }
 
 
+def resolve_evaluation_episode_seeds(
+    *,
+    train_config: dict,
+    eval_config: dict,
+    eval_episodes: int,
+) -> list[int] | None:
+    """Resolve and validate an optional fixed evaluation seed sequence."""
+    source = train_config.get(
+        "evaluation_episode_seeds",
+        eval_config.get("evaluation_episode_seeds"),
+    )
+    if source is None:
+        return None
+    if not isinstance(source, (list, tuple)):
+        raise ValueError("evaluation_episode_seeds must be a sequence of integers")
+    if len(source) != int(eval_episodes):
+        raise ValueError("evaluation_episode_seeds length must equal eval_episodes")
+    if any(type(seed) is not int for seed in source):
+        raise ValueError("evaluation_episode_seeds must contain only integers")
+    seeds = [int(seed) for seed in source]
+    if len(set(seeds)) != len(seeds):
+        raise ValueError("evaluation_episode_seeds must not contain duplicates")
+    return seeds
+
+
 def build_resolved_launch_snapshot(
     *,
     args,
@@ -138,6 +167,8 @@ def build_resolved_launch_snapshot(
     output_dir,
     run_name,
     train_config,
+    policy_init_seed=None,
+    evaluation_episode_seeds=None,
 ) -> dict:
     """Return the effective launcher decisions as YAML-serializable data."""
     snapshot = {
@@ -163,6 +194,12 @@ def build_resolved_launch_snapshot(
     for name in ("eval_interval", "eval_episodes", "record_eval_episodes"):
         if name in train_config:
             snapshot[name] = int(train_config[name])
+    if policy_init_seed is not None:
+        snapshot["policy_init_seed"] = int(policy_init_seed)
+    if evaluation_episode_seeds is not None:
+        snapshot["evaluation_episode_seeds"] = [
+            int(seed) for seed in evaluation_episode_seeds
+        ]
     return snapshot
 
 
@@ -177,6 +214,15 @@ def seed_training_rngs(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def seed_policy_initialization(policy_init_seed: int) -> None:
+    """Seed policy parameters independently of environment construction."""
+    random.seed(policy_init_seed)
+    np.random.seed(policy_init_seed)
+    torch.manual_seed(policy_init_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(policy_init_seed)
 
 
 def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
@@ -204,6 +250,16 @@ def register_heatmap_task_element_providers(env_config: dict) -> None:
     provider_config = heatmap_config.get("provider", {})
     if not isinstance(provider_config, dict) or not bool(provider_config.get("enabled", False)):
         return
+
+    source = str(provider_config.get("source", "priority_inspection"))
+    clear_task_element_provider_registry()
+    if source == "zero":
+        register_zero_task_element_provider()
+        return
+    if source == "none":
+        return
+    if source != "priority_inspection":
+        raise ValueError(f"Unsupported heatmap task-element provider source: {source!r}")
 
     task_names = set()
     configured_task = env_config.get("task_name")
@@ -338,6 +394,11 @@ def main() -> None:
     train_config["eval_episodes"] = evaluation_settings["eval_episodes"]
     train_config["record_eval_episodes"] = evaluation_settings["record_eval_episodes"]
     eval_episodes = evaluation_settings["eval_episodes"]
+    evaluation_episode_seeds = resolve_evaluation_episode_seeds(
+        train_config=train_config,
+        eval_config=eval_config,
+        eval_episodes=eval_episodes,
+    )
     record_eval_episodes = evaluation_settings["record_eval_episodes"]
     headless = evaluation_settings["headless"]
     record_format = str(args.record_format or eval_config.get("record_format", "gif"))
@@ -372,6 +433,8 @@ def main() -> None:
     if launch_config is not None and "--env_backend" not in explicit_options:
         env_backend = str(launch_config["env_backend"])
     env_batch = build_env_batch(env_config, train_config, task_names, args.envs_per_task, env_backend, args.env_workers)
+    policy_init_seed = int(train_config.get("policy_init_seed", training_seed))
+    seed_policy_initialization(policy_init_seed)
     policy = build_policy(train_config, env_batch.envs[0].global_observation_space, env_batch.envs[0].action_space_n)
     init_checkpoint = args.init_checkpoint
     if launch_config is not None and "--init-checkpoint" not in explicit_options:
@@ -406,6 +469,7 @@ def main() -> None:
             "record_format": record_format,
             "record_fps": record_fps,
             "goal_splits": list(args.eval_goal_splits or []),
+            "evaluation_episode_seeds": evaluation_episode_seeds,
         }
     )
     (snapshot / "eval_config.yaml").write_text(yaml.safe_dump(resolved_eval_config, sort_keys=False), encoding="utf-8")
@@ -418,6 +482,8 @@ def main() -> None:
         evaluation_enabled=evaluation_enabled,
         experiment_config=args.experiment_config,
         training_seed=training_seed,
+        policy_init_seed=policy_init_seed,
+        evaluation_episode_seeds=evaluation_episode_seeds,
         output_dir=output_dir,
         run_name=run_name,
         train_config=train_config,
@@ -457,6 +523,7 @@ def main() -> None:
         env_config=env_config,
         task_names=task_names,
         eval_episodes=eval_episodes,
+        evaluation_episode_seeds=evaluation_episode_seeds,
         headless=headless,
         record_eval_episodes=record_eval_episodes,
         record_format=record_format,
