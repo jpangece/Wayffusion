@@ -799,3 +799,113 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `d524ae3 feat: activate heatmap provider training path`.
 - Equivalent IRMV-applied test commit: `8ce57cc test: specify heatmap training activation smoke`.
 - Equivalent IRMV-applied production commit: `378f516 feat: activate heatmap provider training path`.
+
+## 2026-07-23 — Paired heatmap debug configurations and sanity-run artifact audit
+
+### Objective
+
+- Add explicit paired short-debug experiment configurations for `priority_inspection`.
+- Keep training, environment, and policy settings identical except for semantic heatmap activation.
+- Verify that both configurations launch through the real combined-config training path and complete two PPO updates.
+- Audit the generated snapshots, metrics, and checkpoints without claiming a performance benefit from the short runs.
+
+### Test-first specification
+
+- Added `tests/test_heatmap_experiment_config_contract.py`.
+- The Mac/GitHub test commit was `c3f124b test: specify paired heatmap experiment configs`.
+- Equivalent patch content was applied on IRMV as `bdc99b3 test: specify paired heatmap experiment configs`.
+- Initial local validation produced 1 failed, 1 passed, and 4 skipped tests in 0.05s.
+- Initial IRMV validation produced 1 failed, 1 passed, and 4 skipped tests in 0.07s.
+- The expected failure identified the missing `configs/experiments/priority_inspection_heatmap_on_debug.yaml` and `configs/experiments/priority_inspection_heatmap_off_debug.yaml` files.
+- The default-config protection test passed; the skipped tests depended on the missing experiment files.
+
+### Changes
+
+- Created `configs/experiments/priority_inspection_heatmap_on_debug.yaml`.
+- Created `configs/experiments/priority_inspection_heatmap_off_debug.yaml`.
+- Updated `scripts/train_mappo_waypoint.py` with combined experiment loading and optional `--experiment-config` support.
+- The Mac/GitHub implementation commit was `709e60e feat: add paired heatmap debug experiments`.
+- Equivalent patch content was applied on IRMV as `6f14cfe feat: add paired heatmap debug experiments`.
+- The IRMV server could not pull directly from GitHub; equivalent patches were transferred and applied with `git am`, and no successful server-side GitHub pull is claimed.
+
+### Combined experiment loader and CLI
+
+- Added public `load_experiment_config(path: str | Path) -> tuple[dict, dict, dict]`.
+- The loader requires top-level `experiment_name`, `seed`, `environment`, `policy`, and `training` fields and rejects malformed mappings or missing fields with clear errors.
+- Parsed data is deep-copied. `environment` becomes `env_config`; `policy` and `training` are merged into `train_config`; and the top-level seed is injected into both.
+- `env_backend`, `init_checkpoint`, and `evaluation_enabled` are extracted into `launch_config`.
+- Combined mode cannot be explicitly mixed with `--config` or `--env-config` and reuses the existing training path.
+- Configured task names, environment backend, and initialization checkpoint are used unless explicitly overridden.
+- With `evaluation_enabled: false`, evaluation and recording episode counts are set to zero and `trainer.evaluate` is replaced with a no-op result.
+- Existing separate-config behavior remains unchanged.
+
+### Paired configuration contract
+
+- Both configurations use deterministic seed 0, only `priority_inspection`, two agents, grid size 8, map size 1.0, `max_steps: 16`, `max_waypoint_distance: 0.20`, disabled domain randomization, four POIs, and `num_pois_range: null`.
+- Both use `DirectWaypointPolicy` with CNN channels `[8,16,32]`, agent hidden dimension 32, joint hidden dimension 64, and attention and unrelated optional encoders disabled.
+- Both use the sync vector backend, one environment, four rollout steps, two total updates, one epoch, minibatch size 4, learning rate 0.0003, disabled reward normalization, enabled advantage normalization, a constant learning-rate schedule, disabled evaluation, and no initialization checkpoint.
+- Heatmap ON sets `environment.heatmap_observation.enabled`, `provider.enabled`, `provider.refresh_on_step`, and `policy.use_task_element_heatmap` to `true`, with one heatmap channel.
+- Heatmap OFF sets the same four activation fields to `false`, while retaining one declared heatmap channel.
+- Default environment and policy configurations were not modified and remain heatmap-disabled.
+
+### Configuration and regression validation
+
+- IRMV contract validation passed: 6 tests in 0.10s.
+- Focused heatmap-training regression passed: 23 tests in 4.51s.
+- Full repository regression passed: 210 tests in 9.32s.
+
+### Sanity training and exact metrics
+
+- Both runs used `scripts/train_mappo_waypoint.py --experiment-config ...` and completed exactly two updates.
+- The output directories were `outputs/heatmap_off_debug_sanity` and `outputs/heatmap_on_debug_sanity`.
+- Matplotlib could not create `/.config/matplotlib` and used a temporary `/tmp` cache directory. The warning did not interrupt training; future container commands can set `MPLCONFIGDIR=/tmp/matplotlib-pjs`, and no production-code change is required.
+- Rounded OFF console rewards were approximately -0.009 at update 1 and -1.008 at update 2.
+- Rounded ON console rewards were approximately -0.009 at update 1 and -1.008 at update 2; these rounded values are not asserted to be exactly equal.
+- OFF exact `mean_rollout_reward` values were -0.009005821775645018 and -1.0083090085536242 for updates 1 and 2. OFF exact `value_loss` values were 0.0001763524196576327 and 5.3765764236450195. Weighted POI completion remained 0.0.
+- ON exact `mean_rollout_reward` values were -0.008946843212470412 and -1.008230492239818 for updates 1 and 2. ON exact `value_loss` values were 0.0002475009532645345 and 5.401249885559082. Weighted POI completion remained 0.0.
+
+### Artifact audit
+
+- Each run produced `training_metrics.csv`, a TensorBoard event file, `snapshot/cli_args.yaml`, `snapshot/env_config.yaml`, `snapshot/eval_config.yaml`, `snapshot/metadata.json`, `snapshot/train_config.yaml`, `checkpoints/checkpoint_0002.pt`, `checkpoints/checkpoint_best_eval.pt`, and `best_eval_summary.json`.
+- The OFF output directory was approximately 244 KB; `checkpoint_0002.pt` was 91,526 bytes and `checkpoint_best_eval.pt` was 91,671 bytes.
+- The ON output directory was approximately 300 KB; `checkpoint_0002.pt` was 120,154 bytes and `checkpoint_best_eval.pt` was 120,319 bytes.
+- The OFF checkpoint contained 23 state tensors and 20,453 total state elements, no heatmap-encoder tensors or elements, `use_task_element_heatmap: false`, and an effectively disabled heatmap.
+- The ON checkpoint contained 27 state tensors and 27,229 total state elements, four heatmap-encoder tensors containing 632 elements, `use_task_element_heatmap: true`, and an effectively enabled heatmap.
+- The final checkpoint size difference was 28,628 bytes and the state-element difference was 6,776. Of those additional state elements, 632 belong directly to the heatmap encoder; the remaining 6,144 are consistent with widened enabled-mode actor/critic fusion layers.
+- Both effective environment snapshots identify only `priority_inspection`. OFF records heatmap disabled; ON records heatmap, provider, and refresh enabled. Both train snapshots correctly record the policy heatmap flag, and both metrics files contain exactly two update rows.
+- The audit completed with `artifact_audit=PASS`.
+
+### Performance interpretation
+
+- The small numerical differences are not evidence of a heatmap benefit.
+- The runs used only four rollout steps and two updates. They support no success, completion, convergence, generalization, or performance claim.
+- This increment verifies launchability and artifact production only.
+
+### Artifact provenance and known issues
+
+- `snapshot/cli_args.yaml` records raw parser/default values rather than fully resolved launch values. It records `env_backend: process` even though the effective experiment backend was sync, and it records the parser's full default task list even though the effective environment snapshot contains only `priority_inspection`.
+- Therefore, `snapshot/cli_args.yaml` is not authoritative for resolved execution configuration.
+- Although evaluation was disabled and evaluation episodes were zero, both runs created `checkpoint_best_eval.pt` and `best_eval_summary.json`, recording zero evaluation reward and success rate. These artifacts are misleading when evaluation is disabled.
+- Spawn-based process-worker provider registration remains unverified.
+- The authoritative artifacts for these runs are `snapshot/env_config.yaml`, `snapshot/train_config.yaml`, `training_metrics.csv`, `checkpoint_0002.pt`, and `snapshot/metadata.json`.
+
+### Ownership
+
+- Combined experiment YAML owns explicit experiment intent.
+- `load_experiment_config` owns experiment splitting and seed propagation.
+- The launcher owns resolved task, backend, checkpoint, and evaluation selection.
+- Effective environment and training snapshots own final environment and policy/trainer configurations.
+- Checkpoints own model-state persistence, and `training_metrics.csv` owns per-update training metrics.
+
+### Next step
+
+- Add a test-first artifact-semantics contract so disabled evaluation neither runs evaluation logic nor creates best-evaluation checkpoint or summary artifacts.
+- Add a resolved launch snapshot separate from raw CLI arguments, or clarify snapshot semantics so effective backend, task names, checkpoint source, and evaluation activation are recorded unambiguously while preserving raw CLI arguments separately if useful.
+- Complete this before controlled pilot training; do not begin long training or make performance claims in the same increment.
+
+### Related commit
+
+- Test-first specification: `c3f124b test: specify paired heatmap experiment configs`.
+- Production implementation: `709e60e feat: add paired heatmap debug experiments`.
+- Equivalent IRMV-applied test commit: `bdc99b3 test: specify paired heatmap experiment configs`.
+- Equivalent IRMV-applied production commit: `6f14cfe feat: add paired heatmap debug experiments`.
