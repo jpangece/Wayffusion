@@ -609,3 +609,89 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `fbe049a feat: refresh provider heatmap after steps`.
 - Equivalent IRMV-applied test commit: `e524457 test: specify provider heatmap dynamic refresh`.
 - Equivalent IRMV-applied production commit: `d58b577 feat: refresh provider heatmap after steps`.
+
+## 2026-07-23 — Optional DirectWaypointPolicy heatmap consumption
+
+### Objective
+
+- Add optional `task_element_heatmap` consumption to `DirectWaypointPolicy` while preserving the existing default architecture.
+- Encode the heatmap spatially and condition both the actor and centralized critic without changing the environment, trainer, rollout buffer, candidate policy, or checked-in configurations.
+
+### Changes
+
+- Added the focused specification `tests/test_direct_waypoint_policy_heatmap_consumption.py`.
+- Added the optional policy flag `use_task_element_heatmap`, which defaults to `false`.
+- Updated `policies.build_policy` to pass the flag only to `DirectWaypointPolicy`; `CandidateSelectionWaypointPolicy` was not changed.
+- Updated `policies/direct_waypoint_policy.py` with observation-space and runtime validation, a separate `heatmap_encoder`, and actor/critic feature fusion.
+
+### Design decisions
+
+- Disabled mode creates no heatmap encoder module, parameter, or buffer; existing modules, `state_dict` keys, parameter shapes, tensor shapes, and strict checkpoint compatibility remain unchanged.
+- Observations without `task_element_heatmap` remain valid in disabled mode, and a present heatmap key is ignored.
+- Enabled mode requires `task_element_heatmap` in the observation space and infers its exact `[C,G,G]` shape rather than hard-coding channels or grid size.
+- One or more channels are supported, and channel and spatial dimensions must be positive.
+- Runtime heatmaps must be floating-point tensors with exact batched shape `[B,C,G,G]`. Missing keys, wrong rank, channels, spatial dimensions, batch size, or tensor type raise a clear error mentioning `task_element_heatmap`.
+- The existing `task_field` encoder and its input-channel count remain unchanged.
+- The separate `heatmap_encoder` uses `Conv2d`, `ReLU`, a second `Conv2d`, `ReLU`, `AdaptiveAvgPool2d((2,2))`, and `Flatten`; raw heatmaps are not flattened directly.
+- The encoded feature is appended to every actor context and to the centralized critic context. Actor output remains `[B,N,2]`, critic value remains `[B]`, and agent-mask behavior is unchanged.
+- The actor and critic share the encoded feature within a forward pass without detaching it, so either loss can backpropagate into the heatmap encoder.
+- Enabled architectures add parameters and widen fusion layers; strict loading of an old disabled checkpoint into an enabled architecture is expected to fail, and no checkpoint migration was added.
+
+### Validation
+
+- Before implementation, IRMV execution of the test-first specification produced 1 passed and 13 failed tests in 1.75s.
+- The passing test confirmed disabled compatibility. The expected failures showed that `DirectWaypointPolicy` did not accept `use_task_element_heatmap`, `build_policy` did not expose the option, and no `heatmap_encoder` existed.
+- Local `git diff --check` passed, and dependency-free AST parsing of the modified policy files passed.
+- PyTorch-based tests could not collect locally because the local interpreter lacked `torch`; this was a local dependency limitation, not a production failure.
+- No dependencies were installed locally, and `PYTHONPATH` was not changed.
+- An initial local command referenced two nonexistent test files and was corrected to the existing focused policy tests.
+- The IRMV server could not pull from GitHub directly. Equivalent patches were transferred and applied with `git am`; no successful server-side GitHub pull is claimed.
+- The Mac/GitHub commits were `9a697a7 test: specify direct policy heatmap consumption` and `9a72eeb feat: condition direct policy on task heatmap`.
+- Applying equivalent patch content on the IRMV server created commits `4a3ea15 test: specify direct policy heatmap consumption` and `6bd178a feat: condition direct policy on task heatmap`.
+- IRMV Docker validation used container `pjs_wayffusion`, set `CUDA_VISIBLE_DEVICES=0`, and executed tests with the numeric `pjs` UID/GID.
+- IRMV focused policy validation passed: 26 tests in 5.13s.
+- IRMV heatmap-pipeline regression validation passed: 32 tests in 1.28s.
+- IRMV full regression validation passed: 200 tests in 9.95s.
+
+### Verified policy behavior
+
+- `build_policy` exposes explicit heatmap opt-in.
+- The disabled architecture remains strict-checkpoint compatible with the prior architecture.
+- The enabled architecture creates a separate spatial encoder while leaving the `task_field` encoder input channels unchanged.
+- Batch sizes of one and greater than one preserve actor, critic, and agent-mask output shapes.
+- Equal-mass heatmaps with different spatial arrangements can change both actor outputs and critic values.
+- Separate actor and critic backward passes produce finite, non-`None` gradients for heatmap-encoder parameters.
+- Malformed runtime heatmaps are rejected.
+- Strict loading of a disabled checkpoint into an enabled architecture fails as expected because enabled mode adds parameters and wider fusion layers.
+- Existing direct-policy, UVFA, candidate-policy, environment-heatmap-pipeline, and full-repository tests remain compatible.
+
+### Ownership
+
+- The environment owns semantic heatmap generation and refresh.
+- Vector environments, the rollout buffer, and the trainer preserve the dictionary tensor.
+- `DirectWaypointPolicy` owns heatmap encoding and actor/critic fusion.
+- `CandidateSelectionWaypointPolicy` remains unchanged and still does not consume `task_element_heatmap`.
+
+### Known limitations
+
+- `use_task_element_heatmap` is not enabled by the default policy configuration.
+- Heatmap observation, provider resolution, and dynamic refresh are not enabled by the default environment configuration.
+- The main training launcher does not register the real `priority_inspection` provider.
+- No training smoke test has yet confirmed an end-to-end optimizer update with heatmap support enabled.
+- No performance improvement or ablation result has been measured; the validation establishes policy consumption, not training benefit.
+- Enabled architecture is not strict-load compatible with old disabled checkpoints.
+- `CandidateSelectionWaypointPolicy` still ignores `task_element_heatmap`.
+- The active actor consumes centralized global state rather than a strictly decentralized local observation.
+
+### Next step
+
+- Define a minimal test-first training-activation contract.
+- Add an explicit checked-in experimental configuration or launcher path that enables heatmap observation, provider resolution, step-time refresh, real `priority_inspection` provider registration, and `DirectWaypointPolicy` heatmap consumption.
+- Verify environment construction, policy construction, one rollout, and one optimizer update without beginning full training or performance evaluation in the same increment.
+
+### Related commit
+
+- Test-first specification: `9a697a7 test: specify direct policy heatmap consumption`.
+- Production implementation: `9a72eeb feat: condition direct policy on task heatmap`.
+- Equivalent IRMV-applied test commit: `4a3ea15 test: specify direct policy heatmap consumption`.
+- Equivalent IRMV-applied production commit: `6bd178a feat: condition direct policy on task heatmap`.
