@@ -82,6 +82,50 @@ def load_experiment_config(path: str | Path) -> tuple[dict, dict, dict]:
     return env_config, train_config, launch_config
 
 
+def resolve_experiment_evaluation_settings(
+    *,
+    args,
+    explicit_options,
+    train_config,
+    eval_config,
+) -> dict:
+    """Resolve evaluation settings from CLI, experiment, then eval defaults."""
+    def resolve_int(name, option, default):
+        if option in explicit_options:
+            value = getattr(args, name)
+        elif name in train_config:
+            value = train_config[name]
+        elif getattr(args, name, None) is not None:
+            value = getattr(args, name)
+        else:
+            value = eval_config.get(name, default)
+        return int(value)
+
+    eval_interval = resolve_int(
+        "eval_interval", "--eval_interval", train_config.get("total_updates", 1)
+    )
+    eval_episodes = resolve_int("eval_episodes", "--eval_episodes", 10)
+    record_eval_episodes = resolve_int(
+        "record_eval_episodes", "--record_eval_episodes", 2
+    )
+    if eval_interval <= 0:
+        raise ValueError("eval_interval must be positive")
+    if eval_episodes < 0:
+        raise ValueError("eval_episodes must be non-negative")
+    if record_eval_episodes < 0:
+        raise ValueError("record_eval_episodes must be non-negative")
+
+    headless = bool(train_config.get("headless", getattr(args, "headless", True)))
+    if "--headless" in explicit_options or "--no-headless" in explicit_options:
+        headless = bool(args.headless)
+    return {
+        "eval_interval": eval_interval,
+        "eval_episodes": eval_episodes,
+        "record_eval_episodes": record_eval_episodes,
+        "headless": headless,
+    }
+
+
 def build_resolved_launch_snapshot(
     *,
     args,
@@ -96,7 +140,7 @@ def build_resolved_launch_snapshot(
     train_config,
 ) -> dict:
     """Return the effective launcher decisions as YAML-serializable data."""
-    return {
+    snapshot = {
         "experiment_config": (
             None if experiment_config is None else str(experiment_config)
         ),
@@ -116,6 +160,10 @@ def build_resolved_launch_snapshot(
         "rollout_steps": int(train_config["rollout_steps"]),
         "total_updates": int(train_config["total_updates"]),
     }
+    for name in ("eval_interval", "eval_episodes", "record_eval_episodes"):
+        if name in train_config:
+            snapshot[name] = int(train_config[name])
+    return snapshot
 
 
 def safe_name(value: str) -> str:
@@ -280,12 +328,18 @@ def main() -> None:
     eval_randomization_mode = resolve_eval_randomization_mode(eval_config, args.eval_randomization)
     training_seed = int(args.seed if args.seed is not None else env_config.get("seed", 0))
     seed_training_rngs(training_seed)
-    eval_episodes = int(args.eval_episodes if args.eval_episodes is not None else eval_config.get("eval_episodes", 10))
-    record_eval_episodes = int(
-        args.record_eval_episodes
-        if args.record_eval_episodes is not None
-        else eval_config.get("record_eval_episodes", 2)
+    evaluation_settings = resolve_experiment_evaluation_settings(
+        args=args,
+        explicit_options=explicit_options,
+        train_config=train_config,
+        eval_config=eval_config,
     )
+    train_config["eval_interval"] = evaluation_settings["eval_interval"]
+    train_config["eval_episodes"] = evaluation_settings["eval_episodes"]
+    train_config["record_eval_episodes"] = evaluation_settings["record_eval_episodes"]
+    eval_episodes = evaluation_settings["eval_episodes"]
+    record_eval_episodes = evaluation_settings["record_eval_episodes"]
+    headless = evaluation_settings["headless"]
     record_format = str(args.record_format or eval_config.get("record_format", "gif"))
     record_fps = int(args.record_fps if args.record_fps is not None else eval_config.get("record_fps", 8))
     if args.experiment_config and "--tasks" not in explicit_options:
@@ -335,6 +389,8 @@ def main() -> None:
     if not evaluation_enabled:
         eval_episodes = 0
         record_eval_episodes = 0
+        train_config["eval_episodes"] = 0
+        train_config["record_eval_episodes"] = 0
     run_name = args.run_name or f"{train_config.get('name', 'mappo_waypoint')}_{'_'.join(task_names)}_N{env_config['num_agents']}"
     output_dir = make_output_dir(args.run_timestamp, run_name, args.output_dir, args.phase_name)
     snapshot = output_dir / "snapshot"
@@ -401,7 +457,7 @@ def main() -> None:
         env_config=env_config,
         task_names=task_names,
         eval_episodes=eval_episodes,
-        headless=bool(args.headless),
+        headless=headless,
         record_eval_episodes=record_eval_episodes,
         record_format=record_format,
         record_fps=record_fps,
