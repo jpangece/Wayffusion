@@ -1,0 +1,74 @@
+experiment_name: priority_inspection_heatmap_real_ablation_seed3
+seed: 3
+environment:
+  task_name: priority_inspection
+  task_names:
+    - priority_inspection
+  seed: 3
+  num_agents: 4
+  grid_size: 16
+  map_size: 1.0
+  max_steps: 64
+  max_waypoint_distance: 0.20
+  domain_randomization:
+    enabled: false
+  tasks:
+    priority_inspection:
+      num_pois: 8
+      num_pois_range: null
+  heatmap_observation:
+    enabled: true
+    channels: 1
+    provider:
+      enabled: true
+      refresh_on_step: true
+      source: priority_inspection
+policy:
+  policy_class: direct_waypoint
+  cnn_channels: [8, 16, 32]
+  agent_hidden_dim: 32
+  joint_hidden_dim: 64
+  use_attention: false
+  use_spatial_field_context: false
+  use_field_moment_context: false
+  use_connectivity_auxiliary_loss: false
+  use_comm_graph_encoder: false
+  use_uvfa_goal: false
+  use_task_element_heatmap: true
+  log_std_init: -1.0
+  log_std_min: -2.0
+  log_std_max: 0.2
+training:
+  env_backend: sync
+  num_envs: 2
+  rollout_steps: 32
+  total_updates: 200
+  epochs: 2
+  minibatch_size: 64
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_coef: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  learning_rate: 0.0003
+  max_grad_norm: 0.5
+  reward_norm: false
+  advantage_norm: true
+  lr_schedule: constant
+  target_kl: 0.05
+  init_checkpoint: null
+  evaluation_enabled: true
+  eval_interval: 20
+  eval_episodes: 8
+  record_eval_episodes: 0
+  headless: true
+  policy_init_seed: 3
+  evaluation_episode_seeds:
+    - 13000
+    - 13001
+    - 13002
+    - 13003
+    - 13004
+    - 13005
+    - 13006
+    - 13007
