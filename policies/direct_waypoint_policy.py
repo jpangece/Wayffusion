@@ -37,6 +37,7 @@ class DirectWaypointPolicy(nn.Module):
         use_uvfa_goal: bool = False,
         goal_embedding_dim: int = 64,
         goal_hidden_dim: int = 64,
+        use_task_element_heatmap: bool = False,
     ):
         super().__init__()
         del action_space
@@ -51,6 +52,7 @@ class DirectWaypointPolicy(nn.Module):
         self.use_connectivity_auxiliary_loss = bool(use_connectivity_auxiliary_loss)
         self.use_comm_graph_encoder = bool(use_comm_graph_encoder)
         self.use_uvfa_goal = bool(use_uvfa_goal)
+        self.use_task_element_heatmap = bool(use_task_element_heatmap)
 
         cnn_channels = cnn_channels or [16, 32, 64]
         task_field_space = observation_space["task_field"] if "task_field" in observation_space else observation_space["global_task_field"]
@@ -83,6 +85,35 @@ class DirectWaypointPolicy(nn.Module):
         self.field_encoder = nn.Sequential(*conv_layers)
         self.field_pool = nn.Sequential(nn.AdaptiveAvgPool2d(1), nn.Flatten())
         self.field_dim = last_channels
+        heatmap_dim = 0
+        if self.use_task_element_heatmap:
+            if "task_element_heatmap" not in observation_space:
+                raise ValueError(
+                    "task_element_heatmap must be present in observation_space when enabled"
+                )
+            heatmap_shape = tuple(observation_space["task_element_heatmap"].shape)
+            if (
+                len(heatmap_shape) != 3
+                or heatmap_shape[0] < 1
+                or heatmap_shape[1] < 1
+                or heatmap_shape[2] < 1
+                or heatmap_shape[1] != heatmap_shape[2]
+            ):
+                raise ValueError(
+                    "task_element_heatmap observation space must have shape [C, G, G]"
+                )
+            self.task_element_heatmap_shape = heatmap_shape
+            heatmap_hidden = max(4, int(cnn_channels[0]) // 2)
+            heatmap_out = max(4, int(cnn_channels[-1]) // 2)
+            self.heatmap_encoder = nn.Sequential(
+                nn.Conv2d(heatmap_shape[0], heatmap_hidden, kernel_size=3, stride=1, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(heatmap_hidden, heatmap_out, kernel_size=3, stride=1, padding=1),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool2d((2, 2)),
+                nn.Flatten(),
+            )
+            heatmap_dim = heatmap_out * 4
 
         agent_dim = int(observation_space["all_uav_states"].shape[-1])
         self.agent_encoder = nn.Sequential(
@@ -118,7 +149,7 @@ class DirectWaypointPolicy(nn.Module):
                 nn.Linear(goal_hidden_dim, goal_embedding_dim),
                 nn.ReLU(),
             )
-            state_input_dim = self.field_dim + agent_hidden_dim + global_dim
+            state_input_dim = self.field_dim + agent_hidden_dim + global_dim + heatmap_dim
             self.uvfa_state_encoder = nn.Sequential(
                 nn.Linear(state_input_dim, joint_hidden_dim),
                 nn.ReLU(),
@@ -129,8 +160,8 @@ class DirectWaypointPolicy(nn.Module):
             critic_dim = goal_embedding_dim * 3
         else:
             actor_goal_dim = task_dim
-            critic_dim = self.field_dim + agent_hidden_dim + task_dim + global_dim
-        actor_dim = agent_hidden_dim + self.field_dim + actor_goal_dim + global_dim + self.spatial_context_dim + self.field_moment_dim
+            critic_dim = self.field_dim + agent_hidden_dim + task_dim + global_dim + heatmap_dim
+        actor_dim = agent_hidden_dim + self.field_dim + actor_goal_dim + global_dim + self.spatial_context_dim + self.field_moment_dim + heatmap_dim
         self.actor = nn.Sequential(
             nn.Linear(actor_dim, agent_hidden_dim),
             nn.ReLU(),
@@ -220,11 +251,34 @@ class DirectWaypointPolicy(nn.Module):
             return obs["agent_mask"].bool()
         return torch.ones((batch_size, num_agents), dtype=torch.bool, device=self._task_field(obs).device)
 
+    def _encode_task_element_heatmap(
+        self,
+        obs: dict[str, torch.Tensor],
+        batch_size: int,
+    ) -> torch.Tensor | None:
+        if not self.use_task_element_heatmap:
+            return None
+        if "task_element_heatmap" not in obs:
+            raise KeyError("task_element_heatmap is required when heatmap consumption is enabled")
+        heatmap = obs["task_element_heatmap"]
+        if not isinstance(heatmap, torch.Tensor) or not torch.is_floating_point(heatmap):
+            raise ValueError("task_element_heatmap must be a floating-point tensor")
+        expected_shape = self.task_element_heatmap_shape
+        if heatmap.ndim != 4 or tuple(heatmap.shape[1:]) != expected_shape:
+            raise ValueError(
+                "task_element_heatmap must have batched shape "
+                f"[B, {expected_shape[0]}, {expected_shape[1]}, {expected_shape[2]}]"
+            )
+        if heatmap.shape[0] != batch_size:
+            raise ValueError("task_element_heatmap batch size must match the observation batch")
+        return self.heatmap_encoder(heatmap)
+
     def _forward_impl(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
         field, field_mask = self._masked_task_field(obs)
         field_feat = self.field_pool(self.field_encoder(field))
         agents = obs["all_uav_states"]
         batch_size, num_agents, _ = agents.shape
+        heatmap_feat = self._encode_task_element_heatmap(obs, batch_size)
         agent_mask = self._agent_mask(obs, batch_size, num_agents)
         agent_tokens = self.agent_encoder(agents)
         if self.use_attention:
@@ -240,7 +294,11 @@ class DirectWaypointPolicy(nn.Module):
             goal_embedding = self.encode_goal(obs)
             goal_per_agent = goal_embedding.unsqueeze(1).expand(batch_size, num_agents, -1)
             state_embedding = self.uvfa_state_encoder(
-                torch.cat([field_feat, pooled_agents, obs["global_info"]], dim=-1)
+                torch.cat(
+                    [field_feat, pooled_agents, obs["global_info"]]
+                    + ([heatmap_feat] if heatmap_feat is not None else []),
+                    dim=-1,
+                )
             )
             critic_input = torch.cat(
                 [state_embedding, goal_embedding, state_embedding * goal_embedding],
@@ -256,7 +314,13 @@ class DirectWaypointPolicy(nn.Module):
         else:
             task_per_agent = obs["task_id"].unsqueeze(1).expand(batch_size, num_agents, -1)
             pieces = [agent_tokens, field_per_agent, task_per_agent, global_per_agent]
-            critic_input = torch.cat([field_feat, pooled_agents, obs["task_id"], obs["global_info"]], dim=-1)
+            critic_input = torch.cat(
+                [field_feat, pooled_agents, obs["task_id"], obs["global_info"]]
+                + ([heatmap_feat] if heatmap_feat is not None else []),
+                dim=-1,
+            )
+        if heatmap_feat is not None:
+            pieces.append(heatmap_feat.unsqueeze(1).expand(batch_size, num_agents, -1))
         if self.use_spatial_field_context:
             pieces.append(self._spatial_field_context(field, agents[..., :2]))
         if self.use_field_moment_context:

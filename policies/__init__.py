@@ -70,6 +70,7 @@ def build_policy(policy_config: dict, observation_space, action_space):
             use_comm_graph_encoder=bool(policy_config.get("use_comm_graph_encoder", False)),
             goal_embedding_dim=int(policy_config.get("goal_embedding_dim", 64)),
             goal_hidden_dim=int(policy_config.get("goal_hidden_dim", 64)),
+            use_task_element_heatmap=bool(policy_config.get("use_task_element_heatmap", False)),
         )
     raise ValueError(f"Unsupported waypoint MARL policy class: {policy_class}")
 
