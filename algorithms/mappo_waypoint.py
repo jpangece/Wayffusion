@@ -836,6 +836,8 @@ class MAPPOWaypointTrainer:
         evaluate_kwargs = {}
         if goal_split is not None:
             evaluate_kwargs["goal_split"] = goal_split
+        if evaluation_episode_seeds is not None:
+            evaluate_kwargs["evaluation_episode_seeds"] = evaluation_episode_seeds
         records, task_summaries, overall = evaluate_fn(
             env_config,
             self.policy,
@@ -848,7 +850,6 @@ class MAPPOWaypointTrainer:
             record_format=record_format,
             record_fps=record_fps,
             record_prefix=f"update_{update_idx:04d}_{randomization_mode}",
-            evaluation_episode_seeds=evaluation_episode_seeds,
             **evaluate_kwargs,
         )
         if output_dir is not None and records:
