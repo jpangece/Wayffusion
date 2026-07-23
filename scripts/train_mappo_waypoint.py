@@ -48,6 +48,40 @@ def deep_update(base: dict, override: dict) -> dict:
     return result
 
 
+def load_experiment_config(path: str | Path) -> tuple[dict, dict, dict]:
+    """Load a combined experiment into environment, training, and launch data."""
+    experiment = load_yaml(path)
+    if not isinstance(experiment, dict):
+        raise ValueError("experiment config must be a mapping")
+    required = {"experiment_name", "seed", "environment", "policy", "training"}
+    missing = sorted(required.difference(experiment))
+    if missing:
+        raise ValueError(
+            "experiment config is missing required field(s): " + ", ".join(missing)
+        )
+    for section in ("environment", "policy", "training"):
+        if not isinstance(experiment[section], dict):
+            raise ValueError(f"experiment config field '{section}' must be a mapping")
+
+    env_config = deepcopy(experiment["environment"])
+    train_config = deepcopy(experiment["policy"])
+    train_config.update(deepcopy(experiment["training"]))
+    seed = int(experiment["seed"])
+    env_config["seed"] = seed
+    train_config["seed"] = seed
+    try:
+        launch_config = {
+            "env_backend": train_config.pop("env_backend"),
+            "init_checkpoint": train_config.pop("init_checkpoint"),
+            "evaluation_enabled": train_config.pop("evaluation_enabled"),
+        }
+    except KeyError as exc:
+        raise ValueError(
+            f"experiment training config is missing launcher field: {exc.args[0]}"
+        ) from exc
+    return env_config, train_config, launch_config
+
+
 def safe_name(value: str) -> str:
     return safe_slug(value)
 
@@ -158,6 +192,7 @@ def log_tensorboard(writer, record: dict, mode: str = "core") -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--experiment-config", default=None)
     parser.add_argument("--config", default="configs/policy/mappo_waypoint.yaml")
     parser.add_argument("--env-config", default="configs/env/waypoint_missions.yaml")
     parser.add_argument("--eval-config", default="configs/eval/waypoint_eval.yaml")
@@ -194,9 +229,18 @@ def main() -> None:
     parser.add_argument("--env_workers", type=int, default=None)
     args = parser.parse_args()
 
-    train_config = load_yaml(args.config)
+    explicit_options = {argument.split("=", 1)[0] for argument in sys.argv[1:] if argument.startswith("--")}
+    if args.experiment_config and ({"--config", "--env-config"} & explicit_options):
+        parser.error("--experiment-config cannot be combined with --config or --env-config")
+
+    launch_config = None
+    if args.experiment_config:
+        env_config, train_config, launch_config = load_experiment_config(args.experiment_config)
+    else:
+        train_config = load_yaml(args.config)
+        env_config = load_yaml(args.env_config)
     eval_config = load_yaml(args.eval_config)
-    env_config = env_config_for_randomization_mode(load_yaml(args.env_config), args.train_randomization)
+    env_config = env_config_for_randomization_mode(env_config, args.train_randomization)
     eval_randomization_mode = resolve_eval_randomization_mode(eval_config, args.eval_randomization)
     training_seed = int(args.seed if args.seed is not None else env_config.get("seed", 0))
     seed_training_rngs(training_seed)
@@ -208,7 +252,11 @@ def main() -> None:
     )
     record_format = str(args.record_format or eval_config.get("record_format", "gif"))
     record_fps = int(args.record_fps if args.record_fps is not None else eval_config.get("record_fps", 8))
-    task_names = [str(task) for task in args.tasks]
+    if args.experiment_config and "--tasks" not in explicit_options:
+        configured_tasks = env_config.get("task_names", [env_config.get("task_name")])
+        task_names = [str(task) for task in configured_tasks if task is not None]
+    else:
+        task_names = [str(task) for task in args.tasks]
     env_config["task_names"] = task_names
     env_config["task_name"] = task_names[0] if len(task_names) == 1 else None
     env_config["task_sampling_probs"] = {task: 1.0 for task in task_names}
@@ -230,10 +278,16 @@ def main() -> None:
 
     # Fork-based process workers inherit registration; spawn workers still need
     # an explicit worker-side registration hook in a later increment.
-    env_batch = build_env_batch(env_config, train_config, task_names, args.envs_per_task, args.env_backend, args.env_workers)
+    env_backend = args.env_backend
+    if launch_config is not None and "--env_backend" not in explicit_options:
+        env_backend = str(launch_config["env_backend"])
+    env_batch = build_env_batch(env_config, train_config, task_names, args.envs_per_task, env_backend, args.env_workers)
     policy = build_policy(train_config, env_batch.envs[0].global_observation_space, env_batch.envs[0].action_space_n)
-    if args.init_checkpoint:
-        checkpoint_path = Path(args.init_checkpoint)
+    init_checkpoint = args.init_checkpoint
+    if launch_config is not None and "--init-checkpoint" not in explicit_options:
+        init_checkpoint = launch_config["init_checkpoint"]
+    if init_checkpoint:
+        checkpoint_path = Path(init_checkpoint)
         if not checkpoint_path.is_absolute():
             checkpoint_path = ROOT / checkpoint_path
         checkpoint = torch.load(checkpoint_path, map_location="cpu")
@@ -241,6 +295,11 @@ def main() -> None:
         policy.load_state_dict(state_dict, strict=True)
         print(f"[waypoint-mappo] loaded init_checkpoint={checkpoint_path}", flush=True)
     trainer = MAPPOWaypointTrainer(env_batch, policy, train_config)
+    evaluation_enabled = launch_config is None or bool(launch_config["evaluation_enabled"])
+    if not evaluation_enabled:
+        eval_episodes = 0
+        record_eval_episodes = 0
+        trainer.evaluate = lambda *args, **kwargs: {}
     run_name = args.run_name or f"{train_config.get('name', 'mappo_waypoint')}_{'_'.join(task_names)}_N{env_config['num_agents']}"
     output_dir = make_output_dir(args.run_timestamp, run_name, args.output_dir, args.phase_name)
     snapshot = output_dir / "snapshot"

@@ -1,0 +1,59 @@
+experiment_name: priority_inspection_heatmap_on_debug
+seed: 0
+environment:
+  task_name: priority_inspection
+  task_names:
+    - priority_inspection
+  seed: 0
+  num_agents: 2
+  grid_size: 8
+  map_size: 1.0
+  max_steps: 16
+  max_waypoint_distance: 0.20
+  domain_randomization:
+    enabled: false
+  tasks:
+    priority_inspection:
+      num_pois: 4
+      num_pois_range: null
+  heatmap_observation:
+    enabled: true
+    channels: 1
+    provider:
+      enabled: true
+      refresh_on_step: true
+policy:
+  policy_class: direct_waypoint
+  cnn_channels: [8, 16, 32]
+  agent_hidden_dim: 32
+  joint_hidden_dim: 64
+  use_attention: false
+  use_spatial_field_context: false
+  use_field_moment_context: false
+  use_connectivity_auxiliary_loss: false
+  use_comm_graph_encoder: false
+  use_uvfa_goal: false
+  use_task_element_heatmap: true
+  log_std_init: -1.0
+  log_std_min: -2.0
+  log_std_max: 0.2
+training:
+  env_backend: sync
+  num_envs: 1
+  rollout_steps: 4
+  total_updates: 2
+  epochs: 1
+  minibatch_size: 4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_coef: 0.2
+  ent_coef: 0.01
+  vf_coef: 0.5
+  learning_rate: 0.0003
+  max_grad_norm: 0.5
+  reward_norm: false
+  advantage_norm: true
+  lr_schedule: constant
+  target_kl: 0.05
+  evaluation_enabled: false
+  init_checkpoint: null
