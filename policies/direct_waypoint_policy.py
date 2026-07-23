@@ -9,6 +9,11 @@ from policies.candidate_selection_policy import _masked_mean
 from policies.policy_output import PolicyOutput
 
 
+def _observation_space_entries(observation_space):
+    spaces = getattr(observation_space, "spaces", None)
+    return spaces if spaces is not None else observation_space
+
+
 class DirectWaypointPolicy(nn.Module):
     """Gaussian delta policy that directly outputs final waypoint coordinates."""
 
@@ -55,7 +60,8 @@ class DirectWaypointPolicy(nn.Module):
         self.use_task_element_heatmap = bool(use_task_element_heatmap)
 
         cnn_channels = cnn_channels or [16, 32, 64]
-        task_field_space = observation_space["task_field"] if "task_field" in observation_space else observation_space["global_task_field"]
+        observation_spaces = _observation_space_entries(observation_space)
+        task_field_space = observation_spaces["task_field"] if "task_field" in observation_spaces else observation_spaces["global_task_field"]
         in_channels = int(task_field_space.shape[0])
         field_height = int(task_field_space.shape[-2])
         field_width = int(task_field_space.shape[-1])
@@ -87,11 +93,11 @@ class DirectWaypointPolicy(nn.Module):
         self.field_dim = last_channels
         heatmap_dim = 0
         if self.use_task_element_heatmap:
-            if "task_element_heatmap" not in observation_space:
+            if "task_element_heatmap" not in observation_spaces:
                 raise ValueError(
                     "task_element_heatmap must be present in observation_space when enabled"
                 )
-            heatmap_shape = tuple(observation_space["task_element_heatmap"].shape)
+            heatmap_shape = tuple(observation_spaces["task_element_heatmap"].shape)
             if (
                 len(heatmap_shape) != 3
                 or heatmap_shape[0] < 1
@@ -115,7 +121,7 @@ class DirectWaypointPolicy(nn.Module):
             )
             heatmap_dim = heatmap_out * 4
 
-        agent_dim = int(observation_space["all_uav_states"].shape[-1])
+        agent_dim = int(observation_spaces["all_uav_states"].shape[-1])
         self.agent_encoder = nn.Sequential(
             nn.Linear(agent_dim, agent_hidden_dim),
             nn.ReLU(),
@@ -137,11 +143,11 @@ class DirectWaypointPolicy(nn.Module):
             )
             self.comm_graph_norm = nn.LayerNorm(agent_hidden_dim)
 
-        task_dim = int(observation_space["task_id"].shape[0])
-        global_dim = int(observation_space["global_info"].shape[0])
+        task_dim = int(observation_spaces["task_id"].shape[0])
+        global_dim = int(observation_spaces["global_info"].shape[0])
         if self.use_uvfa_goal:
-            mission_goal_dim = int(observation_space["mission_goal"].shape[0])
-            goal_mask_dim = int(observation_space["goal_mask"].shape[0])
+            mission_goal_dim = int(observation_spaces["mission_goal"].shape[0])
+            goal_mask_dim = int(observation_spaces["goal_mask"].shape[0])
             goal_input_dim = task_dim + mission_goal_dim + goal_mask_dim
             self.goal_encoder = nn.Sequential(
                 nn.Linear(goal_input_dim, goal_hidden_dim),

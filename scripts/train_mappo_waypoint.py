@@ -17,6 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from algorithms.mappo_waypoint import MAPPOWaypointTrainer, write_metrics_csv
+from envs.waypoint.priority_inspection_task_element_provider import (
+    register_priority_inspection_task_element_provider,
+)
 from envs.waypoint_marl_env import WaypointMultiUAVEnv
 from policies import build_policy
 from utils.waypoint_vector_env import (
@@ -74,6 +77,27 @@ def sync_policy_env_config(train_config: dict, env_config: dict) -> None:
             train_config[key] = env_config[key]
     if "max_delta" not in train_config and "max_waypoint_distance" in env_config:
         train_config["max_delta"] = env_config["max_waypoint_distance"]
+
+
+def register_heatmap_task_element_providers(env_config: dict) -> None:
+    heatmap_config = env_config.get("heatmap_observation", {})
+    if not isinstance(heatmap_config, dict) or not bool(heatmap_config.get("enabled", False)):
+        return
+    provider_config = heatmap_config.get("provider", {})
+    if not isinstance(provider_config, dict) or not bool(provider_config.get("enabled", False)):
+        return
+
+    task_names = set()
+    configured_task = env_config.get("task_name")
+    if configured_task is not None:
+        task_names.add(str(configured_task))
+    configured_tasks = env_config.get("task_names", [])
+    if isinstance(configured_tasks, str):
+        task_names.add(configured_tasks)
+    elif configured_tasks is not None:
+        task_names.update(str(task_name) for task_name in configured_tasks)
+    if "priority_inspection" in task_names:
+        register_priority_inspection_task_element_provider()
 
 
 def make_output_dir(timestamp: str | None, run_name: str, output_dir: str | None = None, phase_name: str = "") -> Path:
@@ -202,7 +226,10 @@ def main() -> None:
     if args.eval_interval is not None:
         train_config["eval_interval"] = int(args.eval_interval)
     sync_policy_env_config(train_config, env_config)
+    register_heatmap_task_element_providers(env_config)
 
+    # Fork-based process workers inherit registration; spawn workers still need
+    # an explicit worker-side registration hook in a later increment.
     env_batch = build_env_batch(env_config, train_config, task_names, args.envs_per_task, args.env_backend, args.env_workers)
     policy = build_policy(train_config, env_batch.envs[0].global_observation_space, env_batch.envs[0].action_space_n)
     if args.init_checkpoint:
