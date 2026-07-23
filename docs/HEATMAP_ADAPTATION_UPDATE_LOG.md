@@ -1334,3 +1334,90 @@ This document records incremental design, implementation, testing, and evaluatio
 - Reuse one ordered evaluation episode list across the three conditions within each training seed, but use a distinct fixed evaluation block for each training seed so all results do not depend on the same eight scenarios.
 - Run conditions sequentially, audit every artifact before aggregate analysis, and aggregate primarily per training seed rather than per checkpoint.
 - Use REAL minus ZERO as the primary semantic-information contrast, with ZERO minus OFF and REAL minus OFF as secondary decomposition contrasts.
+
+## 2026-07-23 — Multi-seed capacity-control contract and experiment configurations
+
+### Objective
+
+- Extend the completed seed-0 OFF/REAL/ZERO experiment into a controlled five-training-seed protocol.
+- Define every training, policy-initialization, and evaluation-scenario mapping through a test-first contract before additional training.
+- Preserve paired comparisons within each training seed without making all training seeds depend on the same eight evaluation scenarios.
+
+### Test-first contract
+
+- Added `tests/test_heatmap_multiseed_ablation_contract.py`.
+- The Mac/GitHub commit was `881eee4 test: specify heatmap multiseed ablation`; equivalent patch content was applied on IRMV as `be3727f test: specify heatmap multiseed ablation`.
+- Initial local validation produced 4 failed, 3 passed, and 7 skipped tests in 0.05s. Initial IRMV validation produced 4 failed, 3 passed, and 7 skipped tests in 0.11s.
+- The four expected failures corresponded exactly to missing OFF, REAL, and ZERO configurations for seeds 1, 2, 3, and 4.
+- The completed seed-0 protocol, evaluation-block validation, and aggregate-analysis semantics passed.
+- Before configuration implementation, related contracts passed 34 tests with 1 skipped locally and 35 tests on IRMV.
+
+### Experiment matrix and seed protocol
+
+- The matrix contains five training seeds and three conditions per seed: 15 total runs.
+- The three seed-0 runs are complete. The twelve seed-1 through seed-4 runs have not been executed.
+
+| Training seed | Policy initialization seed | Ordered evaluation episode seeds |
+|---:|---:|---|
+| 0 | 0 | 10000 through 10007 |
+| 1 | 1 | 11000 through 11007 |
+| 2 | 2 | 12000 through 12007 |
+| 3 | 3 | 13000 through 13007 |
+| 4 | 4 | 14000 through 14007 |
+
+- OFF, REAL, and ZERO share the same ordered eight-episode block within a training seed, preserving paired condition comparisons.
+- Evaluation blocks are pairwise disjoint across training seeds, reducing dependence on one common set of eight scenarios.
+- Checkpoint evaluations remain repeated measurements rather than independent training samples. Aggregate statistics must use one summary or contrast per training seed.
+
+### Added configurations
+
+- Seed 1: `configs/experiments/priority_inspection_heatmap_off_ablation_seed1.yaml`, `configs/experiments/priority_inspection_heatmap_real_ablation_seed1.yaml`, and `configs/experiments/priority_inspection_heatmap_zero_ablation_seed1.yaml`.
+- Seed 2: `configs/experiments/priority_inspection_heatmap_off_ablation_seed2.yaml`, `configs/experiments/priority_inspection_heatmap_real_ablation_seed2.yaml`, and `configs/experiments/priority_inspection_heatmap_zero_ablation_seed2.yaml`.
+- Seed 3: `configs/experiments/priority_inspection_heatmap_off_ablation_seed3.yaml`, `configs/experiments/priority_inspection_heatmap_real_ablation_seed3.yaml`, and `configs/experiments/priority_inspection_heatmap_zero_ablation_seed3.yaml`.
+- Seed 4: `configs/experiments/priority_inspection_heatmap_off_ablation_seed4.yaml`, `configs/experiments/priority_inspection_heatmap_real_ablation_seed4.yaml`, and `configs/experiments/priority_inspection_heatmap_zero_ablation_seed4.yaml`.
+- The Mac/GitHub implementation commit was `5f4e1df feat: add heatmap multiseed ablation configs`; equivalent patch content was applied on IRMV as `3d12674 feat: add heatmap multiseed ablation configs`.
+
+### Configuration invariants
+
+- Corresponding conditions across seeds differ only in experiment name, seed, policy initialization seed, and evaluation episode seeds.
+- Within one seed, REAL and ZERO differ only in experiment name and provider source.
+- OFF differs only in experiment name and the permitted heatmap observation, provider, refresh, and policy-consumption activation fields.
+- Environment geometry, task definition, policy hidden dimensions, optimizer settings, training budget, evaluation schedule, recording, domain randomization, and initialization-checkpoint settings remain identical.
+
+### Shared runtime budget
+
+- Every configuration uses only `priority_inspection`, four agents, grid size 16, eight POIs, disabled domain randomization, the sync backend, and two environments.
+- Every run specifies 32 rollout steps, 200 updates, two epochs, minibatch size 64, evaluation every 20 updates with eight episodes, no recording, headless execution, and no initialization checkpoint.
+
+### Final IRMV validation
+
+- The multi-seed contract passed 14 tests in 0.21s.
+- Existing capacity contracts passed 35 tests in 2.36s.
+- Direct YAML validation reported `parsed_multiseed_yaml_files=12`.
+- The full repository regression passed 253 tests in 9.59s.
+- Final result: `heatmap_multiseed_config_validation=PASS`.
+- Validation used container `pjs_wayffusion`, `CUDA_VISIBLE_DEVICES=0`, `MPLCONFIGDIR=/tmp/matplotlib-pjs`, and the numeric `pjs` UID/GID.
+
+### Interpretation
+
+- The five-seed, three-condition matrix is fully specified, and the seed 1–4 configurations are structurally and semantically validated.
+- No seed 1–4 training has run. This increment validates experimental design and configuration correctness, not performance.
+
+### Planned execution order
+
+- Run seed 1 OFF, REAL, and ZERO; then seed 2 OFF, REAL, and ZERO; then seed 3 OFF, REAL, and ZERO; then seed 4 OFF, REAL, and ZERO.
+- Run every condition sequentially and audit artifacts after each condition.
+- Use REAL minus ZERO per training seed as the primary contrast. Aggregate contrast values across training seeds only after all twelve artifact audits pass.
+- Long REAL and ZERO runs previously took approximately ten to eleven minutes. Use a persistent `tmux` session to protect future execution from SSH disconnections, and do not run multiple conditions concurrently on the same GPU.
+
+### Known limitations
+
+- Seed 1–4 training results and multi-seed aggregate statistics do not exist yet.
+- `CandidateSelectionWaypointPolicy` remains out of scope, spawn-based process-worker registration remains unverified, and the actor remains centralized rather than strictly decentralized.
+
+### Related commit
+
+- Test-first specification: `881eee4 test: specify heatmap multiseed ablation`.
+- Configuration implementation: `5f4e1df feat: add heatmap multiseed ablation configs`.
+- Equivalent IRMV-applied test commit: `be3727f test: specify heatmap multiseed ablation`.
+- Equivalent IRMV-applied configuration commit: `3d12674 feat: add heatmap multiseed ablation configs`.
