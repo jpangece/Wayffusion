@@ -695,3 +695,107 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `9a72eeb feat: condition direct policy on task heatmap`.
 - Equivalent IRMV-applied test commit: `4a3ea15 test: specify direct policy heatmap consumption`.
 - Equivalent IRMV-applied production commit: `6bd178a feat: condition direct policy on task heatmap`.
+
+## 2026-07-23 — End-to-end heatmap training activation smoke
+
+### Objective
+
+- Verify that semantic task-element heatmaps can be activated through the real waypoint MAPPO training path.
+- Verify one real rollout, one real optimizer update, and heatmap-encoder participation in optimization.
+- Preserve disabled-policy behavior and unregistered-provider static fallback.
+
+### Changes
+
+- Added the focused smoke specification `tests/test_heatmap_training_activation_smoke.py`.
+- Updated `policies/direct_waypoint_policy.py` to normalize observation-space lookup for ordinary mapping-like spaces and real `gymnasium.spaces.Dict` instances.
+- Added the public launcher hook `register_heatmap_task_element_providers(env_config: dict) -> None` to `scripts/train_mappo_waypoint.py`.
+- Integrated the registration hook after CLI task selection and configuration synchronization and before environment construction.
+- Default YAML files, the trainer, environment, vector environment, rollout buffer, providers, candidate policy, evaluation, rewards, and scenarios were not changed.
+
+### Test-first findings and production fixes
+
+- Initial IRMV execution produced 2 passed and 2 failed tests in 3.04s.
+- One expected failure raised `task_element_heatmap must be present in observation_space when enabled` even though the real `gymnasium.spaces.Dict` visibly contained `task_element_heatmap: Box(..., (1,8,8), float32)`.
+- The old lookup treated the Gymnasium Dict space object like an ordinary mapping. The production fix uses the public `observation_space.spaces` mapping for Gymnasium Dict and the original object for ordinary mapping-like test spaces; no private Gymnasium attributes are used.
+- The normalized lookup supplies task-field or global-task-field, heatmap, UAV-state, task-ID, global-info, and UVFA goal-space dimensions.
+- The other expected failure showed that `scripts.train_mappo_waypoint` did not expose `register_heatmap_task_element_providers`; this was the intended missing launcher activation hook.
+
+### Launcher registration contract
+
+- `register_heatmap_task_element_providers` returns without registration unless both `heatmap_observation.enabled` and `heatmap_observation.provider.enabled` are true; step-time refresh is not required for registration.
+- The hook examines both `task_name` and `task_names` and registers the real `priority_inspection` provider only when that task is active.
+- Registration calls `register_priority_inspection_task_element_provider()` and remains explicit and idempotent through the existing task-specific registration contract.
+- Importing the launcher or provider module has no registration side effect.
+- Heatmap-disabled, provider-disabled, and unrelated-task launches remain unchanged.
+- Sync and thread backends use the parent-process registry. Fork-based process workers inherit parent registration, while spawn-based workers may require a future worker-side registration hook; spawn support was not verified in this increment.
+
+### Smoke configuration and production path
+
+- The test-local environment configuration selects `priority_inspection`, enables a one-channel heatmap, provider resolution, and `refresh_on_step`, disables domain randomization, and uses deterministic seed 83.
+- The smoke setup uses two UAVs, grid size 8, `max_steps: 16`, four POIs, the sync vector backend, and one environment.
+- The compact direct policy enables `use_task_element_heatmap`, uses small CNN and hidden dimensions, and disables unrelated optional encoders where practical.
+- Training uses rollout length 2, one PPO epoch, minibatch size 2, CPU-compatible execution, no checkpoint resume, and no evaluation loop.
+- The exercised production path is `register_priority_inspection_task_element_provider` → `make_waypoint_env_batch` → real `WaypointMultiUAVEnv` → `build_policy` → real `MAPPOWaypointTrainer` → `collect_rollout` → real `WaypointRolloutBuffer` → `trainer.update` → real `optimizer.step`.
+
+### Verified enabled behavior
+
+- The initial vector observation contains finite `float32` `task_element_heatmap` values with batched shape `[1,1,8,8]`, and the policy observation space declares `[1,8,8]`.
+- `DirectWaypointPolicy.use_task_element_heatmap` is true and `heatmap_encoder` exists.
+- Actor output remains `[1,2,2]`, and critic value remains `[1]`.
+- Real rollout collection succeeds and stores finite heatmaps with shape `[2,1,1,8,8]`.
+- One real `trainer.update` succeeds with finite `policy_loss`, `value_loss`, `entropy`, and `grad_norm`.
+- At least one `heatmap_encoder` parameter changes after `optimizer.step`; where gradients remain observable, they are finite and non-`None`.
+
+### Verified disabled and fallback behavior
+
+- With policy heatmap consumption disabled, the environment may still emit and store the heatmap, but no `heatmap_encoder` exists and the existing architecture remains valid.
+- The disabled policy completes the same real rollout and one optimizer update successfully.
+- Without provider registration, configured static task elements remain the heatmap source. Provider absence was not made an error, and resolver semantics remain unchanged.
+
+### Validation
+
+- Local `git diff --check` and dependency-free AST parsing passed.
+- Local PyTorch tests were blocked during collection because `torch` was not installed; this was a local dependency limitation, not a production failure.
+- No dependencies were installed locally, and `PYTHONPATH` was not changed. IRMV Docker validation is the authoritative runtime result.
+- The IRMV server did not pull from GitHub directly. Equivalent patches were transferred from the Mac and applied with `git am`; no matching commit hashes or successful server-side GitHub pull is claimed.
+- The Mac/GitHub commits were `3d083b7 test: specify heatmap training activation smoke` and `d524ae3 feat: activate heatmap provider training path`.
+- Applying equivalent patch content on the IRMV server created `8ce57cc test: specify heatmap training activation smoke` and `378f516 feat: activate heatmap provider training path`.
+- IRMV Docker validation used container `pjs_wayffusion`, set `CUDA_VISIBLE_DEVICES=0`, and ran tests with the numeric `pjs` UID/GID.
+- Training-activation smoke validation passed: 4 tests in 3.81s.
+- Focused policy/trainer regression passed: 31 tests in 5.03s. It covered direct-policy heatmap consumption, existing direct-policy tests, MAPPO waypoint trainer tests, UVFA goal conditioning, and candidate-selection policy tests.
+- Full repository regression passed: 204 tests in 9.15s.
+
+### Compatibility and ownership
+
+- Heatmap-disabled and provider-disabled launches, unrelated tasks, static fallback, existing policy outputs, and trainer behavior remain compatible.
+- Default YAML files were not enabled or modified, and `CandidateSelectionWaypointPolicy` remains unchanged.
+- The environment owns semantic heatmap generation and refresh; the provider registry owns task-specific source resolution; and the launcher owns explicit provider activation before environment creation.
+- The vector environment owns observation batching, the rollout buffer and trainer preserve the heatmap tensor, `DirectWaypointPolicy` owns encoding and actor/critic fusion, and the optimizer updates the encoder through the normal PPO objective.
+
+### SSH workflow note
+
+- A dedicated Ed25519 key was created for the IRMV server, and public-key authentication was verified with password authentication disabled.
+- The Mac SSH alias is `irmv-wayffusion`; future transfers can use `ssh irmv-wayffusion` and `scp <file> irmv-wayffusion:/data0/pjs/`.
+- No account password is recorded in this document.
+
+### Known limitations
+
+- Default YAML files still do not enable semantic heatmap training, and no checked-in experimental heatmap-enabled training configuration exists.
+- No long training run, heatmap-on versus heatmap-off comparison, multi-seed evaluation, ablation, or statistical-significance analysis has been completed; this increment verifies integration, not performance benefit.
+- Spawn-based process-worker provider registration is not verified.
+- `CandidateSelectionWaypointPolicy` still ignores the heatmap.
+- The actor consumes centralized global state rather than a strictly decentralized local observation.
+- Enabled checkpoints are not strict-load compatible with older disabled architectures.
+
+### Next step
+
+- Define checked-in, explicit experimental configurations for a short deterministic heatmap-enabled training sanity run and an otherwise identical heatmap-disabled control.
+- Keep default configurations unchanged and verify that both experimental configurations launch and complete a very short training run.
+- Do not begin long training, multi-seed evaluation, or performance claims in the same increment.
+
+### Related commit
+
+- Test-first specification: `3d083b7 test: specify heatmap training activation smoke`.
+- Production implementation: `d524ae3 feat: activate heatmap provider training path`.
+- Equivalent IRMV-applied test commit: `8ce57cc test: specify heatmap training activation smoke`.
+- Equivalent IRMV-applied production commit: `378f516 feat: activate heatmap provider training path`.
