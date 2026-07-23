@@ -1140,3 +1140,116 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `7015030 feat: add paired heatmap pilot experiments`.
 - Equivalent IRMV-applied test commit: `b5970da test: specify paired heatmap pilot experiment`.
 - Equivalent IRMV-applied production commit: `a0bac4a feat: add paired heatmap pilot experiments`.
+
+## 2026-07-23 — Capacity-controlled heatmap ablation and deterministic evaluation protocol
+
+### Objective
+
+- Separate semantic heatmap information effects from architecture and capacity effects.
+- Establish independent deterministic seed domains for environment/training, policy initialization, and evaluation episodes.
+- Add an explicit zero-heatmap control that uses the same policy architecture and fusion path as the real heatmap condition.
+- Complete integration and regression validation before running the three-condition ablation.
+
+### Scientific conditions and interpretation
+
+- OFF disables the heatmap observation, provider, step refresh, and policy heatmap consumption, retaining the existing smaller baseline architecture.
+- REAL enables the heatmap observation, `priority_inspection` provider source, step refresh, and policy heatmap consumption, supplying real semantic heatmap input.
+- ZERO enables the heatmap observation, explicit `zero` provider source, step refresh, and policy heatmap consumption. Its all-zero input passes through the same heatmap encoder and fusion architecture as REAL.
+- REAL minus ZERO estimates the semantic-information contribution under matched architecture. ZERO minus OFF estimates the architecture and capacity contribution. REAL minus OFF represents the total conditioned-system difference.
+- One seed remains insufficient for a performance claim.
+
+### Test-first specification
+
+- Added `tests/test_heatmap_capacity_control_contract.py`.
+- The Mac/GitHub test commit was `37c51da test: specify heatmap capacity control`; equivalent patch content was applied on IRMV as `36f69cf test: specify heatmap capacity control`.
+- Initial local validation produced 4 failed, 1 passed, and 6 skipped tests in 0.28s. Initial IRMV validation produced 4 failed, 1 passed, and 6 skipped tests in 0.22s.
+- The expected missing implementation was the three ablation configurations, public `resolve_evaluation_episode_seeds`, public `seed_policy_initialization`, and `envs/waypoint/zero_task_element_provider.py`.
+- Before implementation, the existing experiment, artifact, and pilot contracts passed 24 tests, and the existing provider regression passed 33 tests.
+
+### Production implementation
+
+- Created `configs/experiments/priority_inspection_heatmap_off_ablation_seed0.yaml`, `configs/experiments/priority_inspection_heatmap_real_ablation_seed0.yaml`, and `configs/experiments/priority_inspection_heatmap_zero_ablation_seed0.yaml`.
+- Created `envs/waypoint/zero_task_element_provider.py`.
+- Modified `scripts/train_mappo_waypoint.py`, `algorithms/mappo_waypoint.py`, and `utils/waypoint_evaluation.py`.
+- The Mac/GitHub implementation commit was `e16c8bc feat: add heatmap capacity controls`; equivalent patch content was applied on IRMV as `0b89812 feat: add heatmap capacity controls`.
+
+### Explicit provider selection
+
+- `provider.source` explicitly distinguishes `none`, `priority_inspection`, and `zero`; provider absence and an explicit zero provider are different states.
+- ZERO is not implemented through observation omission, `None`, silent fallback, task-name branching, or post-encoder feature masking.
+- The zero provider returns an empty raw task-element sequence through the normal provider contract. The existing generator converts it into a finite all-zero NumPy `float32` heatmap with shape `[1,16,16]` for this experiment.
+- The observation key remains `task_element_heatmap`, and ZERO uses the normal heatmap encoder and actor/critic fusion path.
+
+### Deterministic seed domains
+
+- The training/environment seed is 0 and the independent policy initialization seed is 0.
+- Fixed evaluation episode seeds are 10000, 10001, 10002, 10003, 10004, 10005, 10006, and 10007.
+- Added public `resolve_evaluation_episode_seeds(...)`. The explicit experiment list takes precedence over the separate evaluation configuration; values must be integers, list length must equal `eval_episodes`, duplicates are rejected, ordering is preserved, and the source list is not mutated.
+- The same ordered list is reused at every evaluation update and passed through the trainer to episode reset without regeneration from update number or global RNG state.
+- Added public `seed_policy_initialization(...)`, which seeds Python, NumPy, Torch CPU, and CUDA when available immediately before `build_policy`. Policy initialization is therefore isolated from random values consumed during environment construction while existing training and environment seed behavior remains separate.
+
+### Resolved launch provenance
+
+- Added `policy_init_seed` and `evaluation_episode_seeds` to resolved launch provenance.
+- Existing resolved fields remain `training_seed`, `evaluation_enabled`, `num_envs`, `rollout_steps`, `total_updates`, `eval_interval`, `eval_episodes`, and `record_eval_episodes`.
+- Raw `cli_args.yaml` remains separate raw provenance.
+
+### Ablation configuration
+
+- All three conditions use only `priority_inspection`, four agents, grid size 16, map size 1.0, 64 maximum steps, maximum waypoint distance 0.20, eight POIs, disabled domain randomization, and `DirectWaypointPolicy`.
+- All use the sync backend, two environments, 32 rollout steps, 200 updates, two epochs, minibatch size 64, learning rate 0.0003, evaluation every 20 updates with eight episodes, no recording, headless execution, and no initialization checkpoint.
+- REAL and ZERO differ only in experiment name and provider source. OFF differs only in the permitted heatmap activation and provider fields.
+
+### Local validation
+
+- The capacity-control contract passed 10 tests with 1 skipped in 0.30s; the architecture equality case was skipped because local Gymnasium was unavailable.
+- Existing contracts passed 24 tests, provider regression passed 33 tests, and Python syntax validation passed.
+- No dependencies were installed, and `PYTHONPATH` was unchanged.
+
+### IRMV fixture correction and architecture validation
+
+- The architecture equality fixture originally used the stale observation key `global_summary`, while `DirectWaypointPolicy` requires `global_info`, causing `KeyError: global_info`.
+- The fixture was corrected without changing production policy behavior. The Mac/GitHub commit was `70e2e20 test: align capacity fixture with policy schema`; equivalent patch content was applied on IRMV as `13e5ca9 test: align capacity fixture with policy schema`.
+- After correction, the capacity-control contract passed 11 tests in 2.13s, existing contracts passed 24 tests in 0.37s, provider regression passed 33 tests in 0.13s, and focused trainer, evaluator, and heatmap regression passed 23 tests in 5.27s.
+- IRMV verified that REAL and ZERO have identical `state_dict` key sets, tensor shapes, total parameter counts, and initial tensor values under `policy_init_seed: 0`. Both contain the heatmap encoder and widened actor and critic fusion layers; OFF is permitted to have fewer parameters.
+
+### Legacy evaluator compatibility correction
+
+- The first full regression produced 237 passed and 2 failed tests: `test_both_eval_produces_prefixed_metrics_and_separate_media` and `test_goal_split_eval_produces_seen_interpolation_and_formal_metrics` in `tests/test_eval_randomization.py`.
+- `evaluation_episode_seeds` had been forwarded even when its value was `None`, but legacy monkeypatched evaluator callables did not accept the new keyword. The explicit seed feature itself was not incorrect.
+- The keyword is now added to `evaluate_kwargs` only when a fixed seed list exists. With no explicit list, it is omitted; with a list, the exact ordering remains unchanged. Goal-split and randomization-mode evaluation behavior is preserved.
+- The Mac/GitHub fix commit was `7467a57 fix: preserve legacy evaluator compatibility`; equivalent patch content was applied on IRMV as `c90fef0 fix: preserve legacy evaluator compatibility`.
+
+### Final IRMV validation
+
+- Legacy evaluator regression passed 5 tests in 1.93s.
+- The capacity-control contract passed 11 tests in 1.71s, and existing contracts passed 24 tests in 0.37s.
+- The full repository regression passed 239 tests in 9.07s.
+- Final result: `capacity_control_implementation_validation=PASS`.
+- Validation used container `pjs_wayffusion`, `CUDA_VISIBLE_DEVICES=0`, `MPLCONFIGDIR=/tmp/matplotlib-pjs`, and the numeric `pjs` UID/GID.
+
+### Interpretation
+
+- The experiment infrastructure can now separate semantic-information effects from architecture effects.
+- No OFF, REAL, or ZERO ablation training has been run. This increment validates configuration, initialization, evaluation scenarios, provider behavior, and compatibility only; it demonstrates no performance difference.
+
+### Known limitations
+
+- No capacity-controlled training result exists, and only seed-0 configurations currently exist.
+- No confidence intervals or significance tests have been produced. Evaluation episodes from multiple checkpoints are not automatically independent samples.
+- `CandidateSelectionWaypointPolicy` remains out of scope, spawn-based process-worker registration remains unverified, and the actor remains centralized rather than strictly decentralized.
+
+### Next step
+
+- Run bounded seed-0 OFF, REAL, and ZERO smoke or pilot experiments sequentially to avoid GPU resource contention.
+- Verify resolved launch provenance, common ordered evaluation episode seeds, and matching REAL/ZERO checkpoint architecture shapes before comparing metrics.
+- Compare REAL against ZERO before interpreting REAL against OFF, and treat all seed-0 observations as exploratory.
+- Do not expand to multiple seeds until all three seed-0 runs and artifact audits pass.
+
+### Related commit
+
+- Test-first specification: `37c51da test: specify heatmap capacity control`.
+- Production implementation: `e16c8bc feat: add heatmap capacity controls`.
+- Fixture correction: `70e2e20 test: align capacity fixture with policy schema`.
+- Legacy evaluator compatibility fix: `7467a57 fix: preserve legacy evaluator compatibility`.
+- Equivalent IRMV-applied commits: `36f69cf test: specify heatmap capacity control`, `0b89812 feat: add heatmap capacity controls`, `13e5ca9 test: align capacity fixture with policy schema`, and `c90fef0 fix: preserve legacy evaluator compatibility`.
