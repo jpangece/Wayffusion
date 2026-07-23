@@ -1011,3 +1011,132 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `0476718 fix: clarify training artifact semantics`.
 - Equivalent IRMV-applied test commit: `1d4165b test: specify training artifact semantics`.
 - Equivalent IRMV-applied production commit: `83f8d99 fix: clarify training artifact semantics`.
+
+## 2026-07-23 — Single-seed paired heatmap pilot execution and exploratory audit
+
+### Objective
+
+- Validate the bounded medium-duration pilot configuration through real heatmap OFF and ON training runs.
+- Verify evaluation scheduling, checkpointing, resolved provenance, metrics, and runtime.
+- Observe whether a potentially useful signal exists before designing a multi-seed and capacity-controlled study.
+- Do not claim a heatmap performance benefit from this single seed.
+
+### Test-first specification and implementation
+
+- Added `tests/test_heatmap_pilot_experiment_contract.py` in Mac/GitHub commit `ee52d9d test: specify paired heatmap pilot experiment`; equivalent patch content was applied on IRMV as `b5970da test: specify paired heatmap pilot experiment`.
+- Initial local validation produced 1 failed, 2 passed, and 7 skipped tests in 0.06s; initial IRMV validation produced 1 failed, 2 passed, and 7 skipped tests in 0.11s.
+- The expected failure identified missing `configs/experiments/priority_inspection_heatmap_off_pilot_seed0.yaml` and `configs/experiments/priority_inspection_heatmap_on_pilot_seed0.yaml` files.
+- Existing experiment and artifact compatibility passed with 14 tests locally and 14 tests on IRMV.
+- Created both pilot configurations and modified `scripts/train_mappo_waypoint.py` in Mac/GitHub commit `7015030 feat: add paired heatmap pilot experiments`; equivalent patch content was applied on IRMV as `a0bac4a feat: add paired heatmap pilot experiments`.
+
+### Pilot configuration
+
+- Both runs use only `priority_inspection`, training seed 0, four agents, grid size 16, map size 1.0, `max_steps: 64`, maximum waypoint distance 0.20, eight POIs, and disabled domain randomization.
+- Both use `DirectWaypointPolicy`, the sync backend, two environments, 32 rollout steps, 200 updates, two epochs, minibatch size 64, learning rate 0.0003, enabled evaluation every 20 updates with eight episodes, no recording episodes, headless execution, and no initialization checkpoint.
+- OFF disables heatmap observation, provider resolution, step refresh, and policy heatmap consumption. ON enables those four elements.
+- Apart from experiment name and those activation fields, the paired pilot configurations are identical.
+
+### Evaluation-setting resolution
+
+- Added public `resolve_experiment_evaluation_settings(...)` with precedence: explicitly supplied CLI option, combined experiment training value, then existing evaluation configuration or default.
+- Explicit zero recording episodes are preserved.
+- Resolved evaluation settings are written into `train_config`, passed through the existing trainer path, and recorded in `resolved_launch.yaml`.
+- The resolved launch snapshot now includes `eval_interval`, `eval_episodes`, and `record_eval_episodes`.
+
+### IRMV validation
+
+- Pilot contract passed: 10 tests in 0.17s.
+- Existing experiment and artifact contracts passed: 14 tests in 0.22s.
+- Focused trainer and heatmap regression passed: 23 tests in 4.72s.
+- Full repository regression passed: 228 tests in 8.75s.
+- Validation used container `pjs_wayffusion`, `CUDA_VISIBLE_DEVICES=0`, `MPLCONFIGDIR=/tmp/matplotlib-pjs`, and the numeric `pjs` UID/GID.
+
+### OFF pilot execution
+
+- Output: `outputs/priority_inspection_heatmap_off_pilot_seed0`.
+- The run started at `2026-07-23T13:37:54+08:00`, ended at `2026-07-23T13:40:37+08:00`, and took 163 seconds.
+- It completed 200 updates and evaluated at updates 20, 40, 60, 80, 100, 120, 140, 160, 180, and 200.
+- Artifact audit result: `off_pilot_artifact_audit=PASS`.
+- Best evaluation occurred at update 200 with success rate 0.125 and reward -525.1961038490615.
+- At update 1, mean rollout reward was 0.01976765491417609, weighted POI completion was 0.20146816782653332, goal achieved was 0.0, and arrival rate was 0.03515625.
+- At update 100, mean rollout reward was -0.039971201214939356, weighted POI completion was 0.35956035275012255, goal achieved was 0.015625, and arrival rate was 0.03125.
+- At update 200, mean rollout reward was 0.19130806747125462, weighted POI completion was 0.21632068394683301, goal achieved was 0.03125, and arrival rate was 0.0078125.
+
+### ON pilot execution
+
+- Output: `outputs/priority_inspection_heatmap_on_pilot_seed0`.
+- The run started at `2026-07-23T13:55:00+08:00`, ended at `2026-07-23T13:57:46+08:00`, and took 166 seconds.
+- It completed 200 updates and evaluated at updates 20, 40, 60, 80, 100, 120, 140, 160, 180, and 200.
+- Artifact audit result: `on_pilot_artifact_audit=PASS`.
+- Best evaluation occurred at update 180 with success rate 0.375 and reward -403.11928849978943.
+
+### Evaluation trajectory
+
+| Update | OFF success | ON success | OFF reward | ON reward |
+|---:|---:|---:|---:|---:|
+| 20 | 0.000 | 0.000 | -99.96917813640468 | -59.304 |
+| 40 | 0.000 | 0.125 | -205.595 | -256.226 |
+| 60 | 0.000 | 0.000 | -157.683 | -501.633 |
+| 80 | 0.000 | 0.000 | -324.789 | -480.980 |
+| 100 | 0.000 | 0.000 | -469.2875932122896 | -275.516 |
+| 120 | 0.000 | 0.125 | -880.429 | -276.360 |
+| 140 | 0.125 | 0.250 | -684.710 | -178.573 |
+| 160 | 0.000 | 0.250 | -413.285 | -225.893 |
+| 180 | 0.125 | 0.375 | -696.371 | -403.11928849978943 |
+| 200 | 0.125 | 0.250 | -525.1961038490615 | -957.462655 |
+
+### Paired aggregate summary
+
+- Mean evaluation success was 0.037500 OFF and 0.137500 ON, an exploratory ON-minus-OFF difference of 0.100000.
+- Mean evaluation reward was -445.731504 OFF and -361.506700 ON, an exploratory ON-minus-OFF difference of 84.224804.
+- Final evaluation success was 0.125000 OFF and 0.250000 ON; final evaluation reward was -525.196104 OFF and -957.462655 ON.
+- Last-20 mean rollout reward was 0.051140 OFF and 0.048765 ON.
+- Last-20 weighted POI completion was 0.380849 OFF and 0.346030 ON.
+- Last-20 goal achievement was 0.008594 OFF and 0.007812 ON.
+- Last-20 arrival rate was 0.016797 OFF and 0.018750 ON.
+
+### Runtime and artifact audit
+
+- OFF took 163 seconds and ON took 166 seconds, a three-second difference and approximately 1.8 percent observed ON overhead. This single-run overhead must not be generalized.
+- Both runs contained 200 metric rows, matched the intended resolved pilot settings, and evaluated at the expected ten updates.
+- Both produced all ten scheduled checkpoints, a final checkpoint, and best-evaluation checkpoint and summary artifacts only after real evaluation.
+- Neither produced GIF, MP4, or WebM recordings.
+- Final result: `paired_pilot_artifact_and_metric_audit=PASS`.
+
+### Exploratory interpretation
+
+- ON produced higher exploratory mean and best evaluation success and a less-negative mean evaluation reward across the ten evaluation points for this seed.
+- The final ON evaluation reward was substantially worse than OFF, and last-20 training reward and completion metrics did not show a clear ON advantage.
+- The observed signal is mixed and unstable. It does not establish a heatmap performance benefit.
+- Each evaluation used eight episodes, so success rates move in increments of 0.125. Across ten evaluations, the descriptive means correspond to approximately 3 successful episode executions for OFF and 11 for ON out of 80 executions.
+- Those episode executions must not be treated as independent statistical samples until the evaluator's seed and scenario protocol is verified.
+
+### Confounds
+
+- Only one training seed was used, and exact evaluation scenario-seed identity across conditions has not been verified.
+- ON and OFF differ in model capacity: ON includes a heatmap encoder and widened actor/critic fusion layers.
+- The earlier checkpoint audit found 20,453 OFF state elements and 27,229 ON state elements, a difference of 6,776.
+- ON-versus-OFF therefore combines semantic heatmap information with additional architecture/capacity effects.
+- A common global seed does not itself guarantee identical initialization of shared modules when optional modules alter random-number consumption.
+
+### Next experiment-design requirement
+
+- Before broad multi-seed execution, define a capacity-controlled ablation: A, heatmap-OFF baseline architecture; B, heatmap-ON architecture with the real semantic heatmap; and C, heatmap-ON architecture with an always-zero heatmap input.
+- B minus C estimates semantic information contribution under matched architecture, C minus A indicates architecture/capacity contribution, and B minus A measures the total conditioned-system difference.
+- Require identical training budgets, explicit common evaluation scenario seeds, and deterministic initialization handling for shared modules.
+- Expand to multiple training seeds only after the ablation and evaluation-seed contracts are specified test-first.
+- Do not perform statistical-significance claims or long final training in the next increment.
+
+### Known limitations
+
+- Single training seed only; eight evaluation episodes per checkpoint produce coarse success estimates.
+- Evaluation scenario identity across conditions is not yet verified, and no confidence intervals or significance tests were computed.
+- No capacity-matched zero-heatmap control, shuffled-heatmap control, or static-versus-dynamic ablation exists yet.
+- `CandidateSelectionWaypointPolicy` remains out of scope, spawn-based process-worker registration remains unverified, and the actor remains centralized rather than strictly decentralized.
+
+### Related commit
+
+- Test-first specification: `ee52d9d test: specify paired heatmap pilot experiment`.
+- Production implementation: `7015030 feat: add paired heatmap pilot experiments`.
+- Equivalent IRMV-applied test commit: `b5970da test: specify paired heatmap pilot experiment`.
+- Equivalent IRMV-applied production commit: `a0bac4a feat: add paired heatmap pilot experiments`.
