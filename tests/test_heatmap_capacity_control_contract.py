@@ -340,7 +340,7 @@ def test_policy_initialization_seed_boundary_and_matched_architecture(ablation_c
         "task_element_heatmap": Space((1, 16, 16)),
         "all_uav_states": Space((4, 8)),
         "task_id": Space((6,)),
-        "global_summary": Space((8,)),
+        "global_info": Space((8,)),
     }
     policy_kwargs = dict(
         cnn_channels=[8, 16, 32],
