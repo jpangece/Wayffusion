@@ -1253,3 +1253,84 @@ This document records incremental design, implementation, testing, and evaluatio
 - Fixture correction: `70e2e20 test: align capacity fixture with policy schema`.
 - Legacy evaluator compatibility fix: `7467a57 fix: preserve legacy evaluator compatibility`.
 - Equivalent IRMV-applied commits: `36f69cf test: specify heatmap capacity control`, `0b89812 feat: add heatmap capacity controls`, `13e5ca9 test: align capacity fixture with policy schema`, and `c90fef0 fix: preserve legacy evaluator compatibility`.
+
+## 2026-07-23 — Three-condition seed-0 capacity-controlled ablation execution
+
+### Objective and execution status
+
+- OFF, REAL, and ZERO all trained successfully and completed 200 updates.
+- Each condition evaluated at updates 20, 40, 60, 80, 100, 120, 140, 160, 180, and 200.
+- All conditions used training seed 0 and policy initialization seed 0.
+- All conditions reused the same ordered evaluation episode seeds: 10000, 10001, 10002, 10003, 10004, 10005, 10006, and 10007.
+- Every individual artifact audit passed, and the combined result was `three_condition_capacity_control_audit=PASS`.
+
+### Verified conditions
+
+| Condition | Heatmap enabled | Provider enabled | Provider source | Refresh on step | Policy heatmap consumption |
+|---|---:|---:|---|---:|---:|
+| OFF | false | false | `none` | false | false |
+| REAL | true | true | `priority_inspection` | true | true |
+| ZERO | true | true | `zero` | true | true |
+
+### Runtime and checkpoint audit
+
+- OFF completed in 166 seconds, REAL in 654 seconds, and ZERO in 634 seconds.
+- REAL and ZERO had similar runtime, and both were substantially slower than OFF. This suggests that most observed overhead may come from the heatmap encoder and expanded policy path rather than semantic-provider generation, but this is not a formal profiling result.
+- Every scheduled OFF checkpoint was 91,718 bytes. Every scheduled REAL and ZERO checkpoint was 120,346 bytes.
+- Matching REAL and ZERO checkpoint sizes, together with the prior architecture contract, support matched architecture and capacity between those conditions. Checkpoint size alone is not proof; the prior `state_dict` and parameter-initialization contract remains authoritative.
+
+### Exact condition summaries
+
+| Metric | OFF | REAL | ZERO |
+|---|---:|---:|---:|
+| `eval_success_mean` | 0.0125 | 0.0625 | 0.0625 |
+| `eval_reward_mean` | -502.6913542464485 | -487.0701344010931 | -497.60481880274625 |
+| `best_eval_update` | 20 | 40 | 40 |
+| `best_eval_success` | 0.125 | 0.125 | 0.125 |
+| `best_eval_reward` | -41.447900398197824 | -345.95699764919414 | -93.04055894592406 |
+| `final_eval_update` | 200 | 200 | 200 |
+| `final_eval_success` | 0.0 | 0.125 | 0.0 |
+| `final_eval_reward` | -517.8168015020924 | -476.69702500633923 | -591.8645068213773 |
+| `last20_mean_rollout_reward` | 0.0511400685965782 | 0.04876529996545287 | 0.04048709414491895 |
+| `last20_weighted_poi_completion` | 0.3808486068388447 | 0.34602976544992997 | 0.3207087502581999 |
+| `last20_goal_achieved` | 0.00859375 | 0.0078125 | 0.0078125 |
+| `last20_arrival_rate` | 0.016796875 | 0.01875 | 0.0177734375 |
+
+### Controlled comparisons
+
+| Metric | REAL − ZERO: semantic information | ZERO − OFF: architecture/capacity | REAL − OFF: total system |
+|---|---:|---:|---:|
+| `eval_success_mean` | 0.0 | 0.05 | 0.05 |
+| `eval_reward_mean` | 10.534684401653124 | 5.086535443702246 | 15.62121984535537 |
+| `final_eval_success` | 0.125 | 0.0 | 0.125 |
+| `final_eval_reward` | 115.16748181503806 | -74.04770531928489 | 41.11977649575317 |
+| `last20_mean_rollout_reward` | 0.008278205820533915 | -0.010652974451659247 | -0.002374768631125332 |
+| `last20_weighted_poi_completion` | 0.02532101519173008 | -0.0601398565806448 | -0.03481884138891472 |
+| `last20_goal_achieved` | 0.0 | -0.0007812500000000007 | -0.0007812500000000007 |
+| `last20_arrival_rate` | 0.0009765625 | 0.0009765625 | 0.001953125 |
+
+### Exploratory scientific interpretation
+
+- REAL and ZERO had identical mean evaluation success. REAL had a modestly better mean evaluation reward, final evaluation, and last-20 completion than ZERO.
+- Best-evaluation reward instead ranked OFF above ZERO above REAL, while ZERO-versus-OFF results were mixed across evaluation and training metrics.
+- The apparent result therefore depends strongly on checkpoint and metric selection. Seed 0 does not support a performance claim.
+- These runs validate the experimental decomposition, not semantic heatmap superiority.
+
+### Statistical limitations
+
+- Only one training seed was executed. Evaluation success is coarse because every evaluation contains only eight episodes.
+- The same evaluation episode seeds were intentionally reused across conditions. Results from ten checkpoints are repeated measurements on the same scenarios, not independent samples, and checkpoint means must not be treated as a sample size of ten.
+- No confidence interval or significance test is currently justified. Best-checkpoint comparisons are also affected by checkpoint-selection variance.
+
+### Known limitations
+
+- No multi-seed capacity-controlled results exist yet.
+- `CandidateSelectionWaypointPolicy` remains out of scope, spawn-based worker registration remains unverified, and the actor remains centralized rather than strictly decentralized.
+
+### Next step
+
+- Add a test-first multi-seed experiment contract before generating additional YAML configurations.
+- Add training seeds 1, 2, 3, and 4 while preserving matched OFF, REAL, and ZERO conditions for each seed.
+- Reuse one ordered evaluation episode list across the three conditions within each training seed, but use a distinct fixed evaluation block for each training seed so all results do not depend on the same eight scenarios.
+- Run conditions sequentially, audit every artifact before aggregate analysis, and aggregate primarily per training seed rather than per checkpoint.
+- Use REAL minus ZERO as the primary semantic-information contrast, with ZERO minus OFF and REAL minus OFF as secondary decomposition contrasts.
