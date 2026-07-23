@@ -1421,3 +1421,95 @@ This document records incremental design, implementation, testing, and evaluatio
 - Configuration implementation: `5f4e1df feat: add heatmap multiseed ablation configs`.
 - Equivalent IRMV-applied test commit: `be3727f test: specify heatmap multiseed ablation`.
 - Equivalent IRMV-applied configuration commit: `3d12674 feat: add heatmap multiseed ablation configs`.
+
+## 2026-07-23 — Capacity-controlled Seed 1 ablation execution and audit
+
+### Experiment status
+
+- Completed all three Seed 1 conditions: OFF, REAL, and ZERO.
+- Every condition used training seed 1, policy initialization seed 1, and the shared ordered evaluation episode seeds 11000, 11001, 11002, 11003, 11004, 11005, 11006, and 11007.
+- Evaluation occurred at updates 20, 40, 60, 80, 100, 120, 140, 160, 180, and 200.
+- Each condition produced 200 training metric rows, ten scheduled evaluation checkpoints, the final checkpoint, a best-evaluation checkpoint and summary, configuration snapshots, and a TensorBoard event artifact.
+- No episode recordings were requested or produced.
+
+### Verified conditions
+
+| Condition | Heatmap enabled | Provider enabled | Provider source | Refresh on step | Policy heatmap consumption |
+|---|---:|---:|---|---:|---:|
+| OFF | false | false | `none` | false | false |
+| REAL | true | true | `priority_inspection` | true | true |
+| ZERO | true | true | `zero` | true | true |
+
+### Execution and artifact results
+
+| Condition | Run | Runtime | Exit code | Training | Artifact audit | Checkpoint size |
+|---|---|---:|---:|---|---|---:|
+| OFF | `priority_inspection_heatmap_off_ablation_seed1` | 161 seconds | 0 | PASS | PASS | 91,718 bytes |
+| REAL | `priority_inspection_heatmap_real_ablation_seed1` | 166 seconds | 0 | PASS | PASS | 120,346 bytes |
+| ZERO | `priority_inspection_heatmap_zero_ablation_seed1` | 617 seconds | 0 | PASS | PASS | 120,346 bytes |
+
+- REAL and ZERO checkpoint sizes match. OFF and the heatmap-enabled architecture sizes differ as expected.
+
+### Exact condition summaries
+
+| Metric | OFF | REAL | ZERO |
+|---|---:|---:|---:|
+| `eval_success_mean` | 0.1 | 0.125 | 0.1125 |
+| `eval_reward_mean` | -437.18260697363024 | -365.9849153584482 | -347.05952930378186 |
+| `best_eval_update` | 60 | 80 | 100 |
+| `best_eval_success` | 0.25 | 0.25 | 0.25 |
+| `best_eval_reward` | -185.16242562618572 | -55.58885372013282 | -190.4716945106033 |
+| `final_eval_success` | 0.0 | 0.25 | 0.25 |
+| `final_eval_reward` | -1203.2596287512947 | -237.17701144364236 | -241.4778851230588 |
+| `last20_mean_rollout_reward` | 0.06473474039084977 | -0.02483766456716694 | 0.086872776094242 |
+| `last20_weighted_poi_completion` | 0.3527275687083602 | 0.34802277613780463 | 0.40762288534315305 |
+| `last20_goal_achieved` | 0.01015625 | 0.0046875 | 0.009375 |
+| `last20_arrival_rate` | 0.01640625 | 0.0205078125 | 0.01640625 |
+
+### Seed 1 paired contrasts
+
+| Metric | REAL − ZERO: semantic information | ZERO − OFF: architecture/capacity | REAL − OFF: total heatmap path |
+|---|---:|---:|---:|
+| `eval_success_mean` | +0.012499999999999997 | +0.012499999999999997 | +0.024999999999999994 |
+| `eval_reward_mean` | -18.92538605466632 | +90.12307766984839 | +71.19769161518207 |
+| `final_eval_success` | 0.0 | +0.25 | +0.25 |
+| `final_eval_reward` | +4.300873679416441 | +961.781743628236 | +966.0826173076523 |
+| `last20_mean_rollout_reward` | -0.11171044066140895 | +0.022138035703392234 | -0.08957240495801672 |
+| `last20_weighted_poi_completion` | -0.05960010920534842 | +0.05489531663479286 | -0.0047047925705555604 |
+| `last20_goal_achieved` | -0.0046875 | -0.0007812500000000007 | -0.0054687500000000005 |
+| `last20_arrival_rate` | +0.004101562499999999 | 0.0 | +0.004101562499999999 |
+
+### Audit results
+
+- `seed1_off_artifact_audit=PASS`
+- `seed1_real_artifact_audit=PASS`
+- `seed1_zero_artifact_audit=PASS`
+- `seed1_three_condition_pairing=PASS`
+- `seed1_three_condition_audit=PASS`
+- `seed1_capacity_control_ablation=PASS`
+
+### Exploratory interpretation
+
+- REAL had a 0.0125 higher mean evaluation success rate than ZERO, but its mean evaluation reward was approximately 18.93 worse. REAL and ZERO had the same final evaluation success.
+- REAL was worse than ZERO on last-20 rollout reward, weighted POI completion, and goal-achieved rate. Seed 1 therefore does not provide consistent evidence that semantic heatmap information improves performance.
+- ZERO was better than OFF on mean evaluation reward, final evaluation success, final evaluation reward, last-20 rollout reward, and weighted completion. The positive Seed 1 heatmap-path differences appear more attributable to architecture/capacity than semantic information.
+- These observations are exploratory and limited to one training seed. Checkpoint evaluations are repeated measurements, not independent seeds, and no aggregate statistical claim is appropriate until all five training seeds are complete.
+
+### Runtime observation
+
+- OFF took 161 seconds, REAL took 166 seconds, and ZERO took 617 seconds.
+- Seed 1 REAL runtime was unexpectedly close to OFF and substantially shorter than ZERO, whereas Seed 0 REAL and ZERO both required approximately ten to eleven minutes.
+- This runtime variation is unresolved. Configuration snapshots, artifact audits, pairing checks, and training outputs passed, so there is currently no evidence that invalidates the Seed 1 experiment; no cause is inferred here.
+
+### Overall experiment progress
+
+- Training seeds 0 and 1 are complete: 6 of 15 runs finished, with 9 runs remaining.
+- The next sequence is Seed 2 OFF, REAL, ZERO; Seed 3 OFF, REAL, ZERO; then Seed 4 OFF, REAL, ZERO.
+- Runtime logs were moved outside the Git repository to `/data0/pjs/wayffusion_run_logs`, and the repository remained clean after the Seed 1 runs and audits.
+- Future runs should continue using the external runtime-log directory and run conditions sequentially on the same GPU.
+
+### Known limitations
+
+- Only two of five training seeds are complete, and no final multi-seed aggregate statistics exist.
+- The runtime difference remains unexplained, and absolute success rates remain low.
+- `CandidateSelectionWaypointPolicy` remains out of scope, spawn-based worker registration remains unverified, and the actor remains centralized rather than strictly decentralized.
