@@ -909,3 +909,105 @@ This document records incremental design, implementation, testing, and evaluatio
 - Production implementation: `709e60e feat: add paired heatmap debug experiments`.
 - Equivalent IRMV-applied test commit: `bdc99b3 test: specify paired heatmap experiment configs`.
 - Equivalent IRMV-applied production commit: `6f14cfe feat: add paired heatmap debug experiments`.
+
+## 2026-07-23 — Resolved launch provenance and evaluation-disabled artifact semantics
+
+### Objective
+
+- Separate raw parsed CLI provenance from effective resolved launch provenance.
+- Prevent evaluation-disabled training runs from invoking evaluation logic or producing misleading best-evaluation artifacts.
+- Preserve ordinary checkpoint and metrics generation.
+- Verify the corrected behavior through paired heatmap OFF and ON sanity runs.
+
+### Test-first specification
+
+- Added `tests/test_training_artifact_semantics.py`.
+- The Mac/GitHub test commit was `3ca2faa test: specify training artifact semantics`.
+- Equivalent patch content was applied on IRMV as `1d4165b test: specify training artifact semantics`.
+- Initial local validation produced 3 failed and 5 skipped tests in 0.08s; initial IRMV validation produced 3 failed and 5 skipped tests in 0.15s.
+- Existing experiment-config compatibility remained intact with 6 passing tests locally and 6 passing tests on IRMV.
+- The expected failures showed that `scripts.train_mappo_waypoint` did not expose `build_resolved_launch_snapshot`, the launcher did not write `snapshot/resolved_launch.yaml`, and `MAPPOWaypointTrainer.train` did not receive `evaluation_enabled` independently from `eval_episodes`.
+- The missing contracts also included module-level `should_run_evaluation` and `should_write_best_eval_artifacts` helpers in `algorithms.mappo_waypoint`.
+
+### Changes
+
+- Modified `scripts/train_mappo_waypoint.py` and `algorithms/mappo_waypoint.py`.
+- The Mac/GitHub implementation commit was `0476718 fix: clarify training artifact semantics`.
+- Equivalent patch content was applied on IRMV as `83f8d99 fix: clarify training artifact semantics`.
+
+### Resolved launch provenance
+
+- Added public `build_resolved_launch_snapshot(...)`.
+- `snapshot/cli_args.yaml` remains the raw parsed CLI argument record.
+- Added `snapshot/resolved_launch.yaml` as the record of effective launcher decisions after combined-config loading and CLI override resolution.
+- The resolved snapshot records `experiment_config`, `config`, `env_config`, `eval_config`, `task_names`, `env_backend`, `init_checkpoint`, `evaluation_enabled`, `training_seed`, `output_dir`, `run_name`, `num_envs`, `rollout_steps`, and `total_updates`.
+- Path-like values are serialized as strings. An absent experiment configuration or initialization checkpoint remains `null`.
+
+### Evaluation and checkpoint semantics
+
+- Added public `should_run_evaluation(...)`. It returns `false` when evaluation is disabled or `eval_episodes` is zero or negative; otherwise it preserves the existing interval and final-update schedule.
+- Added public `should_write_best_eval_artifacts(...)`. It returns `false` when evaluation is disabled or no real evaluation result exists, while permitting the existing numerical best-score comparison when enabled evaluation returns a result.
+- `MAPPOWaypointTrainer.train` now accepts `evaluation_enabled: bool = True`; the default preserves compatibility for existing callers.
+- `self.evaluate` is not called when evaluation is disabled, and the previous launcher-side `trainer.evaluate` lambda replacement was removed.
+- Ordinary scheduled and final checkpoint creation is independent of evaluation. Ordinary checkpoint contents and `training_metrics.csv` behavior remain unchanged.
+- Evaluation-enabled runs retain existing best-checkpoint behavior.
+
+### Evaluation-disabled artifact contract
+
+- Verified creation of `training_metrics.csv`, `checkpoints/checkpoint_0002.pt`, `snapshot/cli_args.yaml`, `snapshot/resolved_launch.yaml`, `snapshot/env_config.yaml`, `snapshot/train_config.yaml`, `snapshot/eval_config.yaml`, `snapshot/metadata.json`, and a TensorBoard event file.
+- Verified absence of `checkpoints/checkpoint_best_eval.pt` and `best_eval_summary.json`.
+
+### IRMV validation
+
+- Artifact-semantics contract passed: 8 tests in 0.12s.
+- Experiment-config compatibility passed: 6 tests in 0.10s.
+- Focused trainer and heatmap regression passed: 23 tests in 4.53s.
+- Full repository regression passed: 218 tests in 9.73s.
+- Validation used container `pjs_wayffusion`, `CUDA_VISIBLE_DEVICES=0`, `MPLCONFIGDIR=/tmp/matplotlib-pjs`, and the numeric `pjs` UID/GID.
+
+### Paired runtime validation
+
+- The OFF run wrote to `outputs/heatmap_off_debug_semantics_v2`; `checkpoint_0002.pt` was 91,526 bytes, `resolved_launch.yaml` was 501 bytes, and `training_metrics.csv` was 6,078 bytes.
+- The ON run wrote to `outputs/heatmap_on_debug_semantics_v2`; `checkpoint_0002.pt` was 120,154 bytes, `resolved_launch.yaml` was 499 bytes, and `training_metrics.csv` was 6,081 bytes.
+- Both resolved launch snapshots recorded only `priority_inspection`, sync backend, `init_checkpoint: null`, `evaluation_enabled: false`, training seed 0, one environment, four rollout steps, and two total updates.
+- Both runs completed exactly two PPO updates, produced `checkpoint_0002.pt`, `training_metrics.csv`, and raw and resolved snapshots, and produced neither `checkpoint_best_eval.pt` nor `best_eval_summary.json`.
+- OFF completed with `artifact_semantics=PASS`; ON completed with `artifact_semantics=PASS`; the final paired result was `paired_artifact_semantics=PASS`.
+
+### Console logging note
+
+- Console output still prints `eval_success=0.000` and `eval_reward=0.000` when evaluation is disabled.
+- These are logging fallback values, not evidence that evaluation ran; no best-evaluation artifacts were generated.
+- This cosmetic ambiguity does not invalidate the artifact-semantics contract and may be clarified later, but it is not required before pilot training.
+
+### Compatibility
+
+- Combined experiment-config mode and separate environment/policy config mode remain supported.
+- Raw `cli_args.yaml` and existing environment, training, evaluation, and metadata snapshots remain available.
+- Existing checkpoint contents, default YAML files, and heatmap ON/OFF experiment values remain unchanged.
+- No performance metric meaning was changed.
+
+### Interpretation
+
+- This increment verifies provenance and artifact correctness; it does not demonstrate a heatmap performance benefit.
+- The two-update runs remain launch and artifact sanity checks only.
+
+### Known limitations
+
+- No controlled medium-duration pilot training, multi-seed comparison, or statistical analysis has been completed.
+- Spawn-based process-worker provider registration remains unverified.
+- `CandidateSelectionWaypointPolicy` still ignores heatmaps, and the actor still consumes centralized global state.
+- Console evaluation fields remain visually ambiguous when evaluation is disabled, although generated artifacts are now correct.
+
+### Next step
+
+- Define a controlled medium-duration paired pilot experiment with identical ON/OFF settings except for heatmap activation and with explicit evaluation settings.
+- Validate one deterministic seed and runtime duration before expanding to multiple deterministic seeds.
+- Define primary metrics before execution: weighted POI completion, mean rollout reward, goal achievement, arrival rate, evaluation success rate, and evaluation reward.
+- Keep the first pilot limited enough to detect configuration, runtime, reward, or stability problems before multi-seed experiments, and do not make performance claims from a single pilot seed.
+
+### Related commit
+
+- Test-first specification: `3ca2faa test: specify training artifact semantics`.
+- Production implementation: `0476718 fix: clarify training artifact semantics`.
+- Equivalent IRMV-applied test commit: `1d4165b test: specify training artifact semantics`.
+- Equivalent IRMV-applied production commit: `83f8d99 fix: clarify training artifact semantics`.
