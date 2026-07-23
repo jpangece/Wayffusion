@@ -82,6 +82,42 @@ def load_experiment_config(path: str | Path) -> tuple[dict, dict, dict]:
     return env_config, train_config, launch_config
 
 
+def build_resolved_launch_snapshot(
+    *,
+    args,
+    task_names,
+    env_backend,
+    init_checkpoint,
+    evaluation_enabled,
+    experiment_config,
+    training_seed,
+    output_dir,
+    run_name,
+    train_config,
+) -> dict:
+    """Return the effective launcher decisions as YAML-serializable data."""
+    return {
+        "experiment_config": (
+            None if experiment_config is None else str(experiment_config)
+        ),
+        "config": str(args.config),
+        "env_config": str(args.env_config),
+        "eval_config": str(args.eval_config),
+        "task_names": [str(task_name) for task_name in task_names],
+        "env_backend": str(env_backend),
+        "init_checkpoint": (
+            None if init_checkpoint is None else str(init_checkpoint)
+        ),
+        "evaluation_enabled": bool(evaluation_enabled),
+        "training_seed": int(training_seed),
+        "output_dir": str(output_dir),
+        "run_name": str(run_name),
+        "num_envs": int(train_config["num_envs"]),
+        "rollout_steps": int(train_config["rollout_steps"]),
+        "total_updates": int(train_config["total_updates"]),
+    }
+
+
 def safe_name(value: str) -> str:
     return safe_slug(value)
 
@@ -299,7 +335,6 @@ def main() -> None:
     if not evaluation_enabled:
         eval_episodes = 0
         record_eval_episodes = 0
-        trainer.evaluate = lambda *args, **kwargs: {}
     run_name = args.run_name or f"{train_config.get('name', 'mappo_waypoint')}_{'_'.join(task_names)}_N{env_config['num_agents']}"
     output_dir = make_output_dir(args.run_timestamp, run_name, args.output_dir, args.phase_name)
     snapshot = output_dir / "snapshot"
@@ -319,6 +354,21 @@ def main() -> None:
     )
     (snapshot / "eval_config.yaml").write_text(yaml.safe_dump(resolved_eval_config, sort_keys=False), encoding="utf-8")
     (snapshot / "cli_args.yaml").write_text(yaml.safe_dump(vars(args), sort_keys=False), encoding="utf-8")
+    resolved_launch = build_resolved_launch_snapshot(
+        args=args,
+        task_names=task_names,
+        env_backend=env_backend,
+        init_checkpoint=init_checkpoint,
+        evaluation_enabled=evaluation_enabled,
+        experiment_config=args.experiment_config,
+        training_seed=training_seed,
+        output_dir=output_dir,
+        run_name=run_name,
+        train_config=train_config,
+    )
+    (snapshot / "resolved_launch.yaml").write_text(
+        yaml.safe_dump(resolved_launch, sort_keys=False), encoding="utf-8"
+    )
     (snapshot / "metadata.json").write_text(
         json.dumps(
             {
@@ -358,6 +408,7 @@ def main() -> None:
         record_interval=int(args.record_interval),
         eval_randomization_mode=eval_randomization_mode,
         eval_goal_splits=list(args.eval_goal_splits) if args.eval_goal_splits else None,
+        evaluation_enabled=evaluation_enabled,
         log_callback=on_record,
     )
     if not history:

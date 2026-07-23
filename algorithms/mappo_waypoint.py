@@ -902,6 +902,7 @@ class MAPPOWaypointTrainer:
         eval_randomization_mode: str = "inherit",
         eval_goal_splits: list[str] | None = None,
         log_callback: Callable[[dict], None] | None = None,
+        evaluation_enabled: bool = True,
     ) -> list[dict]:
         output_dir = Path(output_dir)
         checkpoints = output_dir / "checkpoints"
@@ -916,26 +917,37 @@ class MAPPOWaypointTrainer:
             batch, rollout_stats = self.collect_rollout()
             train_stats = self.update(batch)
             record = {"update": int(update_idx), **rollout_stats, **train_stats}
-            if update_idx % eval_interval == 0 or update_idx == total_updates:
+            evaluation_result = None
+            if should_run_evaluation(
+                evaluation_enabled=evaluation_enabled,
+                eval_episodes=eval_episodes,
+                update_idx=update_idx,
+                total_updates=total_updates,
+                eval_interval=eval_interval,
+            ):
                 media_episodes = int(record_eval_episodes) if (update_idx // max(eval_interval, 1)) % max(record_interval, 1) == 0 else 0
-                record.update(
-                    self.evaluate(
-                        env_config,
-                        task_names,
-                        eval_episodes,
-                        output_dir=output_dir,
-                        update_idx=update_idx,
-                        headless=headless,
-                        record_episodes=media_episodes,
-                        record_format=record_format,
-                        record_fps=record_fps,
-                        randomization_mode=eval_randomization_mode,
-                        goal_splits=eval_goal_splits,
-                    )
+                evaluation_result = self.evaluate(
+                    env_config,
+                    task_names,
+                    eval_episodes,
+                    output_dir=output_dir,
+                    update_idx=update_idx,
+                    headless=headless,
+                    record_episodes=media_episodes,
+                    record_format=record_format,
+                    record_fps=record_fps,
+                    randomization_mode=eval_randomization_mode,
+                    goal_splits=eval_goal_splits,
                 )
+                record.update(evaluation_result)
+            if update_idx % eval_interval == 0 or update_idx == total_updates:
                 ckpt = checkpoints / f"checkpoint_{update_idx:04d}.pt"
                 torch.save({"model_state_dict": self.policy.state_dict(), "train_config": self.train_config}, ckpt)
                 record["checkpoint_path"] = str(ckpt)
+            if should_write_best_eval_artifacts(
+                evaluation_enabled=evaluation_enabled,
+                evaluation_result=evaluation_result,
+            ):
                 success = float(record.get("eval_success_rate", 0.0))
                 reward = float(record.get("eval_reward", 0.0))
                 if success > best_success or (success == best_success and reward > best_reward):
@@ -952,6 +964,29 @@ class MAPPOWaypointTrainer:
             if log_callback is not None:
                 log_callback(record)
         return history
+
+
+def should_run_evaluation(
+    *,
+    evaluation_enabled: bool,
+    eval_episodes: int,
+    update_idx: int,
+    total_updates: int,
+    eval_interval: int,
+) -> bool:
+    """Return whether the current update should run policy evaluation."""
+    if not evaluation_enabled or eval_episodes <= 0:
+        return False
+    return update_idx % eval_interval == 0 or update_idx == total_updates
+
+
+def should_write_best_eval_artifacts(
+    *,
+    evaluation_enabled: bool,
+    evaluation_result,
+) -> bool:
+    """Return whether a real evaluation may update best-evaluation artifacts."""
+    return bool(evaluation_enabled and evaluation_result is not None)
 
 
 def write_metrics_csv(records: list[dict], path: str | Path) -> None:
