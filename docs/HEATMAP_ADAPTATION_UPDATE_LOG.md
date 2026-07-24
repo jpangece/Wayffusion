@@ -1613,3 +1613,137 @@ This document records incremental design, implementation, testing, and evaluatio
 - Runtime variation remains unexplained, and absolute success rates remain low.
 - `CandidateSelectionWaypointPolicy` remains out of scope, spawn-based worker registration remains unverified, and the actor remains centralized rather than strictly decentralized.
 - Evaluation videos are not currently recorded because `record_eval_episodes` is zero and execution is headless. Post-hoc checkpoint visualization remains planned after the controlled matrix is complete.
+
+## 2026-07-24 — Completed five-seed capacity-controlled heatmap ablation
+
+### Goal
+
+- Complete and audit the OFF, REAL, and ZERO capacity-controlled experiment matrix.
+- Separate semantic heatmap information effects from architecture and capacity effects.
+
+### Experimental protocol
+
+- Training seeds were 0, 1, 2, 3, and 4, with OFF, REAL, and ZERO for each seed: 15 independent runs total.
+- Every run used four agents on the `priority_inspection` task for 200 training updates, with evaluation every 20 updates.
+- Each of the ten evaluation checkpoints used eight deterministic evaluation episodes.
+- Evaluation seed blocks were 10000–10007 for Seed 0, 11000–11007 for Seed 1, 12000–12007 for Seed 2, 13000–13007 for Seed 3, and 14000–14007 for Seed 4.
+- The ten checkpoints within a run are repeated measurements and are not treated as independent samples.
+
+### Condition semantics
+
+- OFF disabled the heatmap observation, provider, and policy heatmap consumption; its provider source was `none`, and checkpoints were 91,718 bytes.
+- REAL enabled the heatmap path, the `priority_inspection` provider, dynamic refresh, and semantic task-element heatmap consumption; checkpoints were 120,346 bytes.
+- ZERO used the same heatmap encoder and policy capacity as REAL with zero-valued provider input; checkpoints were 120,346 bytes.
+- REAL minus ZERO is the primary semantic-information contrast. ZERO minus OFF measures the architecture/capacity effect, and REAL minus OFF measures the total heatmap-path effect.
+
+### Seed 3 condition results
+
+| Metric | OFF | REAL | ZERO |
+|---|---:|---:|---:|
+| Runtime (seconds) | 180 | 188 | 167 |
+| Mean evaluation success | 0.1 | 0.075 | 0.0625 |
+| Mean evaluation reward | -327.2483190063881 | -272.16891015948033 | -304.1291595240976 |
+| Final evaluation success | 0.125 | 0.125 | 0.0 |
+| Final evaluation reward | -473.0482908026103 | -314.0258908335477 | -491.8422314740617 |
+| Last-20 rollout reward | 0.047808263679326043 | 0.10197289568313864 | 0.019045466789975762 |
+| Last-20 weighted POI completion | 0.43473897168878467 | 0.41420354283764027 | 0.4007117522356566 |
+| Last-20 goal achieved | 0.00859375 | 0.0109375 | 0.01015625 |
+| Last-20 arrival rate | 0.0236328125 | 0.0234375 | 0.023828125 |
+
+Seed 3 REAL-minus-ZERO primary contrast:
+
+| Metric | Difference |
+|---|---:|
+| Mean evaluation success | +0.012499999999999997 |
+| Mean evaluation reward | +31.960249364617255 |
+| Final evaluation success | +0.125 |
+| Final evaluation reward | +177.816340640514 |
+| Last-20 rollout reward | +0.08292742889316287 |
+| Last-20 weighted POI completion | +0.013491790601983689 |
+| Last-20 goal achieved | +0.000781249999999999 |
+| Last-20 arrival rate | -0.0003906249999999986 |
+
+### Seed 4 condition results
+
+| Metric | OFF | REAL | ZERO |
+|---|---:|---:|---:|
+| Runtime (seconds) | 163 | 167 | 166 |
+| Mean evaluation success | 0.0375 | 0.0625 | 0.0 |
+| Mean evaluation reward | -198.09038398771597 | -271.26509873030136 | -230.15334769744499 |
+| Final evaluation success | 0.0 | 0.0 | 0.0 |
+| Final evaluation reward | -291.1237118797558 | -254.4206990129607 | -295.7605755591766 |
+| Last-20 rollout reward | -0.34246336616633927 | 0.015972769387008156 | 0.0775242205723771 |
+| Last-20 weighted POI completion | 0.31405625033949036 | 0.38213918801629915 | 0.4310247125511523 |
+| Last-20 goal achieved | 0.00234375 | 0.0078125 | 0.01015625 |
+| Last-20 arrival rate | 0.029296875 | 0.0236328125 | 0.0294921875 |
+
+Seed 4 REAL-minus-ZERO primary contrast:
+
+| Metric | Difference |
+|---|---:|
+| Mean evaluation success | +0.0625 |
+| Mean evaluation reward | -41.111751032856375 |
+| Final evaluation success | 0.0 |
+| Final evaluation reward | +41.33987654621586 |
+| Last-20 rollout reward | -0.061551451185368936 |
+| Last-20 weighted POI completion | -0.048885524534853175 |
+| Last-20 goal achieved | -0.0023437500000000003 |
+| Last-20 arrival rate | -0.005859375 |
+
+### Five-seed condition aggregates
+
+| Aggregate | OFF | REAL | ZERO |
+|---|---:|---:|---:|
+| Mean evaluation success | 0.080 | 0.070 | 0.065 |
+| Mean evaluation reward | -357.20347757219866 | -316.10217622028347 | -337.64355173459825 |
+| Mean final evaluation success | 0.025 | 0.100 | 0.075 |
+
+### Primary five-seed REAL-minus-ZERO contrast
+
+| Metric | Mean difference | Exact two-sided sign-flip p-value |
+|---|---:|---:|
+| Mean evaluation success | +0.005 | 0.75 |
+| Mean evaluation reward | +21.54137551431474 | 0.625 |
+| Final evaluation success | +0.025 | 1.0 |
+| Final evaluation reward | +74.4079546161617 | 0.0625 |
+| Last-20 rollout reward | -0.07013010666734772 | — |
+| Last-20 weighted POI completion | -0.027422246221685785 | — |
+| Last-20 goal achieved | -0.0023437500000000003 | — |
+| Last-20 arrival rate | +0.004843750000000001 | — |
+
+### Validation completed
+
+- `all_15_runs_artifact_audit=PASS`
+- `seed4_three_condition_audit=PASS`
+- `five_seed_pairing_audit=PASS`
+- `five_seed_capacity_control_analysis=PASS`
+- `five_seed_experiment_matrix=PASS`
+
+### Interpretation
+
+- The integration and capacity-controlled evaluation protocol are validated.
+- REAL showed a positive average evaluation-reward difference over ZERO. Final evaluation reward was positive for REAL-minus-ZERO across all five seeds, producing an exact two-sided sign-flip p-value of 0.0625.
+- The experiment did not establish a stable improvement in success rate, POI completion, or goal achievement. Reward improvement and task-success improvement are not currently aligned.
+- The semantic utility of the current heatmap representation remains inconclusive. No result is claimed as statistically significant, and the experiment does not establish that the heatmap improves navigation performance.
+- The ten checkpoint evaluations within each run are repeated measurements, not independent samples.
+
+### Known limitations
+
+- The study contains only five independent training seeds and low absolute task-success rates under a short 200-update training budget.
+- Only the four-agent `priority_inspection` setting was evaluated.
+- No rollout videos were generated because evaluation recording was disabled.
+- These results do not demonstrate scalability to 30 agents.
+
+### Next steps
+
+- Implement a separate post-hoc deterministic rollout renderer without modifying completed experiment artifacts.
+- Replay OFF, REAL, and ZERO checkpoints with identical evaluation seeds and visualize UAV trajectories, POIs, coverage/progress metrics, and the REAL heatmap.
+- Compare qualitative behavior and investigate reward alignment and whether the heatmap representation influences action selection.
+- Treat 30-agent evaluation as a separate scalability experiment.
+
+### Related commits
+
+- `72d6583 docs: add five-seed heatmap ablation results`
+- `1c6af0e docs: record seed2 capacity ablation`
+- `04e23be docs: record seed1 capacity ablation`
+- `f1c90be docs: record multiseed ablation protocol`
