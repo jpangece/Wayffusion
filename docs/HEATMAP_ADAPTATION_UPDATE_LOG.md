@@ -1513,3 +1513,103 @@ This document records incremental design, implementation, testing, and evaluatio
 - Only two of five training seeds are complete, and no final multi-seed aggregate statistics exist.
 - The runtime difference remains unexplained, and absolute success rates remain low.
 - `CandidateSelectionWaypointPolicy` remains out of scope, spawn-based worker registration remains unverified, and the actor remains centralized rather than strictly decentralized.
+
+## 2026-07-24 — Capacity-controlled Seed 2 ablation execution and audit
+
+### Experiment status
+
+- Completed all three Seed 2 conditions: OFF, REAL, and ZERO.
+- Every condition used training seed 2, policy initialization seed 2, and the shared ordered evaluation episode seeds 12000, 12001, 12002, 12003, 12004, 12005, 12006, and 12007.
+- Evaluation occurred at updates 20, 40, 60, 80, 100, 120, 140, 160, 180, and 200.
+- Each condition produced 200 training metric rows, ten scheduled evaluation checkpoints, the final checkpoint, a best-evaluation checkpoint and summary, configuration snapshots, and a TensorBoard event artifact.
+- No episode recordings were requested or produced.
+
+### Verified conditions
+
+| Condition | Heatmap enabled | Provider enabled | Provider source | Refresh on step | Policy heatmap consumption |
+|---|---:|---:|---|---:|---:|
+| OFF | false | false | `none` | false | false |
+| REAL | true | true | `priority_inspection` | true | true |
+| ZERO | true | true | `zero` | true | true |
+
+### Execution and artifact results
+
+| Condition | Run | Runtime | Training | Artifact audit | Checkpoint size |
+|---|---|---:|---|---|---:|
+| OFF | `priority_inspection_heatmap_off_ablation_seed2` | 598 seconds | PASS | PASS | 91,718 bytes |
+| REAL | `priority_inspection_heatmap_real_ablation_seed2` | 666 seconds | PASS | PASS | 120,346 bytes |
+| ZERO | `priority_inspection_heatmap_zero_ablation_seed2` | 161 seconds | PASS | PASS | 120,346 bytes |
+
+- REAL and ZERO checkpoint sizes match. OFF and the heatmap-enabled architecture sizes differ as expected.
+
+### Exact condition summaries
+
+| Metric | OFF | REAL | ZERO |
+|---|---:|---:|---:|
+| `eval_success_mean` | 0.15 | 0.025 | 0.0875 |
+| `eval_reward_mean` | -320.80472364681043 | -184.02182245209443 | -309.27090334492044 |
+| `best_eval_update` | 80 | 60 | 60 |
+| `best_eval_success` | 0.25 | 0.25 | 0.25 |
+| `best_eval_reward` | -185.60923876998007 | -60.85424321653845 | -253.50216485896814 |
+| `final_eval_success` | 0.0 | 0.0 | 0.125 |
+| `final_eval_reward` | -681.0153547032323 | -186.34290698102427 | -219.75810738064845 |
+| `last20_mean_rollout_reward` | 0.027394464644021354 | -0.3254729969252367 | -0.05687872072157916 |
+| `last20_weighted_poi_completion` | 0.4473907822801266 | 0.28853524909354744 | 0.35597365225548855 |
+| `last20_goal_achieved` | 0.01015625 | 0.0 | 0.00546875 |
+| `last20_arrival_rate` | 0.039453125 | 0.0421875 | 0.016796875 |
+
+### Seed 2 paired contrasts
+
+| Metric | REAL − ZERO: semantic information | ZERO − OFF: architecture/capacity | REAL − OFF: total heatmap path |
+|---|---:|---:|---:|
+| `eval_success_mean` | -0.06249999999999999 | -0.0625 | -0.125 |
+| `eval_reward_mean` | +125.24908089282602 | +11.533820301889989 | +136.782901194716 |
+| `final_eval_success` | -0.125 | +0.125 | 0.0 |
+| `final_eval_reward` | +33.41520039962418 | +461.2572473225839 | +494.67244772220806 |
+| `last20_mean_rollout_reward` | -0.2685942762036575 | -0.08427318536560051 | -0.352867461569258 |
+| `last20_weighted_poi_completion` | -0.06743840316194111 | -0.09141713002463803 | -0.15885553318657913 |
+| `last20_goal_achieved` | -0.00546875 | -0.004687500000000001 | -0.01015625 |
+| `last20_arrival_rate` | +0.025390625000000003 | -0.02265625 | +0.002734375000000004 |
+
+### Audit results
+
+- `seed2_off_artifact_audit=PASS`
+- `seed2_real_artifact_audit=PASS`
+- `seed2_zero_artifact_audit=PASS`
+- `seed2_three_condition_pairing=PASS`
+- `seed2_three_condition_audit=PASS`
+- `seed2_capacity_control_ablation=PASS`
+
+### Seed 2 interpretation
+
+- REAL had 0.0625 lower mean evaluation success than ZERO but approximately 125.25 better mean evaluation reward.
+- REAL had worse final success, last-20 rollout reward, weighted completion, and goal-achieved rate than ZERO. Seed 2 therefore does not show a consistent semantic heatmap information benefit.
+- OFF had the highest mean evaluation success and strongest last-20 weighted completion, REAL had the strongest mean and final evaluation reward, and ZERO had the highest final evaluation success.
+- Metric rankings are inconsistent, so no single condition dominates. Checkpoint evaluations are repeated measurements rather than independent seeds.
+
+### Preliminary Seeds 0–2 description
+
+- Independent training seeds 0, 1, and 2 are complete.
+- REAL-minus-ZERO mean evaluation success contrasts were 0.0 for Seed 0, +0.0125 for Seed 1, and -0.0625 for Seed 2.
+- REAL-minus-ZERO mean evaluation reward contrasts were +10.534684401653124 for Seed 0, -18.92538605466632 for Seed 1, and +125.24908089282602 for Seed 2.
+- The simple three-seed mean REAL-minus-ZERO contrasts are approximately -0.016666666666666666 for mean evaluation success, +38.95279307993761 for mean evaluation reward, 0.0 for final evaluation success, +50.96118591802623 for final evaluation reward, -0.12400883701484418 for last-20 rollout reward, and -0.03390583239185315 for last-20 weighted completion.
+- These are descriptive interim values only. They do not justify inferential statistics or a final performance conclusion, and the effect remains mixed across metrics and training seeds.
+
+### Runtime observation
+
+- Seed 2 OFF took 598 seconds, REAL took 666 seconds, and ZERO took 161 seconds.
+- This reverses part of the Seed 1 runtime pattern, where ZERO was the slow condition. Runtime variation remains unresolved.
+- Configuration snapshots, artifact audits, checkpoint structures, and pairing checks passed, so there is currently no evidence invalidating the Seed 2 runs; no cause is inferred here.
+
+### Overall experiment progress
+
+- Training seeds 0, 1, and 2 are complete: 9 of 15 runs finished, with 6 runs remaining.
+- The next sequence is Seed 3 OFF, REAL, ZERO, followed by Seed 4 OFF, REAL, ZERO.
+- Runtime logs remain outside the Git repository at `/data0/pjs/wayffusion_run_logs`; the repository remained clean, and conditions were executed sequentially on the same GPU.
+
+### Known limitations
+
+- Only three of five training seeds are complete, and no final five-seed aggregate statistics exist.
+- Runtime variation remains unexplained, and absolute success rates remain low.
+- `CandidateSelectionWaypointPolicy` remains out of scope, spawn-based worker registration remains unverified, and the actor remains centralized rather than strictly decentralized.
+- Evaluation videos are not currently recorded because `record_eval_episodes` is zero and execution is headless. Post-hoc checkpoint visualization remains planned after the controlled matrix is complete.
