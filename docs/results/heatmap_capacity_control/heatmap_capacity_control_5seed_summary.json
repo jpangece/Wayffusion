@@ -1,0 +1,1103 @@
+{
+  "protocol": {
+    "training_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "conditions": [
+      "OFF",
+      "REAL",
+      "ZERO"
+    ],
+    "completed_runs": 15,
+    "evaluation_checkpoints_per_run": 10,
+    "evaluation_episodes_per_checkpoint": 8,
+    "primary_contrast": "REAL_MINUS_ZERO"
+  },
+  "seed4_summary": {
+    "OFF": {
+      "seed": 4,
+      "condition": "OFF",
+      "run_name": "priority_inspection_heatmap_off_ablation_seed4",
+      "runtime_seconds": 163,
+      "evaluation_episode_seeds": [
+        14000,
+        14001,
+        14002,
+        14003,
+        14004,
+        14005,
+        14006,
+        14007
+      ],
+      "eval_success_mean": 0.0375,
+      "eval_reward_mean": -198.09038398771597,
+      "best_eval_update": 180,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -168.68619338240936,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -291.1237118797558,
+      "last20_mean_rollout_reward": -0.34246336616633927,
+      "last20_weighted_poi_completion": 0.31405625033949036,
+      "last20_goal_achieved": 0.00234375,
+      "last20_arrival_rate": 0.029296875,
+      "checkpoint_size_bytes": 91718
+    },
+    "REAL": {
+      "seed": 4,
+      "condition": "REAL",
+      "run_name": "priority_inspection_heatmap_real_ablation_seed4",
+      "runtime_seconds": 167,
+      "evaluation_episode_seeds": [
+        14000,
+        14001,
+        14002,
+        14003,
+        14004,
+        14005,
+        14006,
+        14007
+      ],
+      "eval_success_mean": 0.0625,
+      "eval_reward_mean": -271.26509873030136,
+      "best_eval_update": 40,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -167.89729824335245,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -254.4206990129607,
+      "last20_mean_rollout_reward": 0.015972769387008156,
+      "last20_weighted_poi_completion": 0.38213918801629915,
+      "last20_goal_achieved": 0.0078125,
+      "last20_arrival_rate": 0.0236328125,
+      "checkpoint_size_bytes": 120346
+    },
+    "ZERO": {
+      "seed": 4,
+      "condition": "ZERO",
+      "run_name": "priority_inspection_heatmap_zero_ablation_seed4",
+      "runtime_seconds": 166,
+      "evaluation_episode_seeds": [
+        14000,
+        14001,
+        14002,
+        14003,
+        14004,
+        14005,
+        14006,
+        14007
+      ],
+      "eval_success_mean": 0.0,
+      "eval_reward_mean": -230.15334769744499,
+      "best_eval_update": 20,
+      "best_eval_success": 0.0,
+      "best_eval_reward": -1.061064618162709,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -295.7605755591766,
+      "last20_mean_rollout_reward": 0.0775242205723771,
+      "last20_weighted_poi_completion": 0.4310247125511523,
+      "last20_goal_achieved": 0.01015625,
+      "last20_arrival_rate": 0.0294921875,
+      "checkpoint_size_bytes": 120346
+    }
+  },
+  "runs": [
+    {
+      "seed": 0,
+      "condition": "OFF",
+      "run_name": "priority_inspection_heatmap_off_ablation_seed0",
+      "runtime_seconds": null,
+      "evaluation_episode_seeds": [
+        10000,
+        10001,
+        10002,
+        10003,
+        10004,
+        10005,
+        10006,
+        10007
+      ],
+      "eval_success_mean": 0.0125,
+      "eval_reward_mean": -502.6913542464485,
+      "best_eval_update": 20,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -41.447900398197824,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -517.8168015020924,
+      "last20_mean_rollout_reward": 0.0511400685965782,
+      "last20_weighted_poi_completion": 0.3808486068388447,
+      "last20_goal_achieved": 0.00859375,
+      "last20_arrival_rate": 0.016796875,
+      "checkpoint_size_bytes": 91718
+    },
+    {
+      "seed": 0,
+      "condition": "REAL",
+      "run_name": "priority_inspection_heatmap_real_ablation_seed0",
+      "runtime_seconds": null,
+      "evaluation_episode_seeds": [
+        10000,
+        10001,
+        10002,
+        10003,
+        10004,
+        10005,
+        10006,
+        10007
+      ],
+      "eval_success_mean": 0.0625,
+      "eval_reward_mean": -487.0701344010931,
+      "best_eval_update": 40,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -345.95699764919414,
+      "final_eval_success": 0.125,
+      "final_eval_reward": -476.69702500633923,
+      "last20_mean_rollout_reward": 0.04876529996545287,
+      "last20_weighted_poi_completion": 0.34602976544992997,
+      "last20_goal_achieved": 0.0078125,
+      "last20_arrival_rate": 0.01875,
+      "checkpoint_size_bytes": 120346
+    },
+    {
+      "seed": 0,
+      "condition": "ZERO",
+      "run_name": "priority_inspection_heatmap_zero_ablation_seed0",
+      "runtime_seconds": null,
+      "evaluation_episode_seeds": [
+        10000,
+        10001,
+        10002,
+        10003,
+        10004,
+        10005,
+        10006,
+        10007
+      ],
+      "eval_success_mean": 0.0625,
+      "eval_reward_mean": -497.60481880274625,
+      "best_eval_update": 40,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -93.04055894592406,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -591.8645068213773,
+      "last20_mean_rollout_reward": 0.04048709414491895,
+      "last20_weighted_poi_completion": 0.3207087502581999,
+      "last20_goal_achieved": 0.0078125,
+      "last20_arrival_rate": 0.0177734375,
+      "checkpoint_size_bytes": 120346
+    },
+    {
+      "seed": 1,
+      "condition": "OFF",
+      "run_name": "priority_inspection_heatmap_off_ablation_seed1",
+      "runtime_seconds": 161,
+      "evaluation_episode_seeds": [
+        11000,
+        11001,
+        11002,
+        11003,
+        11004,
+        11005,
+        11006,
+        11007
+      ],
+      "eval_success_mean": 0.1,
+      "eval_reward_mean": -437.18260697363024,
+      "best_eval_update": 60,
+      "best_eval_success": 0.25,
+      "best_eval_reward": -185.16242562618572,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -1203.2596287512947,
+      "last20_mean_rollout_reward": 0.06473474039084977,
+      "last20_weighted_poi_completion": 0.3527275687083602,
+      "last20_goal_achieved": 0.01015625,
+      "last20_arrival_rate": 0.01640625,
+      "checkpoint_size_bytes": 91718
+    },
+    {
+      "seed": 1,
+      "condition": "REAL",
+      "run_name": "priority_inspection_heatmap_real_ablation_seed1",
+      "runtime_seconds": 166,
+      "evaluation_episode_seeds": [
+        11000,
+        11001,
+        11002,
+        11003,
+        11004,
+        11005,
+        11006,
+        11007
+      ],
+      "eval_success_mean": 0.125,
+      "eval_reward_mean": -365.9849153584482,
+      "best_eval_update": 80,
+      "best_eval_success": 0.25,
+      "best_eval_reward": -55.58885372013282,
+      "final_eval_success": 0.25,
+      "final_eval_reward": -237.17701144364236,
+      "last20_mean_rollout_reward": -0.02483766456716694,
+      "last20_weighted_poi_completion": 0.34802277613780463,
+      "last20_goal_achieved": 0.0046875,
+      "last20_arrival_rate": 0.0205078125,
+      "checkpoint_size_bytes": 120346
+    },
+    {
+      "seed": 1,
+      "condition": "ZERO",
+      "run_name": "priority_inspection_heatmap_zero_ablation_seed1",
+      "runtime_seconds": 617,
+      "evaluation_episode_seeds": [
+        11000,
+        11001,
+        11002,
+        11003,
+        11004,
+        11005,
+        11006,
+        11007
+      ],
+      "eval_success_mean": 0.1125,
+      "eval_reward_mean": -347.05952930378186,
+      "best_eval_update": 100,
+      "best_eval_success": 0.25,
+      "best_eval_reward": -190.4716945106033,
+      "final_eval_success": 0.25,
+      "final_eval_reward": -241.4778851230588,
+      "last20_mean_rollout_reward": 0.086872776094242,
+      "last20_weighted_poi_completion": 0.40762288534315305,
+      "last20_goal_achieved": 0.009375,
+      "last20_arrival_rate": 0.01640625,
+      "checkpoint_size_bytes": 120346
+    },
+    {
+      "seed": 2,
+      "condition": "OFF",
+      "run_name": "priority_inspection_heatmap_off_ablation_seed2",
+      "runtime_seconds": 598,
+      "evaluation_episode_seeds": [
+        12000,
+        12001,
+        12002,
+        12003,
+        12004,
+        12005,
+        12006,
+        12007
+      ],
+      "eval_success_mean": 0.15,
+      "eval_reward_mean": -320.80472364681043,
+      "best_eval_update": 80,
+      "best_eval_success": 0.25,
+      "best_eval_reward": -185.60923876998007,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -681.0153547032323,
+      "last20_mean_rollout_reward": 0.027394464644021354,
+      "last20_weighted_poi_completion": 0.4473907822801266,
+      "last20_goal_achieved": 0.01015625,
+      "last20_arrival_rate": 0.039453125,
+      "checkpoint_size_bytes": 91718
+    },
+    {
+      "seed": 2,
+      "condition": "REAL",
+      "run_name": "priority_inspection_heatmap_real_ablation_seed2",
+      "runtime_seconds": 666,
+      "evaluation_episode_seeds": [
+        12000,
+        12001,
+        12002,
+        12003,
+        12004,
+        12005,
+        12006,
+        12007
+      ],
+      "eval_success_mean": 0.025,
+      "eval_reward_mean": -184.02182245209443,
+      "best_eval_update": 60,
+      "best_eval_success": 0.25,
+      "best_eval_reward": -60.85424321653845,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -186.34290698102427,
+      "last20_mean_rollout_reward": -0.3254729969252367,
+      "last20_weighted_poi_completion": 0.28853524909354744,
+      "last20_goal_achieved": 0.0,
+      "last20_arrival_rate": 0.0421875,
+      "checkpoint_size_bytes": 120346
+    },
+    {
+      "seed": 2,
+      "condition": "ZERO",
+      "run_name": "priority_inspection_heatmap_zero_ablation_seed2",
+      "runtime_seconds": 161,
+      "evaluation_episode_seeds": [
+        12000,
+        12001,
+        12002,
+        12003,
+        12004,
+        12005,
+        12006,
+        12007
+      ],
+      "eval_success_mean": 0.0875,
+      "eval_reward_mean": -309.27090334492044,
+      "best_eval_update": 60,
+      "best_eval_success": 0.25,
+      "best_eval_reward": -253.50216485896814,
+      "final_eval_success": 0.125,
+      "final_eval_reward": -219.75810738064845,
+      "last20_mean_rollout_reward": -0.05687872072157916,
+      "last20_weighted_poi_completion": 0.35597365225548855,
+      "last20_goal_achieved": 0.00546875,
+      "last20_arrival_rate": 0.016796875,
+      "checkpoint_size_bytes": 120346
+    },
+    {
+      "seed": 3,
+      "condition": "OFF",
+      "run_name": "priority_inspection_heatmap_off_ablation_seed3",
+      "runtime_seconds": 180,
+      "evaluation_episode_seeds": [
+        13000,
+        13001,
+        13002,
+        13003,
+        13004,
+        13005,
+        13006,
+        13007
+      ],
+      "eval_success_mean": 0.1,
+      "eval_reward_mean": -327.2483190063881,
+      "best_eval_update": 60,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -231.03485887332775,
+      "final_eval_success": 0.125,
+      "final_eval_reward": -473.0482908026103,
+      "last20_mean_rollout_reward": 0.047808263679326043,
+      "last20_weighted_poi_completion": 0.43473897168878467,
+      "last20_goal_achieved": 0.00859375,
+      "last20_arrival_rate": 0.0236328125,
+      "checkpoint_size_bytes": 91718
+    },
+    {
+      "seed": 3,
+      "condition": "REAL",
+      "run_name": "priority_inspection_heatmap_real_ablation_seed3",
+      "runtime_seconds": 188,
+      "evaluation_episode_seeds": [
+        13000,
+        13001,
+        13002,
+        13003,
+        13004,
+        13005,
+        13006,
+        13007
+      ],
+      "eval_success_mean": 0.075,
+      "eval_reward_mean": -272.16891015948033,
+      "best_eval_update": 100,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -240.5492919830321,
+      "final_eval_success": 0.125,
+      "final_eval_reward": -314.0258908335477,
+      "last20_mean_rollout_reward": 0.10197289568313864,
+      "last20_weighted_poi_completion": 0.41420354283764027,
+      "last20_goal_achieved": 0.0109375,
+      "last20_arrival_rate": 0.0234375,
+      "checkpoint_size_bytes": 120346
+    },
+    {
+      "seed": 3,
+      "condition": "ZERO",
+      "run_name": "priority_inspection_heatmap_zero_ablation_seed3",
+      "runtime_seconds": 167,
+      "evaluation_episode_seeds": [
+        13000,
+        13001,
+        13002,
+        13003,
+        13004,
+        13005,
+        13006,
+        13007
+      ],
+      "eval_success_mean": 0.0625,
+      "eval_reward_mean": -304.1291595240976,
+      "best_eval_update": 180,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -230.6671663205816,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -491.8422314740617,
+      "last20_mean_rollout_reward": 0.019045466789975762,
+      "last20_weighted_poi_completion": 0.4007117522356566,
+      "last20_goal_achieved": 0.01015625,
+      "last20_arrival_rate": 0.023828125,
+      "checkpoint_size_bytes": 120346
+    },
+    {
+      "seed": 4,
+      "condition": "OFF",
+      "run_name": "priority_inspection_heatmap_off_ablation_seed4",
+      "runtime_seconds": 163,
+      "evaluation_episode_seeds": [
+        14000,
+        14001,
+        14002,
+        14003,
+        14004,
+        14005,
+        14006,
+        14007
+      ],
+      "eval_success_mean": 0.0375,
+      "eval_reward_mean": -198.09038398771597,
+      "best_eval_update": 180,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -168.68619338240936,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -291.1237118797558,
+      "last20_mean_rollout_reward": -0.34246336616633927,
+      "last20_weighted_poi_completion": 0.31405625033949036,
+      "last20_goal_achieved": 0.00234375,
+      "last20_arrival_rate": 0.029296875,
+      "checkpoint_size_bytes": 91718
+    },
+    {
+      "seed": 4,
+      "condition": "REAL",
+      "run_name": "priority_inspection_heatmap_real_ablation_seed4",
+      "runtime_seconds": 167,
+      "evaluation_episode_seeds": [
+        14000,
+        14001,
+        14002,
+        14003,
+        14004,
+        14005,
+        14006,
+        14007
+      ],
+      "eval_success_mean": 0.0625,
+      "eval_reward_mean": -271.26509873030136,
+      "best_eval_update": 40,
+      "best_eval_success": 0.125,
+      "best_eval_reward": -167.89729824335245,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -254.4206990129607,
+      "last20_mean_rollout_reward": 0.015972769387008156,
+      "last20_weighted_poi_completion": 0.38213918801629915,
+      "last20_goal_achieved": 0.0078125,
+      "last20_arrival_rate": 0.0236328125,
+      "checkpoint_size_bytes": 120346
+    },
+    {
+      "seed": 4,
+      "condition": "ZERO",
+      "run_name": "priority_inspection_heatmap_zero_ablation_seed4",
+      "runtime_seconds": 166,
+      "evaluation_episode_seeds": [
+        14000,
+        14001,
+        14002,
+        14003,
+        14004,
+        14005,
+        14006,
+        14007
+      ],
+      "eval_success_mean": 0.0,
+      "eval_reward_mean": -230.15334769744499,
+      "best_eval_update": 20,
+      "best_eval_success": 0.0,
+      "best_eval_reward": -1.061064618162709,
+      "final_eval_success": 0.0,
+      "final_eval_reward": -295.7605755591766,
+      "last20_mean_rollout_reward": 0.0775242205723771,
+      "last20_weighted_poi_completion": 0.4310247125511523,
+      "last20_goal_achieved": 0.01015625,
+      "last20_arrival_rate": 0.0294921875,
+      "checkpoint_size_bytes": 120346
+    }
+  ],
+  "seed_level_contrasts": [
+    {
+      "seed": 0,
+      "REAL_MINUS_ZERO": {
+        "eval_success_mean": 0.0,
+        "eval_reward_mean": 10.534684401653124,
+        "final_eval_success": 0.125,
+        "final_eval_reward": 115.16748181503806,
+        "last20_mean_rollout_reward": 0.008278205820533915,
+        "last20_weighted_poi_completion": 0.02532101519173008,
+        "last20_goal_achieved": 0.0,
+        "last20_arrival_rate": 0.0009765625
+      },
+      "ZERO_MINUS_OFF": {
+        "eval_success_mean": 0.05,
+        "eval_reward_mean": 5.086535443702246,
+        "final_eval_success": 0.0,
+        "final_eval_reward": -74.04770531928489,
+        "last20_mean_rollout_reward": -0.010652974451659247,
+        "last20_weighted_poi_completion": -0.0601398565806448,
+        "last20_goal_achieved": -0.0007812500000000007,
+        "last20_arrival_rate": 0.0009765625
+      },
+      "REAL_MINUS_OFF": {
+        "eval_success_mean": 0.05,
+        "eval_reward_mean": 15.62121984535537,
+        "final_eval_success": 0.125,
+        "final_eval_reward": 41.11977649575317,
+        "last20_mean_rollout_reward": -0.002374768631125332,
+        "last20_weighted_poi_completion": -0.03481884138891472,
+        "last20_goal_achieved": -0.0007812500000000007,
+        "last20_arrival_rate": 0.001953125
+      }
+    },
+    {
+      "seed": 1,
+      "REAL_MINUS_ZERO": {
+        "eval_success_mean": 0.012499999999999997,
+        "eval_reward_mean": -18.92538605466632,
+        "final_eval_success": 0.0,
+        "final_eval_reward": 4.300873679416441,
+        "last20_mean_rollout_reward": -0.11171044066140895,
+        "last20_weighted_poi_completion": -0.05960010920534842,
+        "last20_goal_achieved": -0.0046875,
+        "last20_arrival_rate": 0.004101562499999999
+      },
+      "ZERO_MINUS_OFF": {
+        "eval_success_mean": 0.012499999999999997,
+        "eval_reward_mean": 90.12307766984839,
+        "final_eval_success": 0.25,
+        "final_eval_reward": 961.781743628236,
+        "last20_mean_rollout_reward": 0.022138035703392234,
+        "last20_weighted_poi_completion": 0.05489531663479286,
+        "last20_goal_achieved": -0.0007812500000000007,
+        "last20_arrival_rate": 0.0
+      },
+      "REAL_MINUS_OFF": {
+        "eval_success_mean": 0.024999999999999994,
+        "eval_reward_mean": 71.19769161518207,
+        "final_eval_success": 0.25,
+        "final_eval_reward": 966.0826173076523,
+        "last20_mean_rollout_reward": -0.08957240495801672,
+        "last20_weighted_poi_completion": -0.0047047925705555604,
+        "last20_goal_achieved": -0.0054687500000000005,
+        "last20_arrival_rate": 0.004101562499999999
+      }
+    },
+    {
+      "seed": 2,
+      "REAL_MINUS_ZERO": {
+        "eval_success_mean": -0.06249999999999999,
+        "eval_reward_mean": 125.24908089282602,
+        "final_eval_success": -0.125,
+        "final_eval_reward": 33.41520039962418,
+        "last20_mean_rollout_reward": -0.2685942762036575,
+        "last20_weighted_poi_completion": -0.06743840316194111,
+        "last20_goal_achieved": -0.00546875,
+        "last20_arrival_rate": 0.025390625000000003
+      },
+      "ZERO_MINUS_OFF": {
+        "eval_success_mean": -0.0625,
+        "eval_reward_mean": 11.533820301889989,
+        "final_eval_success": 0.125,
+        "final_eval_reward": 461.2572473225839,
+        "last20_mean_rollout_reward": -0.08427318536560051,
+        "last20_weighted_poi_completion": -0.09141713002463803,
+        "last20_goal_achieved": -0.004687500000000001,
+        "last20_arrival_rate": -0.02265625
+      },
+      "REAL_MINUS_OFF": {
+        "eval_success_mean": -0.125,
+        "eval_reward_mean": 136.782901194716,
+        "final_eval_success": 0.0,
+        "final_eval_reward": 494.67244772220806,
+        "last20_mean_rollout_reward": -0.352867461569258,
+        "last20_weighted_poi_completion": -0.15885553318657913,
+        "last20_goal_achieved": -0.01015625,
+        "last20_arrival_rate": 0.002734375000000004
+      }
+    },
+    {
+      "seed": 3,
+      "REAL_MINUS_ZERO": {
+        "eval_success_mean": 0.012499999999999997,
+        "eval_reward_mean": 31.960249364617255,
+        "final_eval_success": 0.125,
+        "final_eval_reward": 177.816340640514,
+        "last20_mean_rollout_reward": 0.08292742889316287,
+        "last20_weighted_poi_completion": 0.013491790601983689,
+        "last20_goal_achieved": 0.000781249999999999,
+        "last20_arrival_rate": -0.0003906249999999986
+      },
+      "ZERO_MINUS_OFF": {
+        "eval_success_mean": -0.037500000000000006,
+        "eval_reward_mean": 23.119159482290513,
+        "final_eval_success": -0.125,
+        "final_eval_reward": -18.793940671451367,
+        "last20_mean_rollout_reward": -0.02876279688935028,
+        "last20_weighted_poi_completion": -0.03402721945312809,
+        "last20_goal_achieved": 0.0015624999999999997,
+        "last20_arrival_rate": 0.0001953124999999993
+      },
+      "REAL_MINUS_OFF": {
+        "eval_success_mean": -0.02500000000000001,
+        "eval_reward_mean": 55.07940884690777,
+        "final_eval_success": 0.0,
+        "final_eval_reward": 159.02239996906263,
+        "last20_mean_rollout_reward": 0.05416463200381259,
+        "last20_weighted_poi_completion": -0.0205354288511444,
+        "last20_goal_achieved": 0.0023437499999999986,
+        "last20_arrival_rate": -0.0001953124999999993
+      }
+    },
+    {
+      "seed": 4,
+      "REAL_MINUS_ZERO": {
+        "eval_success_mean": 0.0625,
+        "eval_reward_mean": -41.111751032856375,
+        "final_eval_success": 0.0,
+        "final_eval_reward": 41.33987654621586,
+        "last20_mean_rollout_reward": -0.061551451185368936,
+        "last20_weighted_poi_completion": -0.048885524534853175,
+        "last20_goal_achieved": -0.0023437500000000003,
+        "last20_arrival_rate": -0.005859375
+      },
+      "ZERO_MINUS_OFF": {
+        "eval_success_mean": -0.0375,
+        "eval_reward_mean": -32.06296370972902,
+        "final_eval_success": 0.0,
+        "final_eval_reward": -4.636863679420799,
+        "last20_mean_rollout_reward": 0.4199875867387164,
+        "last20_weighted_poi_completion": 0.11696846221166196,
+        "last20_goal_achieved": 0.0078125,
+        "last20_arrival_rate": 0.0001953124999999993
+      },
+      "REAL_MINUS_OFF": {
+        "eval_success_mean": 0.025,
+        "eval_reward_mean": -73.1747147425854,
+        "final_eval_success": 0.0,
+        "final_eval_reward": 36.70301286679506,
+        "last20_mean_rollout_reward": 0.3584361355533474,
+        "last20_weighted_poi_completion": 0.06808293767680879,
+        "last20_goal_achieved": 0.00546875,
+        "last20_arrival_rate": -0.005664062500000001
+      }
+    }
+  ],
+  "condition_aggregates": {
+    "OFF": {
+      "eval_success_mean": {
+        "n": 5,
+        "mean": 0.08,
+        "median": 0.1,
+        "min": 0.0125,
+        "max": 0.15,
+        "sample_std": 0.05491470659122199
+      },
+      "eval_reward_mean": {
+        "n": 5,
+        "mean": -357.20347757219866,
+        "median": -327.2483190063881,
+        "min": -502.6913542464485,
+        "max": -198.09038398771597,
+        "sample_std": 117.36965191334687
+      },
+      "final_eval_success": {
+        "n": 5,
+        "mean": 0.025,
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.125,
+        "sample_std": 0.05590169943749474
+      },
+      "final_eval_reward": {
+        "n": 5,
+        "mean": -633.2527575277971,
+        "median": -517.8168015020924,
+        "min": -1203.2596287512947,
+        "max": -291.1237118797558,
+        "sample_std": 347.5745653486649
+      },
+      "last20_mean_rollout_reward": {
+        "n": 5,
+        "mean": -0.03027716577111278,
+        "median": 0.047808263679326043,
+        "min": -0.34246336616633927,
+        "max": 0.06473474039084977,
+        "sample_std": 0.1750282858061954
+      },
+      "last20_weighted_poi_completion": {
+        "n": 5,
+        "mean": 0.3859524359711213,
+        "median": 0.3808486068388447,
+        "min": 0.31405625033949036,
+        "max": 0.4473907822801266,
+        "sample_std": 0.05579829488732969
+      },
+      "last20_goal_achieved": {
+        "n": 5,
+        "mean": 0.00796875,
+        "median": 0.00859375,
+        "min": 0.00234375,
+        "max": 0.01015625,
+        "sample_std": 0.0032400689614574566
+      },
+      "last20_arrival_rate": {
+        "n": 5,
+        "mean": 0.0251171875,
+        "median": 0.0236328125,
+        "min": 0.01640625,
+        "max": 0.039453125,
+        "sample_std": 0.009621594111278416
+      }
+    },
+    "REAL": {
+      "eval_success_mean": {
+        "n": 5,
+        "mean": 0.07,
+        "median": 0.0625,
+        "min": 0.025,
+        "max": 0.125,
+        "sample_std": 0.03601215072721983
+      },
+      "eval_reward_mean": {
+        "n": 5,
+        "mean": -316.10217622028347,
+        "median": -272.16891015948033,
+        "min": -487.0701344010931,
+        "max": -184.02182245209443,
+        "sample_std": 115.22157526325442
+      },
+      "final_eval_success": {
+        "n": 5,
+        "mean": 0.1,
+        "median": 0.125,
+        "min": 0.0,
+        "max": 0.25,
+        "sample_std": 0.10458250331675945
+      },
+      "final_eval_reward": {
+        "n": 5,
+        "mean": -293.73270665550285,
+        "median": -254.4206990129607,
+        "min": -476.69702500633923,
+        "max": -186.34290698102427,
+        "sample_std": 111.98694655358169
+      },
+      "last20_mean_rollout_reward": {
+        "n": 5,
+        "mean": -0.03671993929136079,
+        "median": 0.015972769387008156,
+        "min": -0.3254729969252367,
+        "max": 0.10197289568313864,
+        "sample_std": 0.16795793141249354
+      },
+      "last20_weighted_poi_completion": {
+        "n": 5,
+        "mean": 0.35578610430704427,
+        "median": 0.34802277613780463,
+        "min": 0.28853524909354744,
+        "max": 0.41420354283764027,
+        "sample_std": 0.046864739102463325
+      },
+      "last20_goal_achieved": {
+        "n": 5,
+        "mean": 0.0062499999999999995,
+        "median": 0.0078125,
+        "min": 0.0,
+        "max": 0.0109375,
+        "sample_std": 0.004133986423538422
+      },
+      "last20_arrival_rate": {
+        "n": 5,
+        "mean": 0.025703125,
+        "median": 0.0234375,
+        "min": 0.01875,
+        "max": 0.0421875,
+        "sample_std": 0.009440485804067335
+      }
+    },
+    "ZERO": {
+      "eval_success_mean": {
+        "n": 5,
+        "mean": 0.065,
+        "median": 0.0625,
+        "min": 0.0,
+        "max": 0.1125,
+        "sample_std": 0.04183300132670378
+      },
+      "eval_reward_mean": {
+        "n": 5,
+        "mean": -337.64355173459825,
+        "median": -309.27090334492044,
+        "min": -497.60481880274625,
+        "max": -230.15334769744499,
+        "sample_std": 98.94270213293036
+      },
+      "final_eval_success": {
+        "n": 5,
+        "mean": 0.075,
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.25,
+        "sample_std": 0.11180339887498948
+      },
+      "final_eval_reward": {
+        "n": 5,
+        "mean": -368.14066127166456,
+        "median": -295.7605755591766,
+        "min": -591.8645068213773,
+        "max": -219.75810738064845,
+        "sample_std": 164.81364893928654
+      },
+      "last20_mean_rollout_reward": {
+        "n": 5,
+        "mean": 0.033410167375986934,
+        "median": 0.04048709414491895,
+        "min": -0.05687872072157916,
+        "max": 0.086872776094242,
+        "sample_std": 0.05747349617364636
+      },
+      "last20_weighted_poi_completion": {
+        "n": 5,
+        "mean": 0.3832083505287301,
+        "median": 0.4007117522356566,
+        "min": 0.3207087502581999,
+        "max": 0.4310247125511523,
+        "sample_std": 0.0442627718364672
+      },
+      "last20_goal_achieved": {
+        "n": 5,
+        "mean": 0.00859375,
+        "median": 0.009375,
+        "min": 0.00546875,
+        "max": 0.01015625,
+        "sample_std": 0.0019918044974971817
+      },
+      "last20_arrival_rate": {
+        "n": 5,
+        "mean": 0.020859375,
+        "median": 0.0177734375,
+        "min": 0.01640625,
+        "max": 0.0294921875,
+        "sample_std": 0.005683224590674459
+      }
+    }
+  },
+  "contrast_aggregates": {
+    "REAL_MINUS_ZERO": {
+      "eval_success_mean": {
+        "n": 5,
+        "mean": 0.005,
+        "median": 0.012499999999999997,
+        "min": -0.06249999999999999,
+        "max": 0.0625,
+        "sample_std": 0.04472135954999579,
+        "exact_sign_flip_pvalue": 0.75
+      },
+      "eval_reward_mean": {
+        "n": 5,
+        "mean": 21.54137551431474,
+        "median": 10.534684401653124,
+        "min": -41.111751032856375,
+        "max": 125.24908089282602,
+        "sample_std": 64.31943989660272,
+        "exact_sign_flip_pvalue": 0.625
+      },
+      "final_eval_success": {
+        "n": 5,
+        "mean": 0.025,
+        "median": 0.0,
+        "min": -0.125,
+        "max": 0.125,
+        "sample_std": 0.10458250331675945,
+        "exact_sign_flip_pvalue": 1.0
+      },
+      "final_eval_reward": {
+        "n": 5,
+        "mean": 74.4079546161617,
+        "median": 41.33987654621586,
+        "min": 4.300873679416441,
+        "max": 177.816340640514,
+        "sample_std": 70.78760456571165,
+        "exact_sign_flip_pvalue": 0.0625
+      },
+      "last20_mean_rollout_reward": {
+        "n": 5,
+        "mean": -0.07013010666734772,
+        "median": -0.061551451185368936,
+        "min": -0.2685942762036575,
+        "max": 0.08292742889316287,
+        "sample_std": 0.13300847412263583,
+        "exact_sign_flip_pvalue": 0.375
+      },
+      "last20_weighted_poi_completion": {
+        "n": 5,
+        "mean": -0.027422246221685785,
+        "median": -0.048885524534853175,
+        "min": -0.06743840316194111,
+        "max": 0.02532101519173008,
+        "sample_std": 0.043454545309275464,
+        "exact_sign_flip_pvalue": 0.25
+      },
+      "last20_goal_achieved": {
+        "n": 5,
+        "mean": -0.0023437500000000003,
+        "median": -0.0023437500000000003,
+        "min": -0.00546875,
+        "max": 0.000781249999999999,
+        "sample_std": 0.002762135864009951,
+        "exact_sign_flip_pvalue": 0.25
+      },
+      "last20_arrival_rate": {
+        "n": 5,
+        "mean": 0.004843750000000001,
+        "median": 0.0009765625,
+        "min": -0.005859375,
+        "max": 0.025390625000000003,
+        "sample_std": 0.012037811471745888,
+        "exact_sign_flip_pvalue": 0.625
+      }
+    },
+    "ZERO_MINUS_OFF": {
+      "eval_success_mean": {
+        "n": 5,
+        "mean": -0.015000000000000001,
+        "median": -0.0375,
+        "min": -0.0625,
+        "max": 0.05,
+        "sample_std": 0.04541475531146238
+      },
+      "eval_reward_mean": {
+        "n": 5,
+        "mean": 19.559925837600424,
+        "median": 11.533820301889989,
+        "min": -32.06296370972902,
+        "max": 90.12307766984839,
+        "sample_std": 44.52708912959249
+      },
+      "final_eval_success": {
+        "n": 5,
+        "mean": 0.05,
+        "median": 0.0,
+        "min": -0.125,
+        "max": 0.25,
+        "sample_std": 0.14252192813739226
+      },
+      "final_eval_reward": {
+        "n": 5,
+        "mean": 265.1120962561326,
+        "median": -4.636863679420799,
+        "min": -74.04770531928489,
+        "max": 961.781743628236,
+        "sample_std": 445.033152712067
+      },
+      "last20_mean_rollout_reward": {
+        "n": 5,
+        "mean": 0.06368733314709972,
+        "median": -0.010652974451659247,
+        "min": -0.08427318536560051,
+        "max": 0.4199875867387164,
+        "sample_std": 0.2028805299577178
+      },
+      "last20_weighted_poi_completion": {
+        "n": 5,
+        "mean": -0.00274408544239122,
+        "median": -0.03402721945312809,
+        "min": -0.09141713002463803,
+        "max": 0.11696846221166196,
+        "sample_std": 0.0862977586487808
+      },
+      "last20_goal_achieved": {
+        "n": 5,
+        "mean": 0.0006249999999999995,
+        "median": -0.0007812500000000007,
+        "min": -0.004687500000000001,
+        "max": 0.0078125,
+        "sample_std": 0.004602086398444732
+      },
+      "last20_arrival_rate": {
+        "n": 5,
+        "mean": -0.0042578125,
+        "median": 0.0001953124999999993,
+        "min": -0.02265625,
+        "max": 0.0009765625,
+        "sample_std": 0.010291875386663471
+      }
+    },
+    "REAL_MINUS_OFF": {
+      "eval_success_mean": {
+        "n": 5,
+        "mean": -0.010000000000000002,
+        "median": 0.024999999999999994,
+        "min": -0.125,
+        "max": 0.05,
+        "sample_std": 0.0698212002188447
+      },
+      "eval_reward_mean": {
+        "n": 5,
+        "mean": 41.10130135191516,
+        "median": 55.07940884690777,
+        "min": -73.1747147425854,
+        "max": 136.782901194716,
+        "sample_std": 77.40218206308816
+      },
+      "final_eval_success": {
+        "n": 5,
+        "mean": 0.075,
+        "median": 0.0,
+        "min": 0.0,
+        "max": 0.25,
+        "sample_std": 0.11180339887498948
+      },
+      "final_eval_reward": {
+        "n": 5,
+        "mean": 339.52005087229423,
+        "median": 159.02239996906263,
+        "min": 36.70301286679506,
+        "max": 966.0826173076523,
+        "sample_std": 396.85425540818494
+      },
+      "last20_mean_rollout_reward": {
+        "n": 5,
+        "mean": -0.006442773520248013,
+        "median": -0.002374768631125332,
+        "min": -0.352867461569258,
+        "max": 0.3584361355533474,
+        "sample_std": 0.25678153392899294
+      },
+      "last20_weighted_poi_completion": {
+        "n": 5,
+        "mean": -0.030166331664077006,
+        "median": -0.0205354288511444,
+        "min": -0.15885553318657913,
+        "max": 0.06808293767680879,
+        "sample_std": 0.0821226515999999
+      },
+      "last20_goal_achieved": {
+        "n": 5,
+        "mean": -0.0017187500000000007,
+        "median": -0.0007812500000000007,
+        "min": -0.01015625,
+        "max": 0.00546875,
+        "sample_std": 0.006210814660734935
+      },
+      "last20_arrival_rate": {
+        "n": 5,
+        "mean": 0.0005859375000000007,
+        "median": 0.001953125,
+        "min": -0.005664062500000001,
+        "max": 0.004101562499999999,
+        "sample_std": 0.003824835161634012
+      }
+    }
+  }
+}
