@@ -1,0 +1,16 @@
+condition,seed,value,source
+OFF,0,0.0,TensorBoard
+OFF,1,0.0,TensorBoard
+OFF,2,0.0,TensorBoard
+OFF,3,0.125,TensorBoard
+OFF,4,0.0,TensorBoard
+REAL,0,0.125,TensorBoard
+REAL,1,0.25,TensorBoard
+REAL,2,0.0,TensorBoard
+REAL,3,0.125,TensorBoard
+REAL,4,0.0,TensorBoard
+ZERO,0,0.0,TensorBoard
+ZERO,1,0.25,TensorBoard
+ZERO,2,0.125,TensorBoard
+ZERO,3,0.0,TensorBoard
+ZERO,4,0.0,TensorBoard

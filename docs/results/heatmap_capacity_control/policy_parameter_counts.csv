@@ -1,0 +1,4 @@
+condition,config,policy_class,heatmap_observation_enabled,provider_source,heatmap_encoder_present,actor_input_dim,critic_input_dim,total_parameters,trainable_parameters,heatmap_encoder_parameters,heatmap_path_incremental_parameters,action_output_dim,value_output_dim
+OFF,configs/experiments/priority_inspection_heatmap_off_ablation_seed0.yaml,DirectWaypointPolicy,false,none,false,78,78,20453,20453,0,0,2,1
+REAL,configs/experiments/priority_inspection_heatmap_real_ablation_seed0.yaml,DirectWaypointPolicy,true,priority_inspection,true,142,142,27229,27229,632,6776,2,1
+ZERO,configs/experiments/priority_inspection_heatmap_zero_ablation_seed0.yaml,DirectWaypointPolicy,true,zero,true,142,142,27229,27229,632,6776,2,1

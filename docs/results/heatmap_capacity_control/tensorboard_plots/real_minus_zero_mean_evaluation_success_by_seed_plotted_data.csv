@@ -1,0 +1,6 @@
+condition,seed,value,source
+REAL-ZERO,0,0.0,TensorBoard
+REAL-ZERO,1,0.012499999999999997,TensorBoard
+REAL-ZERO,2,-0.06249999999999999,TensorBoard
+REAL-ZERO,3,0.012499999999999997,TensorBoard
+REAL-ZERO,4,0.0625,TensorBoard

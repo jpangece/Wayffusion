@@ -1,0 +1,103 @@
+{
+  "probe_status": "runtime-probe-confirmed-local-not-irmv-docker",
+  "environment": {
+    "requested_repository": "/data0/pjs/Wayffusion",
+    "actual_repository": "/Users/a...../Wayffusion",
+    "requested_docker_environment_available": false,
+    "python": "3.10.16",
+    "pytorch": "2.5.1",
+    "device": "cpu",
+    "policy_initialization_seed": 0,
+    "probe_batch_size": 2,
+    "training_performed": false
+  },
+  "shared_forward_shapes": {
+    "delta_mean": [2, 4, 2],
+    "value": [2],
+    "agent_mask": [2, 4],
+    "deterministic_waypoint_action": [2, 4, 2],
+    "sampled_train_action": [2, 4, 2],
+    "sampled_environment_action": [2, 4, 2]
+  },
+  "conditions": {
+    "OFF": {
+      "config": "configs/experiments/priority_inspection_heatmap_off_ablation_seed0.yaml",
+      "policy_class": "DirectWaypointPolicy",
+      "total_parameters": 20453,
+      "trainable_parameters": 20453,
+      "parameters_by_major_submodule": {
+        "log_std": 2,
+        "field_encoder": 6176,
+        "heatmap_encoder": 0,
+        "agent_encoder": 1344,
+        "actor": 3650,
+        "critic": 9281
+      },
+      "actor_first_layer_input_dimension": 78,
+      "critic_first_layer_input_dimension": 78,
+      "module_tree": {
+        "field_encoder": ["Conv2d(5,8,kernel_size=3,stride=2,padding=1)", "ReLU", "Conv2d(8,16,kernel_size=3,stride=2,padding=1)", "ReLU", "Conv2d(16,32,kernel_size=3,stride=2,padding=1)", "ReLU"],
+        "field_pool": ["AdaptiveAvgPool2d(1)", "Flatten"],
+        "agent_encoder": ["Linear(8,32)", "ReLU", "Linear(32,32)", "ReLU"],
+        "actor": ["Linear(78,32)", "ReLU", "Linear(32,32)", "ReLU", "Linear(32,2)"],
+        "critic": ["Linear(78,64)", "ReLU", "Linear(64,64)", "ReLU", "Linear(64,1)"]
+      },
+      "named_parameter_shapes": {
+        "log_std": [2],
+        "field_encoder.0.weight": [8,5,3,3], "field_encoder.0.bias": [8],
+        "field_encoder.2.weight": [16,8,3,3], "field_encoder.2.bias": [16],
+        "field_encoder.4.weight": [32,16,3,3], "field_encoder.4.bias": [32],
+        "agent_encoder.0.weight": [32,8], "agent_encoder.0.bias": [32],
+        "agent_encoder.2.weight": [32,32], "agent_encoder.2.bias": [32],
+        "actor.0.weight": [32,78], "actor.0.bias": [32],
+        "actor.2.weight": [32,32], "actor.2.bias": [32],
+        "actor.4.weight": [2,32], "actor.4.bias": [2],
+        "critic.0.weight": [64,78], "critic.0.bias": [64],
+        "critic.2.weight": [64,64], "critic.2.bias": [64],
+        "critic.4.weight": [1,64], "critic.4.bias": [1]
+      }
+    },
+    "REAL": {
+      "config": "configs/experiments/priority_inspection_heatmap_real_ablation_seed0.yaml",
+      "policy_class": "DirectWaypointPolicy",
+      "total_parameters": 27229,
+      "trainable_parameters": 27229,
+      "parameters_by_major_submodule": {"log_std": 2, "field_encoder": 6176, "heatmap_encoder": 632, "agent_encoder": 1344, "actor": 5698, "critic": 13377},
+      "actor_first_layer_input_dimension": 142,
+      "critic_first_layer_input_dimension": 142,
+      "module_tree": {
+        "field_encoder": ["Conv2d(5,8,kernel_size=3,stride=2,padding=1)", "ReLU", "Conv2d(8,16,kernel_size=3,stride=2,padding=1)", "ReLU", "Conv2d(16,32,kernel_size=3,stride=2,padding=1)", "ReLU"],
+        "heatmap_encoder": ["Conv2d(1,4,kernel_size=3,stride=1,padding=1)", "ReLU", "Conv2d(4,16,kernel_size=3,stride=1,padding=1)", "ReLU", "AdaptiveAvgPool2d(2,2)", "Flatten"],
+        "agent_encoder": ["Linear(8,32)", "ReLU", "Linear(32,32)", "ReLU"],
+        "actor": ["Linear(142,32)", "ReLU", "Linear(32,32)", "ReLU", "Linear(32,2)"],
+        "critic": ["Linear(142,64)", "ReLU", "Linear(64,64)", "ReLU", "Linear(64,1)"]
+      },
+      "named_parameter_shapes": {
+        "log_std": [2],
+        "field_encoder.0.weight": [8,5,3,3], "field_encoder.0.bias": [8], "field_encoder.2.weight": [16,8,3,3], "field_encoder.2.bias": [16], "field_encoder.4.weight": [32,16,3,3], "field_encoder.4.bias": [32],
+        "heatmap_encoder.0.weight": [4,1,3,3], "heatmap_encoder.0.bias": [4], "heatmap_encoder.2.weight": [16,4,3,3], "heatmap_encoder.2.bias": [16],
+        "agent_encoder.0.weight": [32,8], "agent_encoder.0.bias": [32], "agent_encoder.2.weight": [32,32], "agent_encoder.2.bias": [32],
+        "actor.0.weight": [32,142], "actor.0.bias": [32], "actor.2.weight": [32,32], "actor.2.bias": [32], "actor.4.weight": [2,32], "actor.4.bias": [2],
+        "critic.0.weight": [64,142], "critic.0.bias": [64], "critic.2.weight": [64,64], "critic.2.bias": [64], "critic.4.weight": [1,64], "critic.4.bias": [1]
+      }
+    },
+    "ZERO": {
+      "config": "configs/experiments/priority_inspection_heatmap_zero_ablation_seed0.yaml",
+      "policy_class": "DirectWaypointPolicy",
+      "total_parameters": 27229,
+      "trainable_parameters": 27229,
+      "parameters_by_major_submodule": {"log_std": 2, "field_encoder": 6176, "heatmap_encoder": 632, "agent_encoder": 1344, "actor": 5698, "critic": 13377},
+      "actor_first_layer_input_dimension": 142,
+      "critic_first_layer_input_dimension": 142,
+      "module_tree_identical_to": "REAL",
+      "named_parameter_shapes_identical_to": "REAL"
+    }
+  },
+  "comparisons": {
+    "real_zero_architecture_identical": true,
+    "off_enabled_total_parameter_difference": 6776,
+    "direct_heatmap_encoder_parameters": 632,
+    "widened_actor_first_layer_parameters": 2048,
+    "widened_critic_first_layer_parameters": 4096
+  }
+}

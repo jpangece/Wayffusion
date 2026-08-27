@@ -1,0 +1,16 @@
+condition,seed,value,source
+OFF,0,20.0,best_eval_summary.json
+OFF,1,60.0,best_eval_summary.json
+OFF,2,80.0,best_eval_summary.json
+OFF,3,60.0,best_eval_summary.json
+OFF,4,180.0,best_eval_summary.json
+REAL,0,40.0,best_eval_summary.json
+REAL,1,80.0,best_eval_summary.json
+REAL,2,60.0,best_eval_summary.json
+REAL,3,100.0,best_eval_summary.json
+REAL,4,40.0,best_eval_summary.json
+ZERO,0,40.0,best_eval_summary.json
+ZERO,1,100.0,best_eval_summary.json
+ZERO,2,60.0,best_eval_summary.json
+ZERO,3,180.0,best_eval_summary.json
+ZERO,4,20.0,best_eval_summary.json

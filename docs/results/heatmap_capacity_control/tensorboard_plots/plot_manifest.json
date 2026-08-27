@@ -1,0 +1,231 @@
+{
+  "output_dir": "/Users/a...../Wayffusion/docs/results/heatmap_capacity_control/tensorboard_plots",
+  "plots": [
+    {
+      "data_csv": "evaluation_reward_plotted_data.csv",
+      "id": "evaluation_reward",
+      "kind": "time_series",
+      "png": "evaluation_reward.png",
+      "source": "TensorBoard",
+      "svg": "evaluation_reward.svg",
+      "title": "Evaluation reward"
+    },
+    {
+      "data_csv": "evaluation_success_rate_plotted_data.csv",
+      "id": "evaluation_success_rate",
+      "kind": "time_series",
+      "png": "evaluation_success_rate.png",
+      "source": "TensorBoard",
+      "svg": "evaluation_success_rate.svg",
+      "title": "Evaluation success rate"
+    },
+    {
+      "data_csv": "mean_rollout_reward_plotted_data.csv",
+      "id": "mean_rollout_reward",
+      "kind": "time_series",
+      "png": "mean_rollout_reward.png",
+      "source": "TensorBoard",
+      "svg": "mean_rollout_reward.svg",
+      "title": "Mean rollout reward"
+    },
+    {
+      "data_csv": "weighted_poi_completion_plotted_data.csv",
+      "id": "weighted_poi_completion",
+      "kind": "time_series",
+      "png": "weighted_poi_completion.png",
+      "source": "TensorBoard",
+      "svg": "weighted_poi_completion.svg",
+      "title": "Weighted POI completion"
+    },
+    {
+      "data_csv": "goal_achieved_plotted_data.csv",
+      "id": "goal_achieved",
+      "kind": "time_series",
+      "png": "goal_achieved.png",
+      "source": "CSV",
+      "svg": "goal_achieved.svg",
+      "title": "Goal achieved"
+    },
+    {
+      "data_csv": "arrival_rate_plotted_data.csv",
+      "id": "arrival_rate",
+      "kind": "time_series",
+      "png": "arrival_rate.png",
+      "source": "CSV",
+      "svg": "arrival_rate.svg",
+      "title": "Arrival rate"
+    },
+    {
+      "data_csv": "policy_loss_plotted_data.csv",
+      "id": "policy_loss",
+      "kind": "time_series",
+      "png": "policy_loss.png",
+      "source": "TensorBoard",
+      "svg": "policy_loss.svg",
+      "title": "Policy loss"
+    },
+    {
+      "data_csv": "value_loss_plotted_data.csv",
+      "id": "value_loss",
+      "kind": "time_series",
+      "png": "value_loss.png",
+      "source": "TensorBoard",
+      "svg": "value_loss.svg",
+      "title": "Value loss"
+    },
+    {
+      "data_csv": "entropy_plotted_data.csv",
+      "id": "entropy",
+      "kind": "time_series",
+      "png": "entropy.png",
+      "source": "TensorBoard",
+      "svg": "entropy.svg",
+      "title": "Entropy"
+    },
+    {
+      "data_csv": "gradient_norm_plotted_data.csv",
+      "id": "gradient_norm",
+      "kind": "time_series",
+      "png": "gradient_norm.png",
+      "source": "TensorBoard",
+      "svg": "gradient_norm.svg",
+      "title": "Gradient norm"
+    },
+    {
+      "data_csv": "approximate_kl_plotted_data.csv",
+      "id": "approximate_kl",
+      "kind": "time_series",
+      "png": "approximate_kl.png",
+      "source": "TensorBoard",
+      "svg": "approximate_kl.svg",
+      "title": "Approximate KL divergence"
+    },
+    {
+      "data_csv": "clip_fraction_plotted_data.csv",
+      "id": "clip_fraction",
+      "kind": "time_series",
+      "png": "clip_fraction.png",
+      "source": "TensorBoard",
+      "svg": "clip_fraction.svg",
+      "title": "Clip fraction"
+    },
+    {
+      "data_csv": "explained_variance_plotted_data.csv",
+      "id": "explained_variance",
+      "kind": "time_series",
+      "png": "explained_variance.png",
+      "source": "TensorBoard",
+      "svg": "explained_variance.svg",
+      "title": "Explained variance"
+    },
+    {
+      "data_csv": "real_minus_zero_mean_evaluation_reward_by_seed_plotted_data.csv",
+      "id": "real_minus_zero_mean_evaluation_reward_by_seed",
+      "kind": "paired_seed",
+      "png": "real_minus_zero_mean_evaluation_reward_by_seed.png",
+      "source": "TensorBoard",
+      "svg": "real_minus_zero_mean_evaluation_reward_by_seed.svg",
+      "title": "REAL \u2212 ZERO mean evaluation reward by seed"
+    },
+    {
+      "data_csv": "real_minus_zero_final_evaluation_reward_by_seed_plotted_data.csv",
+      "id": "real_minus_zero_final_evaluation_reward_by_seed",
+      "kind": "paired_seed",
+      "png": "real_minus_zero_final_evaluation_reward_by_seed.png",
+      "source": "TensorBoard",
+      "svg": "real_minus_zero_final_evaluation_reward_by_seed.svg",
+      "title": "REAL \u2212 ZERO final evaluation reward by seed"
+    },
+    {
+      "data_csv": "real_minus_zero_mean_evaluation_success_by_seed_plotted_data.csv",
+      "id": "real_minus_zero_mean_evaluation_success_by_seed",
+      "kind": "paired_seed",
+      "png": "real_minus_zero_mean_evaluation_success_by_seed.png",
+      "source": "TensorBoard",
+      "svg": "real_minus_zero_mean_evaluation_success_by_seed.svg",
+      "title": "REAL \u2212 ZERO mean evaluation success by seed"
+    },
+    {
+      "data_csv": "real_minus_zero_final_evaluation_success_by_seed_plotted_data.csv",
+      "id": "real_minus_zero_final_evaluation_success_by_seed",
+      "kind": "paired_seed",
+      "png": "real_minus_zero_final_evaluation_success_by_seed.png",
+      "source": "TensorBoard",
+      "svg": "real_minus_zero_final_evaluation_success_by_seed.svg",
+      "title": "REAL \u2212 ZERO final evaluation success by seed"
+    },
+    {
+      "data_csv": "final_evaluation_reward_by_condition_plotted_data.csv",
+      "id": "final_evaluation_reward_by_condition",
+      "kind": "paired_seed",
+      "png": "final_evaluation_reward_by_condition.png",
+      "source": "TensorBoard",
+      "svg": "final_evaluation_reward_by_condition.svg",
+      "title": "Final evaluation reward by condition"
+    },
+    {
+      "data_csv": "final_evaluation_success_by_condition_plotted_data.csv",
+      "id": "final_evaluation_success_by_condition",
+      "kind": "paired_seed",
+      "png": "final_evaluation_success_by_condition.png",
+      "source": "TensorBoard",
+      "svg": "final_evaluation_success_by_condition.svg",
+      "title": "Final evaluation success by condition"
+    },
+    {
+      "data_csv": "diagnostic_best_evaluation_update_plotted_data.csv",
+      "id": "diagnostic_best_evaluation_update",
+      "kind": "diagnostic",
+      "png": "diagnostic_best_evaluation_update.png",
+      "source": "best_eval_summary.json",
+      "svg": "diagnostic_best_evaluation_update.svg",
+      "title": "Diagnostic: best evaluation update"
+    },
+    {
+      "data_csv": "diagnostic_policy_vs_value_loss_plotted_data.csv",
+      "id": "diagnostic_policy_vs_value_loss",
+      "kind": "diagnostic",
+      "png": "diagnostic_policy_vs_value_loss.png",
+      "source": "TensorBoard",
+      "svg": "diagnostic_policy_vs_value_loss.svg",
+      "title": "Diagnostic: mean policy loss versus mean value loss"
+    },
+    {
+      "data_csv": "diagnostic_final_reward_vs_success_plotted_data.csv",
+      "id": "diagnostic_final_reward_vs_success",
+      "kind": "diagnostic",
+      "png": "diagnostic_final_reward_vs_success.png",
+      "source": "TensorBoard",
+      "svg": "diagnostic_final_reward_vs_success.svg",
+      "title": "Diagnostic: final evaluation reward versus success"
+    },
+    {
+      "data_csv": "diagnostic_gradient_norm_with_clip_threshold_plotted_data.csv",
+      "diagnostic_reference": {
+        "gradient_clip_threshold": 0.5
+      },
+      "id": "diagnostic_gradient_norm_with_clip_threshold",
+      "kind": "time_series",
+      "png": "diagnostic_gradient_norm_with_clip_threshold.png",
+      "source": "TensorBoard",
+      "svg": "diagnostic_gradient_norm_with_clip_threshold.svg",
+      "title": "Gradient norm (clip threshold 0.5)"
+    },
+    {
+      "data_csv": "diagnostic_entropy_update_1_vs_200_plotted_data.csv",
+      "id": "diagnostic_entropy_update_1_vs_200",
+      "kind": "diagnostic",
+      "png": "diagnostic_entropy_update_1_vs_200.png",
+      "source": "TensorBoard",
+      "svg": "diagnostic_entropy_update_1_vs_200.svg",
+      "title": "Diagnostic: entropy at update 1 versus update 200"
+    }
+  ],
+  "raw_root": "/Users/a...../heatmap_phd_evidence_inputs/outputs",
+  "skipped_metrics": [
+    {
+      "metric": "learning_rate",
+      "reason": "Metric absent from both complete TensorBoard and CSV inventories"
+    }
+  ]
+}
