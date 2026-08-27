@@ -6,3 +6,6 @@ __pycache__/
 .secrets/
 wayffusion_mail.env
 pasted/
+
+# macOS metadata
+.DS_Store
