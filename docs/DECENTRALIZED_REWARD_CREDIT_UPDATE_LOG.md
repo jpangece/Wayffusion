@@ -41,3 +41,41 @@ Each stage should progress through focused implementation, focused tests, a smal
 ### Next step
 
 - Perform a read-only audit of the current priority-inspection reward path before defining the dense reward formulation.
+
+## 2026-08-27 — Priority-inspection reward audit and V1 design
+
+### Audit findings
+
+- The completed heatmap OFF, REAL, and ZERO experiments use the default `PriorityInspectionScenario` reward coefficients.
+- First visits, repeats, lateness, flight distance, and safety contribute to the team reward.
+- `_approach_gain` exists, but `w_approach` defaults to `0.0` in the completed heatmap experiments and therefore did not contribute to training reward.
+- The environment produces both a team reward and per-agent rewards. Per-agent rewards are stored as `[T,E,N]`, while MAPPO GAE and PPO optimization use only the scalar team reward `[T,E]`.
+- `PriorityInspectionScenario.compute_rewards()` receives pre-transition and post-transition UAV positions before mutating the current-step visited mask, making it the appropriate location for V1 progress shaping.
+- Reward can use task and world state directly and remain identical across future OFF, REAL, and ZERO heatmap conditions.
+
+### V1 dense-progress decision
+
+- Add `w_progress` with a default value of `0.0` for backward compatibility.
+- For each UAV, select the nearest POI from the pre-step unvisited set using the pre-transition UAV position, then freeze that POI identity for both distance calculations within the step.
+- Measure distance to the target region as `max(center_distance - sensor_radius, 0)`.
+- Define signed progress as `d_previous - d_current`: approaching is positive, moving away is negative, and no movement is zero.
+- Mean the per-agent progress values before adding the term to the existing team reward.
+- Expose per-agent progress for diagnostics without changing GAE, PPO, the critic, or policy architecture in V1.
+- Do not priority-weight or clip progress in V1.
+- Keep expired but unvisited POIs eligible, matching current task semantics.
+- Include a newly completed POI in progress for its completion step by using the same pre-step target set for both distances.
+- Keep the existing `_approach_gain` implementation unchanged.
+- Use `w_progress: 1.0` only in a new experimental configuration; do not change any frozen baseline configuration.
+
+### Required diagnostics before seed-0
+
+- Mean per-agent progress.
+- Positive, negative, and zero progress fractions.
+- Mean target-region distance before and after the transition.
+- Weighted progress reward contribution.
+
+V1 addresses dense reward feedback only. It does not solve multi-agent credit assignment because MAPPO still trains from a shared team advantage.
+
+### Next step
+
+- Implement V1 test-first and add a dedicated debug configuration. The frozen heatmap configurations must remain unchanged.
